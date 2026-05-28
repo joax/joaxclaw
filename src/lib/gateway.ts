@@ -146,6 +146,7 @@ export class GatewayClient {
         platform: 'linux',
         mode: 'backend'
       },
+      caps: ['tool-events'],
       auth: { token: this._token },
       role: 'operator',
       scopes: ['operator.admin', 'operator.read', 'operator.write', 'operator.approvals', 'operator.pairing', 'operator.talk.secrets']

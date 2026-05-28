@@ -35,6 +35,13 @@ contextBridge.exposeInMainWorld('api', {
     list: () => ipcRenderer.invoke('plugins:list')
   },
 
+  // Obsidian installation detection + skill file management
+  obsidian: {
+    detect: () => ipcRenderer.invoke('obsidian:detect'),
+    writeSkill: (vaults: Array<{ name: string; url: string; apiKey: string }>) =>
+      ipcRenderer.invoke('obsidian:writeSkill', vaults)
+  },
+
   // System info (resolved at load time in Node context)
   system: {
     homedir: homedir()

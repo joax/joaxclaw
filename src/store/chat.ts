@@ -17,14 +17,27 @@ interface ChatEventPayload {
   replace?: boolean
   message?: unknown
   errorMessage?: string
-  toolId?: string
-  toolName?: string
-  toolInput?: unknown
-  toolResult?: unknown
-  toolError?: string
-  durationMs?: number
   waitingSessionKey?: string
   subSessionKey?: string
+}
+
+interface AgentEventPayload {
+  sessionKey?: string
+  stream?: string
+  runId?: string
+  seq?: number
+  ts?: number
+  data?: {
+    phase?: string
+    name?: string
+    toolCallId?: string
+    args?: unknown
+    result?: unknown
+    isError?: boolean
+    text?: string
+    delta?: string
+    partialResult?: unknown
+  }
 }
 
 type UpdateFn = (updater: (msg: ChatMessage) => ChatMessage) => void
@@ -32,44 +45,49 @@ type UpdateFn = (updater: (msg: ChatMessage) => ChatMessage) => void
 // Shared chat event handler — used by both sendMessage and watchSession
 function attachChatStream(convId: string, sessionKey: string, update: UpdateFn): void {
   const unsub = gatewayClient.on((frame) => {
-    if (frame.event !== 'chat') return
-    const p = frame.payload as ChatEventPayload
+    if (frame.event !== 'chat' && frame.event !== 'agent') return
+    const p = frame.payload as ChatEventPayload & AgentEventPayload
     if (p.sessionKey !== sessionKey) return
 
+    if (frame.event === 'agent') {
+      // Thinking stream: real-time reasoning text
+      if (p.stream === 'thinking' && p.data?.delta) {
+        update(m => ({ ...m, reasoning: (m.reasoning ?? '') + p.data!.delta!, reasoningStreaming: true, waitingForSession: undefined }))
+      // Tool stream: tool call lifecycle events
+      } else if (p.stream === 'tool') {
+        if (p.data?.phase === 'start') {
+          const newCall: ToolCall = {
+            id: p.data.toolCallId ?? nanoid(),
+            name: p.data.name ?? 'unknown',
+            args: p.data.args !== undefined ? JSON.stringify(p.data.args) : undefined,
+            status: 'running'
+          }
+          update(m => ({ ...m, toolCalls: [...(m.toolCalls ?? []), newCall], waitingForSession: undefined }))
+        } else if (p.data?.phase === 'result') {
+          const callId = p.data.toolCallId
+          update(m => ({
+            ...m,
+            toolCalls: (m.toolCalls ?? []).map(tc =>
+              tc.id !== callId ? tc : {
+                ...tc,
+                status: p.data!.isError ? 'error' : 'done',
+                result: p.data!.result !== undefined ? JSON.stringify(p.data!.result) : undefined,
+                error: p.data!.isError ? 'Tool returned an error' : undefined
+              }
+            )
+          }))
+        }
+      }
+      return
+    }
+
+    // chat events
     if (p.state === 'delta') {
       if (p.replace) {
         update(m => ({ ...m, content: p.deltaText ?? '', waitingForSession: undefined }))
       } else if (p.deltaText) {
         update(m => ({ ...m, content: m.content + p.deltaText, waitingForSession: undefined }))
       }
-    } else if (p.state === 'thinking_delta' || p.state === 'thinking') {
-      if (p.deltaText) {
-        update(m => ({ ...m, reasoning: (m.reasoning ?? '') + p.deltaText, reasoningStreaming: true, waitingForSession: undefined }))
-      }
-    } else if (p.state === 'thinking_done') {
-      update(m => ({ ...m, reasoningStreaming: false }))
-    } else if (p.state === 'tool_start') {
-      const newCall: ToolCall = {
-        id: p.toolId ?? nanoid(),
-        name: p.toolName ?? 'unknown',
-        args: p.toolInput !== undefined ? JSON.stringify(p.toolInput) : undefined,
-        status: 'running'
-      }
-      update(m => ({ ...m, toolCalls: [...(m.toolCalls ?? []), newCall], waitingForSession: undefined }))
-    } else if (p.state === 'tool_done') {
-      update(m => ({
-        ...m,
-        waitingForSession: undefined,
-        toolCalls: (m.toolCalls ?? []).map(tc =>
-          tc.id !== p.toolId ? tc : {
-            ...tc,
-            status: p.toolError ? 'error' : 'done',
-            result: p.toolResult !== undefined ? JSON.stringify(p.toolResult) : undefined,
-            error: p.toolError,
-            durationMs: p.durationMs
-          }
-        )
-      }))
     } else if (p.state === 'waiting' || p.state === 'delegating' || p.state === 'blocked' || p.state === 'waiting_for_session') {
       const subKey = p.waitingSessionKey ?? p.subSessionKey
       update(m => ({ ...m, waitingForSession: subKey ?? 'unknown' }))

@@ -1,6 +1,39 @@
 import { create } from 'zustand'
+import JSON5 from 'json5'
 import type { Agent, AgentFile } from '../lib/types'
 import { gatewayClient } from '../lib/gateway'
+
+// ── openclaw.json config patcher ─────────────────────────────────────────────
+
+type ConfigEntry = { id: string; subagents?: { allowAgents?: string[]; [k: string]: unknown }; [k: string]: unknown }
+type OpenclawConfig = { agents?: { list?: ConfigEntry[]; [k: string]: unknown }; [k: string]: unknown }
+type ConfigApi = { read: () => Promise<{ ok: boolean; text?: string }>; write: (t: string) => Promise<{ ok: boolean }> }
+
+function configApi(): ConfigApi | null {
+  try { return (window as unknown as { api: { config: ConfigApi } }).api.config }
+  catch { return null }
+}
+
+async function persistSubAgentsToConfig(agentId: string, allowedSubAgents: string[]): Promise<void> {
+  const api = configApi()
+  if (!api) return
+  const res = await api.read()
+  if (!res.ok || !res.text) return
+  const config = JSON5.parse(res.text) as OpenclawConfig
+  const list = config.agents?.list
+  if (!Array.isArray(list)) return
+  const entry = list.find(a => a.id === agentId)
+  if (!entry) return
+  if (allowedSubAgents.length > 0) {
+    entry.subagents = { ...(entry.subagents ?? {}), allowAgents: allowedSubAgents }
+  } else {
+    if (entry.subagents) {
+      delete entry.subagents.allowAgents
+      if (Object.keys(entry.subagents).length === 0) delete entry.subagents
+    }
+  }
+  await api.write(JSON.stringify(config, null, 2))
+}
 
 interface AgentsListResult {
   defaultId: string
@@ -27,6 +60,8 @@ interface AgentsState {
   readFile: (agentId: string, filename: string) => Promise<string>
   writeFile: (agentId: string, filename: string, content: string) => Promise<void>
   deleteFile: (agentId: string, filename: string) => Promise<void>
+  readRelationship: (fromId: string, toId: string) => Promise<string>
+  writeRelationship: (fromId: string, toId: string, instructions: string) => Promise<void>
 }
 
 export const useAgentsStore = create<AgentsState>((set) => ({
@@ -46,12 +81,7 @@ export const useAgentsStore = create<AgentsState>((set) => ({
   },
 
   async update(id, changes) {
-    // Gateway expects agentId (not id), and model as a plain string (primary only)
-    const payload: Record<string, unknown> = { agentId: id }
-    if (changes.model !== undefined) payload.model = changes.model.primary
-    if (changes.modelFallbacks !== undefined) payload.modelFallbacks = changes.modelFallbacks
-    if (changes.allowedSubAgents !== undefined) payload.allowedSubAgents = changes.allowedSubAgents
-    await gatewayClient.request('agents.update', payload)
+    // Apply immediately so UI is responsive, then confirm with the gateway
     set(s => ({
       agents: s.agents.map(a => a.id !== id ? a : {
         ...a,
@@ -59,6 +89,14 @@ export const useAgentsStore = create<AgentsState>((set) => ({
         ...(changes.allowedSubAgents !== undefined ? { allowedSubAgents: changes.allowedSubAgents } : {})
       })
     }))
+    const payload: Record<string, unknown> = { agentId: id }
+    if (changes.model !== undefined) payload.model = changes.model.primary
+    if (changes.modelFallbacks !== undefined) payload.modelFallbacks = changes.modelFallbacks
+    if (changes.allowedSubAgents !== undefined) payload.allowedSubAgents = changes.allowedSubAgents
+    await gatewayClient.request('agents.update', payload)
+    if (changes.allowedSubAgents !== undefined) {
+      await persistSubAgentsToConfig(id, changes.allowedSubAgents).catch(() => {})
+    }
   },
 
   async remove(id) {
@@ -91,5 +129,39 @@ export const useAgentsStore = create<AgentsState>((set) => ({
 
   async deleteFile(agentId, filename) {
     await gatewayClient.request('agents.files.delete', { agentId, name: filename })
-  }
+  },
+
+  async readRelationship(fromId, toId) {
+    const api = configApi()
+    if (!api) return ''
+    const res = await api.read()
+    if (!res.ok || !res.text) return ''
+    const config = JSON5.parse(res.text) as OpenclawConfig
+    const entry = config.agents?.list?.find(a => a.id === fromId)
+    return (entry?.subagents as { allowAgents?: string[]; instructions?: Record<string, string> } | undefined)?.instructions?.[toId] ?? ''
+  },
+
+  async writeRelationship(fromId, toId, instructions) {
+    const api = configApi()
+    if (!api) throw new Error('Config API not available')
+    const res = await api.read()
+    if (!res.ok || !res.text) throw new Error('Could not read openclaw.json')
+    const config = JSON5.parse(res.text) as OpenclawConfig
+    const list = config.agents?.list
+    if (!Array.isArray(list)) throw new Error('No agents list in config')
+    const entry = list.find(a => a.id === fromId)
+    if (!entry) throw new Error(`Agent ${fromId} not found in config`)
+    const sub = (entry.subagents ?? {}) as { allowAgents?: string[]; instructions?: Record<string, string>; [k: string]: unknown }
+    if (instructions.trim()) {
+      sub.instructions = { ...(sub.instructions ?? {}), [toId]: instructions }
+    } else {
+      if (sub.instructions) {
+        delete sub.instructions[toId]
+        if (Object.keys(sub.instructions).length === 0) delete sub.instructions
+      }
+    }
+    entry.subagents = sub
+    const writeRes = await api.write(JSON.stringify(config, null, 2))
+    if (!writeRes.ok) throw new Error('Failed to write openclaw.json')
+  },
 }))
