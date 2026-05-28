@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
-import { MessageSquare, Trash2, Bot, RefreshCw, Settings2 } from 'lucide-react'
+import { MessageSquare, Trash2, Bot, RefreshCw, Settings2, LayoutGrid, GitFork } from 'lucide-react'
 import { useAgentsStore } from '../../store/agents'
 import { useChatStore } from '../../store/chat'
 import type { Agent } from '../../lib/types'
 import { Btn } from '../ui/Btn'
 import { AgentEditor } from './AgentEditor'
+import { AgentGraph } from './AgentGraph'
 
 interface Props { onOpenChat: () => void }
 
@@ -21,10 +22,11 @@ function agentModel(agent: Agent): string {
 }
 
 export function AgentsView({ onOpenChat }: Props) {
-  const { agents, defaultId, loading, error, fetch, remove } = useAgentsStore()
+  const { agents, defaultId, loading, error, fetch, update, remove } = useAgentsStore()
   const { newConversation } = useChatStore()
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
   const [editingAgent, setEditingAgent] = useState<Agent | null>(null)
+  const [viewMode, setViewMode] = useState<'graph' | 'grid'>('graph')
 
   useEffect(() => { fetch() }, [])
 
@@ -32,6 +34,22 @@ export function AgentsView({ onOpenChat }: Props) {
     newConversation(agent.id, agentDisplayName(agent))
     onOpenChat()
   }
+
+  const handleConnect = (fromId: string, toId: string) => {
+    const from = agents.find(a => a.id === fromId)
+    if (!from) return
+    const current = from.allowedSubAgents ?? []
+    if (current.includes(toId)) return
+    update(fromId, { allowedSubAgents: [...current, toId] })
+  }
+
+  const handleDisconnect = (fromId: string, toId: string) => {
+    const from = agents.find(a => a.id === fromId)
+    if (!from) return
+    update(fromId, { allowedSubAgents: (from.allowedSubAgents ?? []).filter(id => id !== toId) })
+  }
+
+  const hasRelationships = agents.some(a => (a.allowedSubAgents ?? []).length > 0)
 
   return (
     <div className="flex flex-1 flex-col min-h-0 p-6">
@@ -42,9 +60,51 @@ export function AgentsView({ onOpenChat }: Props) {
             {loading ? 'Loading…' : `${agents.length} agent${agents.length !== 1 ? 's' : ''}`}
           </p>
         </div>
-        <Btn variant="outline" size="sm" icon={<RefreshCw size={13} />} onClick={fetch} loading={loading}>
-          Refresh
-        </Btn>
+        <div className="flex items-center gap-2">
+          {/* View toggle */}
+          {agents.length > 0 && (
+            <div
+              className="flex items-center rounded overflow-hidden"
+              style={{ border: '1px solid var(--border)', background: 'var(--bg-surface)' }}
+            >
+              <button
+                onClick={() => setViewMode('graph')}
+                title="Graph view"
+                style={{
+                  padding: '5px 9px',
+                  background: viewMode === 'graph' ? 'color-mix(in srgb, var(--accent) 15%, var(--bg-elevated))' : 'transparent',
+                  color: viewMode === 'graph' ? 'var(--accent)' : 'var(--text-secondary)',
+                  border: 'none',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  transition: 'all 0.15s',
+                }}
+              >
+                <GitFork size={14} />
+              </button>
+              <button
+                onClick={() => setViewMode('grid')}
+                title="Grid view"
+                style={{
+                  padding: '5px 9px',
+                  background: viewMode === 'grid' ? 'color-mix(in srgb, var(--accent) 15%, var(--bg-elevated))' : 'transparent',
+                  color: viewMode === 'grid' ? 'var(--accent)' : 'var(--text-secondary)',
+                  border: 'none',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  transition: 'all 0.15s',
+                }}
+              >
+                <LayoutGrid size={14} />
+              </button>
+            </div>
+          )}
+          <Btn variant="outline" size="sm" icon={<RefreshCw size={13} />} onClick={fetch} loading={loading}>
+            Refresh
+          </Btn>
+        </div>
       </div>
 
       {error && (
@@ -60,21 +120,42 @@ export function AgentsView({ onOpenChat }: Props) {
         </div>
       )}
 
-      <div className="grid gap-4" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))' }}>
-        {agents.map(agent => (
-          <AgentCard
-            key={agent.id}
-            agent={agent}
-            isDefault={agent.id === defaultId}
-            onChat={() => handleChat(agent)}
-            onEdit={() => setEditingAgent(agent)}
-            onDelete={() => setConfirmDelete(agent.id)}
-            confirmingDelete={confirmDelete === agent.id}
-            onConfirmDelete={() => { remove(agent.id); setConfirmDelete(null) }}
-            onCancelDelete={() => setConfirmDelete(null)}
+      {agents.length > 0 && viewMode === 'graph' && (
+        <div className="flex flex-1 flex-col min-h-0">
+          <AgentGraph
+            agents={agents}
+            defaultId={defaultId}
+            onChat={a => { handleChat(a) }}
+            onConnect={handleConnect}
+            onDisconnect={handleDisconnect}
+            onEdit={setEditingAgent}
           />
-        ))}
-      </div>
+          {!hasRelationships && (
+            <p className="text-xs text-center pb-3" style={{ color: 'var(--text-secondary)', opacity: 0.5 }}>
+              No sub-agent relationships configured — edges will appear when agents have <code>allowedSubAgents</code>
+            </p>
+          )}
+        </div>
+      )}
+
+      {agents.length > 0 && viewMode === 'grid' && (
+        <div className="grid gap-4" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))' }}>
+          {agents.map(agent => (
+            <AgentCard
+              key={agent.id}
+              agent={agent}
+              allAgents={agents}
+              isDefault={agent.id === defaultId}
+              onChat={() => handleChat(agent)}
+              onEdit={() => setEditingAgent(agent)}
+              onDelete={() => setConfirmDelete(agent.id)}
+              confirmingDelete={confirmDelete === agent.id}
+              onConfirmDelete={() => { remove(agent.id); setConfirmDelete(null) }}
+              onCancelDelete={() => setConfirmDelete(null)}
+            />
+          ))}
+        </div>
+      )}
 
       {editingAgent && (
         <AgentEditor agent={editingAgent} onClose={() => setEditingAgent(null)} />
@@ -83,8 +164,9 @@ export function AgentsView({ onOpenChat }: Props) {
   )
 }
 
-function AgentCard({ agent, isDefault, onChat, onEdit, onDelete, confirmingDelete, onConfirmDelete, onCancelDelete }: {
+function AgentCard({ agent, allAgents, isDefault, onChat, onEdit, onDelete, confirmingDelete, onConfirmDelete, onCancelDelete }: {
   agent: Agent
+  allAgents: Agent[]
   isDefault: boolean
   onChat: () => void
   onEdit: () => void
@@ -97,6 +179,10 @@ function AgentCard({ agent, isDefault, onChat, onEdit, onDelete, confirmingDelet
   const emoji = agentEmoji(agent)
   const name = agentDisplayName(agent)
   const model = agentModel(agent)
+
+  const subAgentNames = (agent.allowedSubAgents ?? [])
+    .map(id => allAgents.find(a => a.id === id))
+    .filter((a): a is Agent => Boolean(a))
 
   return (
     <div
@@ -142,13 +228,35 @@ function AgentCard({ agent, isDefault, onChat, onEdit, onDelete, confirmingDelet
         <span className="font-mono" style={{ opacity: 0.6 }}>{agent.id}</span>
       </div>
 
+      {/* Sub-agent chips */}
+      {subAgentNames.length > 0 && (
+        <div className="mb-3">
+          <p className="text-xs mb-1.5" style={{ color: 'var(--text-secondary)', opacity: 0.7 }}>Sub-agents</p>
+          <div className="flex flex-wrap gap-1">
+            {subAgentNames.map(sub => (
+              <span
+                key={sub.id}
+                className="text-xs px-2 py-0.5 rounded-full"
+                style={{
+                  background: 'color-mix(in srgb, var(--accent) 10%, var(--bg-elevated))',
+                  border: '1px solid color-mix(in srgb, var(--accent) 25%, var(--border))',
+                  color: 'var(--text-secondary)',
+                }}
+              >
+                {sub.identity?.emoji ? `${sub.identity.emoji} ` : ''}{agentDisplayName(sub)}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
       {confirmingDelete ? (
         <div className="flex gap-2">
           <Btn size="sm" variant="danger" onClick={onConfirmDelete} style={{ flex: 1 }}>Delete</Btn>
           <Btn size="sm" variant="outline" onClick={onCancelDelete} style={{ flex: 1 }}>Cancel</Btn>
         </div>
       ) : (
-        <div className="flex gap-2">
+        <div className="flex gap-2 mt-auto">
           <Btn size="sm" icon={<MessageSquare size={12} />} onClick={onChat} style={{ flex: 1 }}>Chat</Btn>
           <Btn size="sm" variant="outline" icon={<Settings2 size={12} />} onClick={onEdit} />
           <Btn size="sm" variant="ghost" icon={<Trash2 size={12} />} onClick={onDelete} style={{ color: 'var(--danger)' }} />

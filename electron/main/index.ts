@@ -1,6 +1,6 @@
-import { app, BrowserWindow, ipcMain, shell, Tray, Menu, nativeImage } from 'electron'
+import { app, BrowserWindow, ipcMain, shell, Tray, Menu, nativeImage, session } from 'electron'
 import { join } from 'path'
-import { readFile, writeFile } from 'fs/promises'
+import { readFile, writeFile, mkdir } from 'fs/promises'
 import { existsSync } from 'fs'
 import { homedir } from 'os'
 import { exec } from 'child_process'
@@ -113,6 +113,15 @@ function createWindow(): void {
 }
 
 app.whenReady().then(() => {
+  // Trust self-signed certificates from loopback addresses (needed for Obsidian Local REST API HTTPS)
+  session.defaultSession.setCertificateVerifyProc((request, callback) => {
+    if (request.hostname === 'localhost' || request.hostname === '127.0.0.1' || request.hostname === '::1') {
+      callback(0)  // OK
+    } else {
+      callback(-3) // use default Chromium verification
+    }
+  })
+
   createTray()
   createWindow()
   app.on('activate', () => {
@@ -303,6 +312,77 @@ function codeToReason(code: number): string {
   }
   return map[code] ?? ''
 }
+
+// ── IPC: Obsidian installation detection ─────────────────────────────────────
+ipcMain.handle('obsidian:detect', async () => {
+  const platform = process.platform
+  let installed = false
+  if (platform === 'darwin') {
+    const r = await runCmd('[ -d "/Applications/Obsidian.app" ] && echo "yes" || echo "no"')
+    installed = r.stdout.trim() === 'yes'
+  } else if (platform === 'win32') {
+    const localApp = process.env['LOCALAPPDATA'] ?? ''
+    const r = await runCmd(`[ -f "${localApp}\\Obsidian\\Obsidian.exe" ] && echo "yes" || echo "no"`)
+    installed = r.stdout.trim() === 'yes'
+  } else {
+    const r = await runCmd(
+      'which obsidian 2>/dev/null | head -1 || ' +
+      'find ~/.local/share/applications /usr/share/applications -name "*bsidian*" -maxdepth 1 2>/dev/null | head -1 || ' +
+      'find ~/Applications -name "*bsidian*" -maxdepth 2 2>/dev/null | head -1 || ' +
+      'snap list 2>/dev/null | grep -i obsidian | head -1 || ' +
+      'flatpak list 2>/dev/null | grep -i obsidian | head -1'
+    )
+    installed = r.stdout.trim().length > 0
+  }
+  return { installed, platform }
+})
+
+ipcMain.handle('obsidian:writeSkill', async (_event, vaults: Array<{ name: string; url: string; apiKey: string }>) => {
+  try {
+    const skillDir = join(homedir(), '.openclaw', 'skills', 'obsidian-memory')
+    await mkdir(skillDir, { recursive: true })
+
+    const vaultSections = vaults.map((v, i) =>
+      `### ${v.name}${i === 0 ? ' (primary)' : ''}\n- **URL**: ${v.url}\n- **API Key**: \`${v.apiKey}\``
+    ).join('\n\n')
+
+    const content = [
+      '---',
+      'name: obsidian-memory',
+      'description: "Use when the user asks about their notes, knowledge base, vault, or memories.',
+      '  Provides access to Obsidian vaults via the Local REST API.',
+      '  You can list notes, read note content, search, and write notes."',
+      '---',
+      '',
+      '# Obsidian Memory Vaults',
+      '',
+      'Access Obsidian vaults using the Local REST API plugin.',
+      'Always set `Authorization: Bearer {api_key}` header.',
+      '',
+      '## Registered Vaults',
+      '',
+      vaultSections,
+      '',
+      '## API Reference',
+      '',
+      '| Operation | Request |',
+      '|-----------|---------|',
+      '| List all files | `GET {url}/vault/` |',
+      '| Read a note | `GET {url}/vault/{path}` |',
+      '| Write/overwrite note | `PUT {url}/vault/{path}` (plain text body) |',
+      '| Append to note | `POST {url}/vault/{path}` (`Content-Type: text/markdown`) |',
+      '| Full-text search | `POST {url}/search/simple/?query={q}&contextLength=100` |',
+      '',
+      'Note: URL-encode each path segment individually (not the slashes between them).',
+      '',
+    ].join('\n')
+
+    await writeFile(join(skillDir, 'SKILL.md'), content, 'utf-8')
+    return { ok: true }
+  } catch (e) {
+    return { ok: false, error: String(e) }
+  }
+})
 
 // ── IPC: System metrics ───────────────────────────────────────────────────────
 ipcMain.handle('metrics:get', async () => {
