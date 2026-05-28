@@ -1,0 +1,262 @@
+import { create } from 'zustand'
+import { gatewayClient } from '../lib/gateway'
+
+export interface Plugin {
+  id: string
+  enabled: boolean
+  name?: string
+  description?: string
+  path?: string
+  source?: string
+  version?: string
+  origin?: string
+  [key: string]: unknown
+}
+
+export interface Skill {
+  id: string
+  enabled: boolean
+  name?: string
+  description?: string
+  trigger?: string
+  agentId?: string
+  filePath?: string
+  emoji?: string
+  source?: string
+  bundled?: boolean
+  [key: string]: unknown
+}
+
+export interface SkillStatusEntry {
+  name: string
+  skillKey: string
+  description?: string
+  filePath?: string
+  baseDir?: string
+  emoji?: string
+  source?: string
+  bundled?: boolean
+  disabled?: boolean
+  eligible?: boolean
+}
+
+export interface PluginMetaEntry {
+  id: string
+  name?: string
+  description?: string
+  version?: string
+  source?: string
+  origin?: string
+  status?: string
+}
+
+// ── Normalizers ───────────────────────────────────────────────────────────────
+
+type EntriesMap = Record<string, unknown>
+
+function normalizePlugins(entries: EntriesMap): Plugin[] {
+  return Object.entries(entries).map(([key, value]) => {
+    const r = (value ?? {}) as Record<string, unknown>
+    return {
+      ...r,
+      id: String(r.id ?? key),
+      enabled: Boolean(r.enabled ?? true),
+      name: r.name !== undefined ? String(r.name) : key,
+      description: r.description !== undefined ? String(r.description) : undefined,
+      path: r.path !== undefined ? String(r.path) : undefined,
+      source: r.source !== undefined ? String(r.source) : undefined,
+    } as Plugin
+  })
+}
+
+function normalizeSkills(entries: EntriesMap): Skill[] {
+  return Object.entries(entries).map(([key, value]) => {
+    const r = (value ?? {}) as Record<string, unknown>
+    return {
+      ...r,
+      id: String(r.id ?? key),
+      enabled: Boolean(r.enabled ?? true),
+      name: r.name !== undefined ? String(r.name) : key,
+      description: r.description !== undefined ? String(r.description) : undefined,
+      trigger: r.trigger !== undefined ? String(r.trigger) : undefined,
+      agentId: r.agentId !== undefined ? String(r.agentId) : undefined,
+    } as Skill
+  })
+}
+
+// ── Store ─────────────────────────────────────────────────────────────────────
+
+interface ExtensionsState {
+  plugins: Plugin[]
+  skills: Skill[]
+  loading: boolean
+  error: string | null
+  dirty: boolean
+  saving: boolean
+
+  _baseHash: string | null
+
+  load: () => Promise<void>
+  setPluginEnabled: (id: string, enabled: boolean) => void
+  setSkillEnabled: (id: string, enabled: boolean) => void
+  removePlugin: (id: string) => void
+  removeSkill: (id: string) => void
+  addPlugin: (plugin: Plugin) => void
+  addSkill: (skill: Skill) => void
+  save: () => Promise<void>
+}
+
+export const useExtensionsStore = create<ExtensionsState>((set, get) => ({
+  plugins: [],
+  skills: [],
+  loading: false,
+  error: null,
+  dirty: false,
+  saving: false,
+  _baseHash: null,
+
+  async load() {
+    set({ loading: true, error: null })
+    try {
+      const snapshot = await gatewayClient.request<{ config?: Record<string, unknown>; hash?: string }>('config.get', {})
+      const config = snapshot.config ?? {}
+      const pluginsSection = config.plugins as Record<string, unknown> | undefined
+      const skillsSection = config.skills as Record<string, unknown> | undefined
+      const pluginEntries = (pluginsSection?.entries ?? {}) as EntriesMap
+      const skillEntries = (skillsSection?.entries ?? {}) as EntriesMap
+
+      // Enrich skills with metadata from skills.status (description, filePath, etc.)
+      // Also surface non-bundled discovered skills that aren't yet in config entries.
+      let skillStatusMap: Record<string, SkillStatusEntry> = {}
+      let skillStatusList: SkillStatusEntry[] = []
+      try {
+        const statusRes = await gatewayClient.request<{ skills?: SkillStatusEntry[] }>('skills.status', {})
+        skillStatusList = statusRes?.skills ?? []
+        for (const s of skillStatusList) {
+          if (s.skillKey) skillStatusMap[s.skillKey] = s
+          if (s.name) skillStatusMap[s.name] = s
+        }
+      } catch { /* non-critical */ }
+
+      const configSkills = normalizeSkills(skillEntries).map(sk => {
+        const status = skillStatusMap[sk.id] ?? skillStatusMap[sk.name ?? '']
+        if (!status) return sk
+        return {
+          ...sk,
+          description: sk.description ?? status.description,
+          filePath: status.filePath,
+          emoji: status.emoji,
+          source: status.source,
+          bundled: status.bundled,
+        }
+      })
+
+      // Include user-installed (non-bundled) skills discovered by the gateway
+      // that aren't already represented in the config entries.
+      const configIds = new Set(configSkills.map(s => s.id))
+      const discoveredSkills: Skill[] = skillStatusList
+        .filter(s => s.skillKey && !s.bundled && !configIds.has(s.skillKey) && !configIds.has(s.name))
+        .map(s => ({
+          id: s.skillKey,
+          enabled: !s.disabled,
+          name: s.name,
+          description: s.description,
+          filePath: s.filePath,
+          emoji: s.emoji,
+          source: s.source,
+          bundled: false,
+        }))
+
+      const skills = [...configSkills, ...discoveredSkills]
+
+      // Enrich plugins with metadata from `openclaw plugins list --json`
+      let pluginMetaMap: Record<string, PluginMetaEntry> = {}
+      try {
+        const api = (window as unknown as { api?: { plugins?: { list: () => Promise<{ ok: boolean; plugins?: PluginMetaEntry[] }> } } }).api
+        const res = await api?.plugins?.list()
+        for (const p of res?.plugins ?? []) {
+          if (p.id) pluginMetaMap[p.id] = p
+        }
+      } catch { /* non-critical */ }
+
+      const plugins = normalizePlugins(pluginEntries).map(p => {
+        const meta = pluginMetaMap[p.id]
+        if (!meta) return p
+        return {
+          ...p,
+          description: p.description ?? meta.description,
+          name: p.name !== p.id ? p.name : (meta.name ?? p.name),
+          version: meta.version,
+          origin: meta.origin,
+          source: p.source ?? meta.source,
+        }
+      })
+
+      set({
+        plugins,
+        skills,
+        _baseHash: snapshot.hash ?? null,
+        loading: false,
+        dirty: false,
+        error: null,
+      })
+    } catch (e) {
+      set({ loading: false, error: String(e) })
+    }
+  },
+
+  setPluginEnabled(id, enabled) {
+    set(s => ({ plugins: s.plugins.map(p => p.id === id ? { ...p, enabled } : p), dirty: true }))
+  },
+
+  setSkillEnabled(id, enabled) {
+    set(s => ({ skills: s.skills.map(sk => sk.id === id ? { ...sk, enabled } : sk), dirty: true }))
+  },
+
+  removePlugin(id) {
+    set(s => ({ plugins: s.plugins.filter(p => p.id !== id), dirty: true }))
+  },
+
+  removeSkill(id) {
+    set(s => ({ skills: s.skills.filter(sk => sk.id !== id), dirty: true }))
+  },
+
+  addPlugin(plugin) {
+    set(s => ({ plugins: [...s.plugins, plugin], dirty: true }))
+  },
+
+  addSkill(skill) {
+    set(s => ({ skills: [...s.skills, skill], dirty: true }))
+  },
+
+  async save() {
+    const { plugins, skills, _baseHash } = get()
+    set({ saving: true })
+    try {
+      const pluginEntries: Record<string, unknown> = {}
+      for (const p of plugins) {
+        const { id, ...rest } = p
+        pluginEntries[id] = rest
+      }
+      const skillEntries: Record<string, unknown> = {}
+      for (const s of skills) {
+        // Strip gateway-only fields — only config-relevant fields go into the patch
+        const { id, filePath: _fp, emoji: _em, source: _src, bundled: _bu, ...rest } = s
+        skillEntries[id] = rest
+      }
+
+      const patch = { plugins: { entries: pluginEntries }, skills: { entries: skillEntries } }
+      const params: Record<string, unknown> = { raw: JSON.stringify(patch) }
+      if (_baseHash) params.baseHash = _baseHash
+
+      await gatewayClient.request('config.patch', params)
+
+      // Reload to get fresh hash after the patch
+      await get().load()
+      set({ saving: false })
+    } catch (e) {
+      set({ saving: false, error: String(e) })
+      throw e
+    }
+  },
+}))

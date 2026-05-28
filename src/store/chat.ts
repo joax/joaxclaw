@@ -1,0 +1,437 @@
+import { create } from 'zustand'
+import { nanoid } from '../lib/nanoid'
+import type { Conversation, ChatMessage, ToolCall, MediaAttachment } from '../lib/types'
+import { gatewayClient } from '../lib/gateway'
+
+const AUDIO_EXT = /\.(mp3|ogg|wav|m4a|aac|opus|webm|flac)(\?[^\s]*)?$/i
+const AUDIO_MIME = /^audio\//i
+const URL_RE = /https?:\/\/[^\s<>"')\]]+/g
+
+// Tracks active stream handlers per convId so they can be cancelled
+const activeStreams = new Map<string, { unsub: () => void; sessionKey: string }>()
+
+interface ChatEventPayload {
+  sessionKey?: string
+  state?: string
+  deltaText?: string
+  replace?: boolean
+  message?: unknown
+  errorMessage?: string
+  toolId?: string
+  toolName?: string
+  toolInput?: unknown
+  toolResult?: unknown
+  toolError?: string
+  durationMs?: number
+  waitingSessionKey?: string
+  subSessionKey?: string
+}
+
+type UpdateFn = (updater: (msg: ChatMessage) => ChatMessage) => void
+
+// Shared chat event handler — used by both sendMessage and watchSession
+function attachChatStream(convId: string, sessionKey: string, update: UpdateFn): void {
+  const unsub = gatewayClient.on((frame) => {
+    if (frame.event !== 'chat') return
+    const p = frame.payload as ChatEventPayload
+    if (p.sessionKey !== sessionKey) return
+
+    if (p.state === 'delta') {
+      if (p.replace) {
+        update(m => ({ ...m, content: p.deltaText ?? '', waitingForSession: undefined }))
+      } else if (p.deltaText) {
+        update(m => ({ ...m, content: m.content + p.deltaText, waitingForSession: undefined }))
+      }
+    } else if (p.state === 'thinking_delta' || p.state === 'thinking') {
+      if (p.deltaText) {
+        update(m => ({ ...m, reasoning: (m.reasoning ?? '') + p.deltaText, reasoningStreaming: true, waitingForSession: undefined }))
+      }
+    } else if (p.state === 'thinking_done') {
+      update(m => ({ ...m, reasoningStreaming: false }))
+    } else if (p.state === 'tool_start') {
+      const newCall: ToolCall = {
+        id: p.toolId ?? nanoid(),
+        name: p.toolName ?? 'unknown',
+        args: p.toolInput !== undefined ? JSON.stringify(p.toolInput) : undefined,
+        status: 'running'
+      }
+      update(m => ({ ...m, toolCalls: [...(m.toolCalls ?? []), newCall], waitingForSession: undefined }))
+    } else if (p.state === 'tool_done') {
+      update(m => ({
+        ...m,
+        waitingForSession: undefined,
+        toolCalls: (m.toolCalls ?? []).map(tc =>
+          tc.id !== p.toolId ? tc : {
+            ...tc,
+            status: p.toolError ? 'error' : 'done',
+            result: p.toolResult !== undefined ? JSON.stringify(p.toolResult) : undefined,
+            error: p.toolError,
+            durationMs: p.durationMs
+          }
+        )
+      }))
+    } else if (p.state === 'waiting' || p.state === 'delegating' || p.state === 'blocked' || p.state === 'waiting_for_session') {
+      const subKey = p.waitingSessionKey ?? p.subSessionKey
+      update(m => ({ ...m, waitingForSession: subKey ?? 'unknown' }))
+    } else if (p.state === 'final') {
+      const finalText = extractText(p.message)
+      const finalReasoning = extractReasoning(p.message)
+      const finalToolCalls = extractToolCalls(p.message)
+      const finalAttachments = extractAttachments(p.message)
+      update(m => ({
+        ...m,
+        ...(finalText ? { content: finalText } : {}),
+        ...(finalReasoning ? { reasoning: finalReasoning } : {}),
+        ...(finalToolCalls.length ? { toolCalls: finalToolCalls } : {}),
+        ...(finalAttachments.length ? { attachments: finalAttachments } : {}),
+        streaming: false,
+        reasoningStreaming: false,
+        waitingForSession: undefined
+      }))
+      activeStreams.delete(convId)
+      unsub()
+    } else if (p.state === 'error') {
+      update(m => ({ ...m, content: m.content || `Error: ${p.errorMessage ?? 'unknown'}`, streaming: false }))
+      activeStreams.delete(convId)
+      unsub()
+    } else if (p.state === 'aborted') {
+      update(m => ({ ...m, streaming: false }))
+      activeStreams.delete(convId)
+      unsub()
+    }
+  })
+  activeStreams.set(convId, { unsub, sessionKey })
+}
+
+interface ChatState {
+  conversations: Conversation[]
+  activeConvId: string | null
+
+  newConversation: (agentId: string, agentName: string, sessionKey?: string) => string
+  selectConversation: (id: string) => void
+  sendMessage: (convId: string, text: string) => Promise<void>
+  abortStream: (convId: string) => Promise<void>
+  watchSession: (convId: string, sessionKey: string) => void
+  deleteConversation: (id: string) => void
+  loadSessionMessages: (sessionKey: string, agentId: string, agentName: string) => Promise<string>
+}
+
+function makeTitle(text: string): string {
+  return text.length > 40 ? text.slice(0, 40) + '…' : text
+}
+
+function sessionTitle(sessionKey: string, agentName: string): string {
+  // Prefer a real display name when the caller has one
+  if (agentName && agentName !== sessionKey) return agentName
+
+  // Parse common key formats into something readable:
+  // "agentId@uuid-or-id"  →  "agentId · uuid8"
+  // "scope:agent:name"    →  "agent · name"
+  const atIdx = sessionKey.indexOf('@')
+  if (atIdx > 0) {
+    const agent = sessionKey.slice(0, atIdx)
+    const suffix = sessionKey.slice(atIdx + 1, atIdx + 9)
+    return `${agent} · ${suffix}`
+  }
+  const parts = sessionKey.split(':').filter(Boolean)
+  if (parts.length >= 2) return parts.slice(-2).join(' · ')
+  return sessionKey.slice(0, 32)
+}
+
+function extractText(msg: unknown): string {
+  if (!msg || typeof msg !== 'object') return ''
+  const m = msg as Record<string, unknown>
+  if (typeof m.text === 'string' && m.text) return m.text as string
+  if (Array.isArray(m.content)) {
+    return (m.content as Record<string, unknown>[])
+      .filter(b => b && typeof b === 'object' && b['type'] === 'text' && typeof b['text'] === 'string')
+      .map(b => b['text'] as string)
+      .join('\n')
+  }
+  if (typeof m.content === 'string') return m.content as string
+  return ''
+}
+
+function extractReasoning(msg: unknown): string {
+  if (!msg || typeof msg !== 'object') return ''
+  const m = msg as Record<string, unknown>
+  if (Array.isArray(m.content)) {
+    const blocks = m.content as Record<string, unknown>[]
+    return blocks
+      .filter(b => b && typeof b === 'object' && b['type'] === 'thinking' && typeof b['thinking'] === 'string')
+      .map(b => b['thinking'] as string)
+      .join('\n')
+  }
+  return ''
+}
+
+function extractAttachments(msg: unknown): MediaAttachment[] {
+  if (!msg || typeof msg !== 'object') return []
+  const m = msg as Record<string, unknown>
+  const result: MediaAttachment[] = []
+
+  if (Array.isArray(m.content)) {
+    for (const b of m.content as Record<string, unknown>[]) {
+      if (!b || typeof b !== 'object') continue
+      const btype = b['type'] as string | undefined
+      const mediaType = (b['mediaType'] ?? b['mimeType']) as string | undefined
+
+      const isAudioBlock =
+        btype === 'audio' ||
+        (btype === 'file' && mediaType && AUDIO_MIME.test(mediaType))
+
+      if (isAudioBlock) {
+        const src = b['source'] as Record<string, unknown> | undefined
+        result.push({
+          type: 'audio',
+          url: (b['url'] ?? src?.['url']) as string | undefined,
+          data: (b['data'] ?? src?.['data']) as string | undefined,
+          mediaType: mediaType ?? (src?.['mediaType'] as string | undefined),
+          name: b['name'] as string | undefined
+        })
+      }
+    }
+  }
+
+  // Scan text for bare audio URLs
+  const text = typeof m.text === 'string' ? m.text
+    : typeof m.content === 'string' ? m.content
+    : extractText(msg)
+  let match: RegExpExecArray | null
+  URL_RE.lastIndex = 0
+  while ((match = URL_RE.exec(text)) !== null) {
+    if (AUDIO_EXT.test(match[0])) {
+      result.push({ type: 'audio', url: match[0] })
+    }
+  }
+
+  return result
+}
+
+function extractToolCalls(msg: unknown): ToolCall[] {
+  if (!msg || typeof msg !== 'object') return []
+  const m = msg as Record<string, unknown>
+  if (!Array.isArray(m.content)) return []
+  const blocks = m.content as Record<string, unknown>[]
+  return blocks
+    .filter(b => b && typeof b === 'object' && b['type'] === 'tool_use')
+    .map(b => ({
+      id: String(b['id'] ?? nanoid()),
+      name: String(b['name'] ?? 'unknown'),
+      args: b['input'] !== undefined ? JSON.stringify(b['input']) : undefined,
+      status: 'done' as const
+    }))
+}
+
+export const useChatStore = create<ChatState>((set, get) => ({
+  conversations: [],
+  activeConvId: null,
+
+  newConversation(agentId, agentName, sessionKey) {
+    const id = nanoid()
+    const conv: Conversation = {
+      id,
+      sessionKey: sessionKey ?? '',
+      agentId,
+      agentName,
+      title: `New chat with ${agentName}`,
+      messages: []
+    }
+    set(s => ({ conversations: [conv, ...s.conversations], activeConvId: id }))
+    return id
+  },
+
+  selectConversation(id) {
+    set({ activeConvId: id })
+  },
+
+  deleteConversation(id) {
+    set(s => ({
+      conversations: s.conversations.filter(c => c.id !== id),
+      activeConvId: s.activeConvId === id ? (s.conversations.find(c => c.id !== id)?.id ?? null) : s.activeConvId
+    }))
+  },
+
+  watchSession(convId, sessionKey) {
+    if (activeStreams.has(convId)) return
+
+    // Lazy placeholder — only added to the conversation on the first real event
+    let msgId: string | null = null
+
+    const update: UpdateFn = (updater) => {
+      if (!msgId) {
+        const id = nanoid()
+        msgId = id
+        const placeholder: ChatMessage = {
+          id,
+          sessionId: sessionKey,
+          role: 'assistant',
+          content: '',
+          reasoning: '',
+          toolCalls: [],
+          createdAt: new Date().toISOString(),
+          streaming: true,
+          reasoningStreaming: false
+        }
+        set(s => ({
+          conversations: s.conversations.map(c =>
+            c.id !== convId ? c : { ...c, messages: [...c.messages, placeholder] }
+          )
+        }))
+      }
+      set(s => ({
+        conversations: s.conversations.map(c =>
+          c.id !== convId ? c : {
+            ...c,
+            messages: c.messages.map(m => m.id === msgId ? updater(m) : m)
+          }
+        )
+      }))
+    }
+
+    attachChatStream(convId, sessionKey, update)
+  },
+
+  async abortStream(convId) {
+    const entry = activeStreams.get(convId)
+    if (!entry) return
+    activeStreams.delete(convId)
+    entry.unsub()
+    set(s => ({
+      conversations: s.conversations.map(c =>
+        c.id !== convId ? c : {
+          ...c,
+          messages: c.messages.map(m => m.streaming ? { ...m, streaming: false, reasoningStreaming: false } : m)
+        }
+      )
+    }))
+    await gatewayClient.request('sessions.abort', { key: entry.sessionKey }).catch(() => {})
+  },
+
+  async sendMessage(convId, text) {
+    const userMsg: ChatMessage = {
+      id: nanoid(),
+      sessionId: '',
+      role: 'user',
+      content: text,
+      createdAt: new Date().toISOString()
+    }
+
+    set(s => ({
+      conversations: s.conversations.map(c =>
+        c.id !== convId ? c : {
+          ...c,
+          title: c.messages.length === 0 ? makeTitle(text) : c.title,
+          lastMessage: text,
+          lastAt: userMsg.createdAt,
+          messages: [...c.messages, userMsg]
+        }
+      )
+    }))
+
+    const conv = get().conversations.find(c => c.id === convId)
+    if (!conv) return
+
+    const assistantMsgId = nanoid()
+    const assistantMsg: ChatMessage = {
+      id: assistantMsgId,
+      sessionId: '',
+      role: 'assistant',
+      content: '',
+      reasoning: '',
+      toolCalls: [],
+      createdAt: new Date().toISOString(),
+      streaming: true,
+      reasoningStreaming: false
+    }
+
+    set(s => ({
+      conversations: s.conversations.map(c =>
+        c.id !== convId ? c : { ...c, messages: [...c.messages, assistantMsg] }
+      )
+    }))
+
+    const updateAssistant = (updater: (msg: ChatMessage) => ChatMessage) => {
+      set(s => ({
+        conversations: s.conversations.map(c =>
+          c.id !== convId ? c : {
+            ...c,
+            messages: c.messages.map(m => m.id === assistantMsgId ? updater(m) : m)
+          }
+        )
+      }))
+    }
+
+    try {
+      let sessionKey = conv.sessionKey
+      if (!sessionKey) {
+        const session = await gatewayClient.request<{ key: string; sessionId?: string }>('sessions.create', { agentId: conv.agentId })
+        sessionKey = session.key
+        set(s => ({
+          conversations: s.conversations.map(c => c.id === convId ? { ...c, sessionKey } : c)
+        }))
+      }
+
+      attachChatStream(convId, sessionKey, updateAssistant)
+
+      await gatewayClient.request('chat.send', {
+        sessionKey,
+        message: text,
+        idempotencyKey: nanoid(16)
+      })
+    } catch (err) {
+      updateAssistant(m => ({ ...m, content: `Error: ${String(err)}`, streaming: false }))
+    }
+  },
+
+  async loadSessionMessages(sessionKey, agentId, agentName) {
+    try {
+      const history = await gatewayClient.request<{ messages: unknown[] }>('chat.history', { sessionKey })
+      const messages: ChatMessage[] = (history.messages ?? [])
+        .filter((m): m is Record<string, unknown> => !!m && typeof m === 'object')
+        .filter(m => {
+          const role = m['role'] as string
+          return role === 'user' || role === 'assistant'
+        })
+        .map(m => {
+          const atts = extractAttachments(m)
+          return {
+            id: (m['id'] as string | undefined) ?? nanoid(),
+            sessionId: sessionKey,
+            role: m['role'] as 'user' | 'assistant',
+            content: extractText(m),
+            reasoning: extractReasoning(m) || undefined,
+            toolCalls: extractToolCalls(m).length ? extractToolCalls(m) : undefined,
+            attachments: atts.length ? atts : undefined,
+            createdAt: typeof m['timestamp'] === 'number'
+              ? new Date(m['timestamp']).toISOString()
+              : new Date().toISOString()
+          }
+        })
+
+      const existing = get().conversations.find(c => c.sessionKey === sessionKey)
+      if (existing) {
+        set(s => ({
+          conversations: s.conversations.map(c => c.sessionKey === sessionKey ? { ...c, messages } : c),
+          activeConvId: existing.id
+        }))
+        return existing.id
+      }
+
+      const convId = nanoid()
+      const conv: Conversation = {
+        id: convId,
+        sessionKey,
+        agentId,
+        agentName,
+        title: sessionTitle(sessionKey, agentName),
+        messages
+      }
+      set(s => ({ conversations: [conv, ...s.conversations], activeConvId: convId }))
+      return convId
+    } catch (err) {
+      console.error('Failed to load session:', err)
+      return ''
+    }
+  }
+}))
