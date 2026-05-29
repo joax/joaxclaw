@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
-import { RefreshCw, ChevronUp, ChevronDown, Square, MessageSquare, Trash2, Heart, Pencil } from 'lucide-react'
+import { RefreshCw, ChevronUp, ChevronDown, Square, MessageSquare, Trash2, Heart, Pencil, Cpu } from 'lucide-react'
 import { useSessionsStore } from '../../store/sessions'
 import { useChatStore } from '../../store/chat'
 import type { Session } from '../../lib/types'
 import { Btn } from '../ui/Btn'
 
-type SortKey = 'updatedAt' | 'status' | 'key'
+type SortKey = 'updatedAt' | 'status' | 'key' | 'model'
 interface Props { onOpenChat: () => void }
 
 function sessionAgentId(key: string): string {
@@ -83,6 +83,7 @@ export function SessionsView({ onOpenChat }: Props) {
       if (sort === 'updatedAt') cmp = (a.updatedAt ?? 0) - (b.updatedAt ?? 0)
       else if (sort === 'status') cmp = sessionStatus(a).localeCompare(sessionStatus(b))
       else if (sort === 'key') cmp = a.key.localeCompare(b.key)
+      else if (sort === 'model') cmp = (a.model ?? '').localeCompare(b.model ?? '')
       return sortDir === 'asc' ? cmp : -cmp
     })
 
@@ -151,6 +152,7 @@ export function SessionsView({ onOpenChat }: Props) {
                 <th className="px-3 py-2.5 text-left text-xs font-medium w-8" style={{ color: 'var(--text-secondary)' }}></th>
                 <Th onClick={() => handleSort('key')} sortKey="key" active={sort} dir={sortDir}>Session key</Th>
                 <Th onClick={() => handleSort('status')} sortKey="status" active={sort} dir={sortDir}>Status</Th>
+                <Th onClick={() => handleSort('model')} sortKey="model" active={sort} dir={sortDir}>Model</Th>
                 <Th onClick={() => handleSort('updatedAt')} sortKey="updatedAt" active={sort} dir={sortDir}>Updated</Th>
                 <th className="px-3 py-2.5 text-left text-xs font-medium" style={{ color: 'var(--text-secondary)' }}></th>
               </tr>
@@ -200,6 +202,9 @@ export function SessionsView({ onOpenChat }: Props) {
                         {status}
                       </span>
                     </td>
+                    <td className="px-3 py-2.5">
+                      <ModelCell session={s} running={isRunning(s)} />
+                    </td>
                     <td className="px-3 py-2.5 text-xs" style={{ color: 'var(--text-secondary)' }}>
                       {formatTs(s.updatedAt ?? s.startedAt)}
                     </td>
@@ -246,7 +251,7 @@ export function SessionsView({ onOpenChat }: Props) {
               })}
               {filtered.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="px-4 py-8 text-center text-sm" style={{ color: 'var(--text-secondary)' }}>
+                  <td colSpan={7} className="px-4 py-8 text-center text-sm" style={{ color: 'var(--text-secondary)' }}>
                     No sessions match your filters
                   </td>
                 </tr>
@@ -254,6 +259,43 @@ export function SessionsView({ onOpenChat }: Props) {
             </tbody>
           </table>
         </div>
+      )}
+    </div>
+  )
+}
+
+function fmtTokens(n: number): string {
+  if (n >= 1000) return `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k`
+  return String(n)
+}
+
+function ModelCell({ session, running }: { session: Session; running: boolean }) {
+  const model = session.model
+  const ctx = session.contextTokens
+  if (!model) return <span style={{ color: 'var(--text-secondary)', opacity: 0.3, fontSize: 11 }}>—</span>
+
+  // Strip provider prefix for display (e.g. "ollama/qwen3.5:9b" → "qwen3.5:9b")
+  const slash = model.indexOf('/')
+  const displayModel = slash >= 0 ? model.slice(slash + 1) : model
+
+  return (
+    <div className="flex flex-col gap-0.5">
+      <div className="flex items-center gap-1.5">
+        {running && (
+          <Cpu size={10} className="animate-pulse" style={{ color: 'var(--success)', flexShrink: 0 }} />
+        )}
+        <span
+          className="text-xs font-mono truncate"
+          style={{ color: running ? 'var(--success)' : 'var(--text-secondary)', maxWidth: 160 }}
+          title={model}
+        >
+          {displayModel}
+        </span>
+      </div>
+      {ctx != null && ctx > 0 && (
+        <span className="text-xs font-mono" style={{ color: 'var(--text-secondary)', opacity: 0.6 }}>
+          {fmtTokens(ctx)} ctx tokens
+        </span>
       )}
     </div>
   )

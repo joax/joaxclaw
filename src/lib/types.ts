@@ -55,6 +55,11 @@ export interface Session {
   startedAt?: number
   hasActiveRun?: boolean
   isHeartbeat?: boolean
+  contextTokens?: number
+  inputTokens?: number
+  outputTokens?: number
+  totalTokens?: number
+  lastMessage?: string
 }
 
 export type MessageRole = 'user' | 'assistant' | 'system'
@@ -75,6 +80,7 @@ export interface ToolCall {
   status: 'pending' | 'running' | 'done' | 'error'
   durationMs?: number
   error?: string
+  pluginId?: string
 }
 
 export interface ChatMessage {
@@ -229,6 +235,40 @@ export interface CronRunEntry {
     cache_write_tokens?: number
   }
   jobName?: string
+}
+
+// ── Models (mirrors gateway config: models.providers) ─────────────────────────
+
+export interface GwModelCost {
+  input: number
+  output: number
+  cacheRead: number
+  cacheWrite: number
+}
+
+export interface GwModelCompat {
+  supportsTools?: boolean
+  supportsUsageInStreaming?: boolean
+  supportsVision?: boolean
+}
+
+export interface GwModelDef {
+  id: string
+  name: string
+  reasoning?: boolean
+  input?: string[]            // e.g. ["text", "image"]
+  cost?: GwModelCost
+  contextWindow?: number
+  maxTokens?: number
+  compat?: GwModelCompat
+  params?: Record<string, unknown>
+}
+
+export interface GwModelProvider {
+  baseUrl?: string
+  api?: string
+  apiKey?: string
+  models: GwModelDef[]
 }
 
 // ── Theme ─────────────────────────────────────────────────────────────────────

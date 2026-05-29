@@ -1,6 +1,6 @@
-import { useMemo, useState, useRef, useEffect } from 'react'
+import { useMemo, useState, useRef, useEffect, useCallback } from 'react'
 import type { Agent } from '../../lib/types'
-import { Settings2, X, Trash2, Check, Loader2 } from 'lucide-react'
+import { MessageSquare, Settings2, X, Trash2, Check, Loader2, Maximize2 } from 'lucide-react'
 import { useAgentsStore } from '../../store/agents'
 import { Btn } from '../ui/Btn'
 
@@ -11,16 +11,17 @@ interface Props {
   onConnect: (fromId: string, toId: string) => void
   onDisconnect: (fromId: string, toId: string) => void
   onEdit: (agent: Agent) => void
+  onDelete: (agent: Agent) => void
 }
 
 interface DragState { fromId: string; x: number; y: number }
 
 const CARD_W       = 210
-const CARD_H       = 100
+const CARD_H       = 124
 const FOREIGN_EXTRA = 26   // extra px below card for the connector handle
 const HANDLE_R     = 6
 const H_GAP        = 270
-const V_GAP        = 190
+const V_GAP        = 214
 
 function agentDisplayName(a: Agent): string {
   return a.identity?.name ?? a.name ?? a.id
@@ -81,12 +82,11 @@ function computeLayout(agents: Agent[]): Map<string, { x: number; y: number }> {
   return positions
 }
 
-function svgPoint(e: MouseEvent | React.MouseEvent, svg: SVGSVGElement) {
+function svgPoint(e: MouseEvent | React.MouseEvent, svg: SVGSVGElement, tr: { x: number; y: number; scale: number }) {
   const rect = svg.getBoundingClientRect()
-  const vb   = svg.viewBox.baseVal
   return {
-    x: (e.clientX - rect.left) * (vb.width  / rect.width)  + vb.x,
-    y: (e.clientY - rect.top)  * (vb.height / rect.height) + vb.y,
+    x: (e.clientX - rect.left - tr.x) / tr.scale,
+    y: (e.clientY - rect.top  - tr.y) / tr.scale,
   }
 }
 
@@ -256,40 +256,123 @@ function EdgeEditor({ fromAgent, toAgent, onClose, onDisconnect }: EdgeEditorPro
 
 // ── AgentGraph ────────────────────────────────────────────────────────────────
 
-export function AgentGraph({ agents, defaultId, onChat, onConnect, onDisconnect, onEdit }: Props) {
-  const [hovered,     setHovered]     = useState<string | null>(null)
-  const [hoveredEdge, setHoveredEdge] = useState<{ from: string; to: string } | null>(null)
-  const [dragging,    setDragging]    = useState<DragState | null>(null)
-  const [editingEdge, setEditingEdge] = useState<{ from: string; to: string } | null>(null)
-  const svgRef = useRef<SVGSVGElement>(null)
+export function AgentGraph({ agents, defaultId, onChat, onConnect, onDisconnect, onEdit, onDelete }: Props) {
+  const [hovered,         setHovered]         = useState<string | null>(null)
+  const [hoveredEdge,     setHoveredEdge]     = useState<{ from: string; to: string } | null>(null)
+  const [dragging,        setDragging]        = useState<DragState | null>(null)
+  const [editingEdge,     setEditingEdge]     = useState<{ from: string; to: string } | null>(null)
+  const [transform,       setTransform]       = useState({ x: 0, y: 0, scale: 1 })
+  const [isPanning,       setIsPanning]       = useState(false)
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
 
-  const draggingRef     = useRef(dragging)
-  const agentsRef       = useRef(agents)
-  const positionsRef    = useRef(new Map<string, { x: number; y: number }>())
-  const onConnectRef    = useRef(onConnect)
-  draggingRef.current   = dragging
-  agentsRef.current     = agents
-  onConnectRef.current  = onConnect
+  const svgRef         = useRef<SVGSVGElement>(null)
+  const transformRef   = useRef({ x: 0, y: 0, scale: 1 })
+  const isPanningRef   = useRef(false)
+  const panStartRef    = useRef({ clientX: 0, clientY: 0, tx: 0, ty: 0 })
+  const initializedRef = useRef(false)
+  const draggingRef    = useRef(dragging)
+  const agentsRef      = useRef(agents)
+  const positionsRef   = useRef(new Map<string, { x: number; y: number }>())
+  const onConnectRef   = useRef(onConnect)
+
+  draggingRef.current  = dragging
+  agentsRef.current    = agents
+  onConnectRef.current = onConnect
 
   const positions = useMemo(() => computeLayout(agents), [agents])
   positionsRef.current = positions
 
+  const fitContent = useCallback(() => {
+    const svg = svgRef.current
+    if (!svg || !positionsRef.current.size) return
+    const rect = svg.getBoundingClientRect()
+    if (!rect.width || !rect.height) return
+    const pos  = positionsRef.current
+    const xs   = [...pos.values()].map(p => p.x)
+    const ys   = [...pos.values()].map(p => p.y)
+    const padX = CARD_W / 2 + 50
+    const padY = CARD_H / 2 + 70
+    const minX = Math.min(...xs) - padX
+    const maxX = Math.max(...xs) + padX
+    const minY = Math.min(...ys) - padY
+    const maxY = Math.max(...ys) + padY
+    const cW   = maxX - minX
+    const cH   = maxY - minY
+    const scale = Math.min(rect.width / cW, rect.height / cH, 1)
+    const x = (rect.width  - cW * scale) / 2 - minX * scale
+    const y = (rect.height - cH * scale) / 2 - minY * scale
+    const next = { x, y, scale }
+    transformRef.current = next
+    setTransform(next)
+  }, [])
+
+  // Auto-fit on first render
+  useEffect(() => {
+    if (initializedRef.current || !positions.size) return
+    initializedRef.current = true
+    requestAnimationFrame(() => fitContent())
+  }, [positions, fitContent])
+
+  // Wheel zoom toward cursor
+  useEffect(() => {
+    const svg = svgRef.current
+    if (!svg) return
+    const ZOOM_MIN = 0.15, ZOOM_MAX = 3
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault()
+      const factor = e.deltaY > 0 ? 1 / 1.1 : 1.1
+      const tr = transformRef.current
+      const newScale = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, tr.scale * factor))
+      if (newScale === tr.scale) return
+      const rect = svg.getBoundingClientRect()
+      const px = e.clientX - rect.left
+      const py = e.clientY - rect.top
+      const newX = px - (px - tr.x) * (newScale / tr.scale)
+      const newY = py - (py - tr.y) * (newScale / tr.scale)
+      const next = { x: newX, y: newY, scale: newScale }
+      transformRef.current = next
+      setTransform(next)
+    }
+    svg.addEventListener('wheel', onWheel, { passive: false })
+    return () => svg.removeEventListener('wheel', onWheel)
+  }, [])
+
+  // Pan (always-active window listeners)
+  useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      if (!isPanningRef.current) return
+      const { clientX: sx, clientY: sy, tx, ty } = panStartRef.current
+      const next = { ...transformRef.current, x: tx + e.clientX - sx, y: ty + e.clientY - sy }
+      transformRef.current = next
+      setTransform(next)
+    }
+    const onUp = () => {
+      if (!isPanningRef.current) return
+      isPanningRef.current = false
+      setIsPanning(false)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup',   onUp)
+    return () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup',   onUp)
+    }
+  }, [])
+
+  // Connector drag (active only while dragging)
   const isDragging = dragging !== null
   useEffect(() => {
     if (!isDragging) return
-
     const onMove = (e: MouseEvent) => {
       if (!svgRef.current) return
-      const p = svgPoint(e, svgRef.current)
+      const p = svgPoint(e, svgRef.current, transformRef.current)
       setDragging(d => d ? { ...d, x: p.x, y: p.y } : null)
     }
-
     const onUp = (e: MouseEvent) => {
       const d = draggingRef.current
       if (!d) { setDragging(null); return }
-
       if (svgRef.current) {
-        const p = svgPoint(e, svgRef.current)
+        const p = svgPoint(e, svgRef.current, transformRef.current)
         const target = agentsRef.current.find(a => {
           if (a.id === d.fromId) return false
           const ap = positionsRef.current.get(a.id)
@@ -304,7 +387,6 @@ export function AgentGraph({ agents, defaultId, onChat, onConnect, onDisconnect,
       }
       setDragging(null)
     }
-
     window.addEventListener('mousemove', onMove)
     window.addEventListener('mouseup',   onUp)
     return () => {
@@ -322,14 +404,6 @@ export function AgentGraph({ agents, defaultId, onChat, onConnect, onDisconnect,
       if (allIds.has(sub) && positions.has(a.id) && positions.has(sub))
         edges.push({ from: a.id, to: sub })
 
-  const xs  = [...positions.values()].map(p => p.x)
-  const ys  = [...positions.values()].map(p => p.y)
-  const pad = { x: CARD_W / 2 + 50, y: CARD_H / 2 + 70 }
-  const minX = Math.min(...xs) - pad.x
-  const minY = Math.min(...ys) - pad.y
-  const vbW  = Math.max(...xs) + pad.x - minX
-  const vbH  = Math.max(...ys) + pad.y - minY
-
   const dragTarget = dragging ? agents.find(a => {
     if (a.id === dragging.fromId) return false
     const ap = positions.get(a.id)
@@ -340,20 +414,19 @@ export function AgentGraph({ agents, defaultId, onChat, onConnect, onDisconnect,
   const fromEdge = editingEdge ? agents.find(a => a.id === editingEdge.from) ?? null : null
   const toEdge   = editingEdge ? agents.find(a => a.id === editingEdge.to)   ?? null : null
 
+  function startPan(e: React.MouseEvent) {
+    if (dragging) return
+    isPanningRef.current = true
+    setIsPanning(true)
+    panStartRef.current = { clientX: e.clientX, clientY: e.clientY, tx: transformRef.current.x, ty: transformRef.current.y }
+  }
+
   return (
     <div className="flex flex-1 flex-col min-h-0">
-      <div
-        className="flex flex-1 items-center justify-center min-h-0 overflow-auto"
-        style={{ padding: 16, cursor: dragging ? 'crosshair' : 'default' }}
-      >
+      <div style={{ position: 'relative', flex: 1, overflow: 'hidden', minHeight: 0, cursor: dragging ? 'crosshair' : 'default' }}>
         <svg
           ref={svgRef}
-          viewBox={`${minX} ${minY} ${vbW} ${vbH}`}
-          style={{
-            width: '100%', height: '100%',
-            minWidth: vbW, minHeight: vbH, maxWidth: vbW * 2,
-            overflow: 'visible', userSelect: 'none',
-          }}
+          style={{ width: '100%', height: '100%', display: 'block', userSelect: 'none' }}
         >
           <defs>
             <marker id="ag-arr"      markerWidth="7" markerHeight="7" refX="5" refY="3.5" orient="auto">
@@ -367,255 +440,319 @@ export function AgentGraph({ agents, defaultId, onChat, onConnect, onDisconnect,
             </marker>
           </defs>
 
-          {/* ── Edges ── */}
-          {edges.map(({ from, to }) => {
-            const fp = positions.get(from)!
-            const tp = positions.get(to)!
-            const fromY  = fp.y + CARD_H / 2
-            const toY    = tp.y - CARD_H / 2
-            const ctrY   = (fromY + toY) / 2
-            const midX   = (fp.x + tp.x) / 2
-            const midY   = (fromY + toY) / 2
-            const isEdgeHov = hoveredEdge?.from === from && hoveredEdge?.to === to
-            const isNodeHov = hovered === from || hovered === to
-            const path = `M ${fp.x} ${fromY} C ${fp.x} ${ctrY}, ${tp.x} ${ctrY}, ${tp.x} ${toY}`
+          <g transform={`translate(${transform.x},${transform.y}) scale(${transform.scale})`}>
+            {/* Background rect for pan — must be first so nodes render on top */}
+            <rect
+              x={-50000} y={-50000} width={100000} height={100000}
+              fill="transparent"
+              style={{ cursor: isPanning ? 'grabbing' : 'grab' }}
+              onMouseDown={startPan}
+            />
 
-            return (
-              <g key={`${from}→${to}`}>
-                <path
-                  d={path} fill="none"
-                  stroke={isEdgeHov || isNodeHov ? 'var(--accent)' : 'var(--border)'}
-                  strokeWidth={isEdgeHov ? 2 : 1.5}
-                  markerEnd={isEdgeHov || isNodeHov ? 'url(#ag-arr-a)' : 'url(#ag-arr)'}
-                  opacity={isEdgeHov || isNodeHov ? 1 : 0.55}
-                  style={{ transition: 'stroke 0.12s, opacity 0.12s', pointerEvents: 'none' }}
-                />
-                {/* Wide transparent hit area */}
-                <path
-                  d={path} fill="none" stroke="transparent" strokeWidth={14}
-                  style={{ cursor: 'pointer' }}
-                  onMouseEnter={() => setHoveredEdge({ from, to })}
-                  onMouseLeave={() => setHoveredEdge(null)}
-                  onClick={() => setEditingEdge({ from, to })}
-                />
-                {/* Edit badge at midpoint */}
-                {isEdgeHov && (
-                  <g transform={`translate(${midX},${midY})`} style={{ pointerEvents: 'none' }}>
-                    <circle r={9} fill="var(--bg-elevated)" stroke="var(--accent)" strokeWidth={1.5} />
-                    <text textAnchor="middle" dominantBaseline="central" fontSize={12} fill="var(--accent)" fontWeight="bold">✎</text>
-                  </g>
-                )}
-              </g>
-            )
-          })}
+            {/* ── Edges ── */}
+            {edges.map(({ from, to }) => {
+              const fp = positions.get(from)!
+              const tp = positions.get(to)!
+              const fromY     = fp.y + CARD_H / 2
+              const toY       = tp.y - CARD_H / 2
+              const ctrY      = (fromY + toY) / 2
+              const midX      = (fp.x + tp.x) / 2
+              const midY      = (fromY + toY) / 2
+              const isEdgeHov = hoveredEdge?.from === from && hoveredEdge?.to === to
+              const isNodeHov = hovered === from || hovered === to
+              const path = `M ${fp.x} ${fromY} C ${fp.x} ${ctrY}, ${tp.x} ${ctrY}, ${tp.x} ${toY}`
 
-          {/* ── Drag preview ── */}
-          {dragging && (() => {
-            const fp = positions.get(dragging.fromId)
-            if (!fp) return null
-            const color = dragTarget ? 'var(--accent)' : 'color-mix(in srgb, var(--accent) 60%, transparent)'
-            return (
-              <path
-                d={`M ${fp.x} ${fp.y + CARD_H / 2} L ${dragging.x} ${dragging.y}`}
-                fill="none" stroke={color} strokeWidth={2} strokeDasharray="7 4"
-                markerEnd="url(#ag-arr-drag)"
-                style={{ pointerEvents: 'none' }}
-              />
-            )
-          })()}
-
-          {/* ── Nodes ── */}
-          {agents.map(agent => {
-            const pos = positions.get(agent.id)
-            if (!pos) return null
-
-            const isHov = !dragging && hovered === agent.id
-            const isDef = agent.id === defaultId
-            const isSrc = dragging?.fromId === agent.id
-            const isTgt = dragTarget?.id === agent.id
-            const model = agentModel(agent)
-            const label = agentDisplayName(agent)
-
-            const borderColor = isTgt || isSrc || isHov
-              ? 'var(--accent)'
-              : isDef
-              ? 'color-mix(in srgb, var(--accent) 50%, var(--border))'
-              : 'var(--border)'
-
-            const fillColor = isTgt
-              ? 'color-mix(in srgb, var(--accent) 18%, var(--bg-surface))'
-              : isSrc
-              ? 'color-mix(in srgb, var(--accent) 10%, var(--bg-surface))'
-              : isHov
-              ? 'color-mix(in srgb, var(--accent) 7%, var(--bg-surface))'
-              : 'var(--bg-surface)'
-
-            return (
-              <g key={agent.id} transform={`translate(${pos.x},${pos.y})`}>
-
-                {/* Glow ring */}
-                {(isHov || isTgt) && (
-                  <rect
-                    x={-CARD_W / 2 - 5} y={-CARD_H / 2 - 5}
-                    width={CARD_W + 10} height={CARD_H + 10} rx={11}
-                    fill={isTgt
-                      ? 'color-mix(in srgb, var(--accent) 18%, transparent)'
-                      : 'color-mix(in srgb, var(--accent) 10%, transparent)'}
-                    style={{ pointerEvents: 'none' }}
+              return (
+                <g key={`${from}→${to}`}>
+                  <path
+                    d={path} fill="none"
+                    stroke={isEdgeHov || isNodeHov ? 'var(--accent)' : 'var(--border)'}
+                    strokeWidth={isEdgeHov ? 2 : 1.5}
+                    markerEnd={isEdgeHov || isNodeHov ? 'url(#ag-arr-a)' : 'url(#ag-arr)'}
+                    opacity={isEdgeHov || isNodeHov ? 1 : 0.55}
+                    style={{ transition: 'stroke 0.12s, opacity 0.12s', pointerEvents: 'none' }}
                   />
-                )}
-
-                {/* Default dashed ring */}
-                {isDef && (
-                  <rect
-                    x={-CARD_W / 2 - 4} y={-CARD_H / 2 - 4}
-                    width={CARD_W + 8} height={CARD_H + 8} rx={10}
-                    fill="none" stroke="var(--accent)" strokeWidth={1.5}
-                    strokeDasharray="5 3" opacity={0.6}
-                    style={{ pointerEvents: 'none' }}
+                  {/* Wide transparent hit area */}
+                  <path
+                    d={path} fill="none" stroke="transparent" strokeWidth={14}
+                    style={{ cursor: 'pointer' }}
+                    onMouseEnter={() => setHoveredEdge({ from, to })}
+                    onMouseLeave={() => setHoveredEdge(null)}
+                    onClick={() => setEditingEdge({ from, to })}
                   />
-                )}
+                  {/* Edit badge at midpoint */}
+                  {isEdgeHov && (
+                    <g transform={`translate(${midX},${midY})`} style={{ pointerEvents: 'none' }}>
+                      <circle r={9} fill="var(--bg-elevated)" stroke="var(--accent)" strokeWidth={1.5} />
+                      <text textAnchor="middle" dominantBaseline="central" fontSize={12} fill="var(--accent)" fontWeight="bold">✎</text>
+                    </g>
+                  )}
+                </g>
+              )
+            })}
 
-                {/* Card background */}
-                <rect
-                  x={-CARD_W / 2} y={-CARD_H / 2}
-                  width={CARD_W} height={CARD_H} rx={8}
-                  fill={fillColor}
-                  stroke={borderColor}
-                  strokeWidth={isTgt || isSrc ? 2 : isHov ? 1.5 : 1}
-                  style={{ transition: 'fill 0.12s, stroke 0.12s', pointerEvents: 'none' }}
+            {/* ── Drag preview ── */}
+            {dragging && (() => {
+              const fp = positions.get(dragging.fromId)
+              if (!fp) return null
+              const color = dragTarget ? 'var(--accent)' : 'color-mix(in srgb, var(--accent) 60%, transparent)'
+              return (
+                <path
+                  d={`M ${fp.x} ${fp.y + CARD_H / 2} L ${dragging.x} ${dragging.y}`}
+                  fill="none" stroke={color} strokeWidth={2} strokeDasharray="7 4"
+                  markerEnd="url(#ag-arr-drag)"
+                  style={{ pointerEvents: 'none' }}
                 />
+              )
+            })()}
 
-                {/* Card content + connector handle via foreignObject */}
-                <foreignObject
-                  x={-CARD_W / 2} y={-CARD_H / 2}
-                  width={CARD_W} height={CARD_H + FOREIGN_EXTRA}
-                >
-                  {/* outer div covers card + connector area for seamless hover */}
-                  <div
-                    style={{
-                      width: CARD_W,
-                      height: CARD_H + FOREIGN_EXTRA,
-                      position: 'relative',
-                      boxSizing: 'border-box',
-                    }}
-                    onMouseEnter={() => { if (!dragging) setHovered(agent.id) }}
-                    onMouseLeave={() => setHovered(null)}
+            {/* ── Nodes ── */}
+            {agents.map(agent => {
+              const pos = positions.get(agent.id)
+              if (!pos) return null
+
+              const isHov = !dragging && hovered === agent.id
+              const isDef = agent.id === defaultId
+              const isSrc = dragging?.fromId === agent.id
+              const isTgt = dragTarget?.id === agent.id
+              const model = agentModel(agent)
+              const label = agentDisplayName(agent)
+
+              const borderColor = isTgt || isSrc || isHov
+                ? 'var(--accent)'
+                : isDef
+                ? 'color-mix(in srgb, var(--accent) 50%, var(--border))'
+                : 'var(--border)'
+
+              const fillColor = isTgt
+                ? 'color-mix(in srgb, var(--accent) 18%, var(--bg-surface))'
+                : isSrc
+                ? 'color-mix(in srgb, var(--accent) 10%, var(--bg-surface))'
+                : isHov
+                ? 'color-mix(in srgb, var(--accent) 7%, var(--bg-surface))'
+                : 'var(--bg-surface)'
+
+              return (
+                <g key={agent.id} transform={`translate(${pos.x},${pos.y})`}>
+                  {/* Glow ring */}
+                  {(isHov || isTgt) && (
+                    <rect
+                      x={-CARD_W / 2 - 5} y={-CARD_H / 2 - 5}
+                      width={CARD_W + 10} height={CARD_H + 10} rx={11}
+                      fill={isTgt
+                        ? 'color-mix(in srgb, var(--accent) 18%, transparent)'
+                        : 'color-mix(in srgb, var(--accent) 10%, transparent)'}
+                      style={{ pointerEvents: 'none' }}
+                    />
+                  )}
+                  {/* Default dashed ring */}
+                  {isDef && (
+                    <rect
+                      x={-CARD_W / 2 - 4} y={-CARD_H / 2 - 4}
+                      width={CARD_W + 8} height={CARD_H + 8} rx={10}
+                      fill="none" stroke="var(--accent)" strokeWidth={1.5}
+                      strokeDasharray="5 3" opacity={0.6}
+                      style={{ pointerEvents: 'none' }}
+                    />
+                  )}
+                  {/* Card background */}
+                  <rect
+                    x={-CARD_W / 2} y={-CARD_H / 2}
+                    width={CARD_W} height={CARD_H} rx={8}
+                    fill={fillColor}
+                    stroke={borderColor}
+                    strokeWidth={isTgt || isSrc ? 2 : isHov ? 1.5 : 1}
+                    style={{ transition: 'fill 0.12s, stroke 0.12s', pointerEvents: 'none' }}
+                  />
+                  {/* Card content + connector handle */}
+                  <foreignObject
+                    x={-CARD_W / 2} y={-CARD_H / 2}
+                    width={CARD_W} height={CARD_H + FOREIGN_EXTRA}
                   >
-                    {/* Card content */}
                     <div
-                      style={{
-                        width: CARD_W,
-                        height: CARD_H,
-                        padding: '10px 12px',
-                        boxSizing: 'border-box',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        gap: 5,
-                        cursor: dragging ? (isTgt ? 'copy' : 'crosshair') : 'pointer',
-                        background: 'transparent',
-                      }}
-                      onClick={() => { if (!dragging) onChat(agent) }}
+                      style={{ width: CARD_W, height: CARD_H + FOREIGN_EXTRA, position: 'relative', boxSizing: 'border-box' }}
+                      onMouseEnter={() => { if (!dragging) setHovered(agent.id) }}
+                      onMouseLeave={() => { setHovered(null); setConfirmDeleteId(null) }}
                     >
-                      {/* Header row */}
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-                        {agent.identity?.emoji ? (
-                          <span style={{ fontSize: 18, lineHeight: 1, flexShrink: 0 }}>
-                            {agent.identity.emoji}
-                          </span>
-                        ) : (
-                          <div style={{
-                            width: 22, height: 22, flexShrink: 0, borderRadius: 4,
-                            background: 'color-mix(in srgb, var(--accent) 20%, var(--bg-elevated))',
-                            display: 'flex', alignItems: 'center', justifyContent: 'center',
-                            fontSize: 11, fontWeight: 700, color: 'var(--accent)',
-                          }}>
-                            {label.charAt(0).toUpperCase()}
-                          </div>
-                        )}
-                        <span style={{
-                          flex: 1, fontWeight: 600, fontSize: 13,
-                          color: 'var(--text-primary)',
-                          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                        }}>
-                          {label}
-                        </span>
-                        {isDef && (
-                          <span style={{
-                            fontSize: 9, padding: '1px 5px', borderRadius: 4, flexShrink: 0,
-                            background: 'color-mix(in srgb, var(--accent) 15%, transparent)',
-                            color: 'var(--accent)', border: '1px solid color-mix(in srgb, var(--accent) 30%, transparent)',
-                          }}>
-                            default
-                          </span>
-                        )}
-                        <button
-                          onClick={e => { e.stopPropagation(); onEdit(agent) }}
-                          title="Edit agent"
-                          style={{
-                            flexShrink: 0, background: 'none', border: 'none',
-                            cursor: 'pointer', padding: '2px 3px', borderRadius: 4,
-                            color: 'var(--text-secondary)', display: 'flex', alignItems: 'center',
-                            opacity: isHov ? 1 : 0, transition: 'opacity 0.12s',
-                          }}
-                        >
-                          <Settings2 size={13} />
-                        </button>
-                      </div>
-
-                      {/* Model */}
-                      <div style={{
-                        fontSize: 11, fontFamily: 'monospace',
-                        color: 'var(--text-secondary)',
-                        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                      }}>
-                        {model || <span style={{ opacity: 0.4 }}>—</span>}
-                      </div>
-
-                      {/* ID */}
-                      <div style={{
-                        fontSize: 10, fontFamily: 'monospace',
-                        color: 'var(--text-secondary)', opacity: 0.45,
-                        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                      }}>
-                        {agent.id}
-                      </div>
-                    </div>
-
-                    {/* Connector handle — positioned below card within foreignObject */}
-                    {(isHov || isSrc) && (
+                      {/* Card content */}
                       <div
                         style={{
-                          position: 'absolute',
-                          top: CARD_H + (FOREIGN_EXTRA - HANDLE_R * 2) / 2,
-                          left: '50%',
-                          transform: 'translateX(-50%)',
-                          width: HANDLE_R * 2,
-                          height: HANDLE_R * 2,
-                          borderRadius: '50%',
-                          background: 'var(--accent)',
-                          border: '2px solid var(--bg-surface)',
-                          cursor: 'crosshair',
-                          boxSizing: 'border-box',
+                          width: CARD_W, height: CARD_H,
+                          padding: '10px 12px 8px', boxSizing: 'border-box',
+                          display: 'flex', flexDirection: 'column', gap: 4,
+                          cursor: dragging ? (isTgt ? 'copy' : 'crosshair') : 'pointer',
+                          background: 'transparent',
                         }}
-                        onMouseDown={e => {
-                          e.stopPropagation()
-                          if (!svgRef.current) return
-                          const p = svgPoint(e, svgRef.current)
-                          setDragging({ fromId: agent.id, x: p.x, y: p.y })
-                        }}
-                      />
-                    )}
-                  </div>
-                </foreignObject>
-              </g>
-            )
-          })}
+                        onClick={() => { if (!dragging && !confirmDeleteId) onChat(agent) }}
+                      >
+                        {/* Row 1: avatar + name + default badge */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                          {agent.identity?.emoji ? (
+                            <span style={{ fontSize: 18, lineHeight: 1, flexShrink: 0 }}>{agent.identity.emoji}</span>
+                          ) : (
+                            <div style={{
+                              width: 22, height: 22, flexShrink: 0, borderRadius: 4,
+                              background: 'color-mix(in srgb, var(--accent) 20%, var(--bg-elevated))',
+                              display: 'flex', alignItems: 'center', justifyContent: 'center',
+                              fontSize: 11, fontWeight: 700, color: 'var(--accent)',
+                            }}>
+                              {label.charAt(0).toUpperCase()}
+                            </div>
+                          )}
+                          <span style={{
+                            flex: 1, fontWeight: 600, fontSize: 13, color: 'var(--text-primary)',
+                            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                          }}>
+                            {label}
+                          </span>
+                          {isDef && (
+                            <span style={{
+                              fontSize: 9, padding: '1px 5px', borderRadius: 4, flexShrink: 0,
+                              background: 'color-mix(in srgb, var(--accent) 15%, transparent)',
+                              color: 'var(--accent)', border: '1px solid color-mix(in srgb, var(--accent) 30%, transparent)',
+                            }}>
+                              default
+                            </span>
+                          )}
+                        </div>
+                        {/* Row 2: model */}
+                        <div style={{
+                          fontSize: 11, fontFamily: 'monospace', color: 'var(--text-secondary)',
+                          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                        }}>
+                          {model || <span style={{ opacity: 0.4 }}>—</span>}
+                        </div>
+                        {/* Row 3: agent id */}
+                        <div style={{
+                          fontSize: 10, fontFamily: 'monospace',
+                          color: 'var(--text-secondary)', opacity: 0.45,
+                          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                        }}>
+                          {agent.id}
+                        </div>
+                        {/* Row 4: action buttons */}
+                        <div
+                          style={{ marginTop: 'auto', display: 'flex', gap: 4, opacity: isHov ? 1 : 0, transition: 'opacity 0.15s' }}
+                          onClick={e => e.stopPropagation()}
+                        >
+                          {confirmDeleteId === agent.id ? (
+                            <>
+                              <button
+                                onClick={() => { onDelete(agent); setConfirmDeleteId(null) }}
+                                style={{
+                                  flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                  gap: 4, padding: '4px 6px', borderRadius: 5, border: 'none', cursor: 'pointer',
+                                  background: 'var(--danger)', color: '#fff', fontSize: 11, fontWeight: 600,
+                                }}
+                              >
+                                Confirm
+                              </button>
+                              <button
+                                onClick={() => setConfirmDeleteId(null)}
+                                style={{
+                                  flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                  gap: 4, padding: '4px 6px', borderRadius: 5, cursor: 'pointer',
+                                  background: 'var(--bg-elevated)', border: '1px solid var(--border)',
+                                  color: 'var(--text-secondary)', fontSize: 11,
+                                }}
+                              >
+                                Cancel
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              <button
+                                onClick={() => onChat(agent)}
+                                title="Chat"
+                                style={{
+                                  flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                  gap: 4, padding: '4px 6px', borderRadius: 5, border: 'none', cursor: 'pointer',
+                                  background: 'var(--accent)', color: 'var(--accent-fg)', fontSize: 11, fontWeight: 600,
+                                }}
+                              >
+                                <MessageSquare size={11} /> Chat
+                              </button>
+                              <button
+                                onClick={() => onEdit(agent)}
+                                title="Edit agent"
+                                style={{
+                                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                  padding: '4px 7px', borderRadius: 5, cursor: 'pointer',
+                                  background: 'var(--bg-elevated)', border: '1px solid var(--border)',
+                                  color: 'var(--text-secondary)',
+                                }}
+                              >
+                                <Settings2 size={12} />
+                              </button>
+                              <button
+                                onClick={() => setConfirmDeleteId(agent.id)}
+                                title="Delete agent"
+                                style={{
+                                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                  padding: '4px 7px', borderRadius: 5, cursor: 'pointer',
+                                  background: 'var(--bg-elevated)', border: '1px solid var(--border)',
+                                  color: 'var(--danger)',
+                                }}
+                              >
+                                <Trash2 size={12} />
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Connector handle — positioned below card within foreignObject */}
+                      {(isHov || isSrc) && (
+                        <div
+                          style={{
+                            position: 'absolute',
+                            top: CARD_H + (FOREIGN_EXTRA - HANDLE_R * 2) / 2,
+                            left: '50%',
+                            transform: 'translateX(-50%)',
+                            width: HANDLE_R * 2, height: HANDLE_R * 2,
+                            borderRadius: '50%',
+                            background: 'var(--accent)',
+                            border: '2px solid var(--bg-surface)',
+                            cursor: 'crosshair',
+                            boxSizing: 'border-box',
+                          }}
+                          onMouseDown={e => {
+                            e.stopPropagation()
+                            if (!svgRef.current) return
+                            const p = svgPoint(e, svgRef.current, transformRef.current)
+                            setDragging({ fromId: agent.id, x: p.x, y: p.y })
+                          }}
+                        />
+                      )}
+                    </div>
+                  </foreignObject>
+                </g>
+              )
+            })}
+          </g>
         </svg>
+
+        {/* Fit-to-content button */}
+        <button
+          onClick={fitContent}
+          title="Fit to content"
+          style={{
+            position: 'absolute', bottom: 12, right: 12,
+            width: 32, height: 32,
+            background: 'var(--bg-surface)',
+            border: '1px solid var(--border)',
+            borderRadius: 'var(--radius)',
+            cursor: 'pointer',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            color: 'var(--text-secondary)',
+          }}
+        >
+          <Maximize2 size={14} />
+        </button>
       </div>
 
       <p className="text-center pb-3 text-xs" style={{ color: 'var(--text-secondary)', opacity: 0.45 }}>
-        Drag the handle below a node to connect · Click an edge to edit the relationship
+        Drag the handle below a node to connect · Click an edge to edit · Scroll to zoom · Drag to pan
       </p>
 
       {editingEdge && fromEdge && toEdge && (

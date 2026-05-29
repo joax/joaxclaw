@@ -24,8 +24,12 @@ function renderInline(text: string): React.ReactNode {
   )
 }
 
+const MEDIA_ONLY_PLACEHOLDER = '[User sent media without caption]'
+
 export function UserMessage({ message }: Props) {
-  const lines = message.content.split('\n')
+  const audioAttachments = message.attachments?.filter(a => a.type === 'audio') ?? []
+  const isMediaOnly = message.content === MEDIA_ONLY_PLACEHOLDER && audioAttachments.length > 0
+  const lines = isMediaOnly ? [] : message.content.split('\n')
 
   return (
     <div className="flex justify-end animate-fade-in">
@@ -53,7 +57,7 @@ export function UserMessage({ message }: Props) {
               {i < lines.length - 1 && <br />}
             </span>
           ))}
-          {message.attachments?.filter(a => a.type === 'audio').map((a, i) => (
+          {audioAttachments.map((a, i) => (
             <AudioPlayer key={i} attachment={a} accentColor />
           ))}
         </div>

@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react'
-import { MessageSquare, Trash2, Bot, RefreshCw, Settings2, LayoutGrid, GitFork } from 'lucide-react'
+import { Bot, RefreshCw, GitFork, Network } from 'lucide-react'
 import { useAgentsStore } from '../../store/agents'
 import { useChatStore } from '../../store/chat'
 import type { Agent } from '../../lib/types'
 import { Btn } from '../ui/Btn'
 import { AgentEditor } from './AgentEditor'
 import { AgentGraph } from './AgentGraph'
+import { AgentSystemView } from './AgentSystemView'
 
 interface Props { onOpenChat: () => void }
 
@@ -13,20 +14,11 @@ function agentDisplayName(agent: Agent): string {
   return agent.identity?.name ?? agent.name ?? agent.id
 }
 
-function agentEmoji(agent: Agent): string | null {
-  return agent.identity?.emoji ?? null
-}
-
-function agentModel(agent: Agent): string {
-  return agent.model?.primary ?? agent.agentRuntime?.id ?? '—'
-}
-
 export function AgentsView({ onOpenChat }: Props) {
   const { agents, defaultId, loading, error, fetch, update, remove } = useAgentsStore()
   const { newConversation } = useChatStore()
-  const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
   const [editingAgent, setEditingAgent] = useState<Agent | null>(null)
-  const [viewMode, setViewMode] = useState<'graph' | 'grid'>('graph')
+  const [viewMode, setViewMode] = useState<'graph' | 'overview'>('graph')
 
   useEffect(() => { fetch() }, [])
 
@@ -61,7 +53,6 @@ export function AgentsView({ onOpenChat }: Props) {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {/* View toggle */}
           {agents.length > 0 && (
             <div
               className="flex items-center rounded overflow-hidden"
@@ -69,35 +60,27 @@ export function AgentsView({ onOpenChat }: Props) {
             >
               <button
                 onClick={() => setViewMode('graph')}
-                title="Graph view"
+                title="Hierarchy view"
                 style={{
                   padding: '5px 9px',
                   background: viewMode === 'graph' ? 'color-mix(in srgb, var(--accent) 15%, var(--bg-elevated))' : 'transparent',
                   color: viewMode === 'graph' ? 'var(--accent)' : 'var(--text-secondary)',
-                  border: 'none',
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  transition: 'all 0.15s',
+                  border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', transition: 'all 0.15s',
                 }}
               >
                 <GitFork size={14} />
               </button>
               <button
-                onClick={() => setViewMode('grid')}
-                title="Grid view"
+                onClick={() => setViewMode('overview')}
+                title="System overview"
                 style={{
                   padding: '5px 9px',
-                  background: viewMode === 'grid' ? 'color-mix(in srgb, var(--accent) 15%, var(--bg-elevated))' : 'transparent',
-                  color: viewMode === 'grid' ? 'var(--accent)' : 'var(--text-secondary)',
-                  border: 'none',
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  transition: 'all 0.15s',
+                  background: viewMode === 'overview' ? 'color-mix(in srgb, var(--accent) 15%, var(--bg-elevated))' : 'transparent',
+                  color: viewMode === 'overview' ? 'var(--accent)' : 'var(--text-secondary)',
+                  border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', transition: 'all 0.15s',
                 }}
               >
-                <LayoutGrid size={14} />
+                <Network size={14} />
               </button>
             </div>
           )}
@@ -129,6 +112,7 @@ export function AgentsView({ onOpenChat }: Props) {
             onConnect={handleConnect}
             onDisconnect={handleDisconnect}
             onEdit={setEditingAgent}
+            onDelete={a => remove(a.id)}
           />
           {!hasRelationships && (
             <p className="text-xs text-center pb-3" style={{ color: 'var(--text-secondary)', opacity: 0.5 }}>
@@ -138,129 +122,10 @@ export function AgentsView({ onOpenChat }: Props) {
         </div>
       )}
 
-      {agents.length > 0 && viewMode === 'grid' && (
-        <div className="grid gap-4" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))' }}>
-          {agents.map(agent => (
-            <AgentCard
-              key={agent.id}
-              agent={agent}
-              allAgents={agents}
-              isDefault={agent.id === defaultId}
-              onChat={() => handleChat(agent)}
-              onEdit={() => setEditingAgent(agent)}
-              onDelete={() => setConfirmDelete(agent.id)}
-              confirmingDelete={confirmDelete === agent.id}
-              onConfirmDelete={() => { remove(agent.id); setConfirmDelete(null) }}
-              onCancelDelete={() => setConfirmDelete(null)}
-            />
-          ))}
-        </div>
-      )}
+      {viewMode === 'overview' && <AgentSystemView />}
 
       {editingAgent && (
         <AgentEditor agent={editingAgent} onClose={() => setEditingAgent(null)} />
-      )}
-    </div>
-  )
-}
-
-function AgentCard({ agent, allAgents, isDefault, onChat, onEdit, onDelete, confirmingDelete, onConfirmDelete, onCancelDelete }: {
-  agent: Agent
-  allAgents: Agent[]
-  isDefault: boolean
-  onChat: () => void
-  onEdit: () => void
-  onDelete: () => void
-  confirmingDelete: boolean
-  onConfirmDelete: () => void
-  onCancelDelete: () => void
-}) {
-  const [hovered, setHovered] = useState(false)
-  const emoji = agentEmoji(agent)
-  const name = agentDisplayName(agent)
-  const model = agentModel(agent)
-
-  const subAgentNames = (agent.allowedSubAgents ?? [])
-    .map(id => allAgents.find(a => a.id === id))
-    .filter((a): a is Agent => Boolean(a))
-
-  return (
-    <div
-      className="flex flex-col p-4 transition-all"
-      style={{
-        background: 'var(--bg-surface)',
-        border: `1px solid ${hovered ? 'var(--accent)' : 'var(--border)'}`,
-        borderRadius: 'var(--radius)',
-        transition: 'border-color 0.15s'
-      }}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-    >
-      <div className="flex items-start gap-3 mb-3">
-        <div
-          className="flex items-center justify-center text-xl shrink-0"
-          style={{
-            width: 44, height: 44,
-            borderRadius: 'var(--radius)',
-            background: 'color-mix(in srgb, var(--accent) 15%, var(--bg-elevated))',
-            fontSize: emoji ? 22 : undefined
-          }}
-        >
-          {emoji ?? <Bot size={20} style={{ color: 'var(--accent)' }} />}
-        </div>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-1.5">
-            <p className="font-semibold text-sm truncate" style={{ color: 'var(--text-primary)' }}>{name}</p>
-            {isDefault && (
-              <span className="text-xs px-1.5 py-0.5 rounded shrink-0" style={{ background: 'color-mix(in srgb, var(--accent) 15%, transparent)', color: 'var(--accent)', fontSize: 10 }}>
-                default
-              </span>
-            )}
-          </div>
-          <p className="text-xs mt-0.5 font-mono truncate" style={{ color: 'var(--text-secondary)' }}>{model}</p>
-          {agent.workspace && (
-            <p className="text-xs truncate mt-0.5" style={{ color: 'var(--text-secondary)', opacity: 0.7 }}>{agent.workspace}</p>
-          )}
-        </div>
-      </div>
-
-      <div className="text-xs mb-3" style={{ color: 'var(--text-secondary)' }}>
-        <span className="font-mono" style={{ opacity: 0.6 }}>{agent.id}</span>
-      </div>
-
-      {/* Sub-agent chips */}
-      {subAgentNames.length > 0 && (
-        <div className="mb-3">
-          <p className="text-xs mb-1.5" style={{ color: 'var(--text-secondary)', opacity: 0.7 }}>Sub-agents</p>
-          <div className="flex flex-wrap gap-1">
-            {subAgentNames.map(sub => (
-              <span
-                key={sub.id}
-                className="text-xs px-2 py-0.5 rounded-full"
-                style={{
-                  background: 'color-mix(in srgb, var(--accent) 10%, var(--bg-elevated))',
-                  border: '1px solid color-mix(in srgb, var(--accent) 25%, var(--border))',
-                  color: 'var(--text-secondary)',
-                }}
-              >
-                {sub.identity?.emoji ? `${sub.identity.emoji} ` : ''}{agentDisplayName(sub)}
-              </span>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {confirmingDelete ? (
-        <div className="flex gap-2">
-          <Btn size="sm" variant="danger" onClick={onConfirmDelete} style={{ flex: 1 }}>Delete</Btn>
-          <Btn size="sm" variant="outline" onClick={onCancelDelete} style={{ flex: 1 }}>Cancel</Btn>
-        </div>
-      ) : (
-        <div className="flex gap-2 mt-auto">
-          <Btn size="sm" icon={<MessageSquare size={12} />} onClick={onChat} style={{ flex: 1 }}>Chat</Btn>
-          <Btn size="sm" variant="outline" icon={<Settings2 size={12} />} onClick={onEdit} />
-          <Btn size="sm" variant="ghost" icon={<Trash2 size={12} />} onClick={onDelete} style={{ color: 'var(--danger)' }} />
-        </div>
       )}
     </div>
   )

@@ -1,39 +1,42 @@
 import { create } from 'zustand'
-import JSON5 from 'json5'
 import type { Agent, AgentFile } from '../lib/types'
 import { gatewayClient } from '../lib/gateway'
 
-// ── openclaw.json config patcher ─────────────────────────────────────────────
+// ── config.get / config.patch helpers ────────────────────────────────────────
 
-type ConfigEntry = { id: string; subagents?: { allowAgents?: string[]; [k: string]: unknown }; [k: string]: unknown }
-type OpenclawConfig = { agents?: { list?: ConfigEntry[]; [k: string]: unknown }; [k: string]: unknown }
-type ConfigApi = { read: () => Promise<{ ok: boolean; text?: string }>; write: (t: string) => Promise<{ ok: boolean }> }
+type SubagentEntry = { allowAgents?: string[]; instructions?: Record<string, string>; [k: string]: unknown }
+type ConfigEntry   = { id: string; subagents?: SubagentEntry; [k: string]: unknown }
+type ConfigShape   = { agents?: { list?: ConfigEntry[]; [k: string]: unknown }; [k: string]: unknown }
+// config.get returns "config" (materialized runtime) AND "parsed" (raw JSON5).
+// The raw agents.list with subagents fields lives in "parsed", not "config".
+interface ConfigSnapshot { hash?: string; config?: ConfigShape; parsed?: ConfigShape }
 
-function configApi(): ConfigApi | null {
-  try { return (window as unknown as { api: { config: ConfigApi } }).api.config }
-  catch { return null }
+async function getConfig(): Promise<ConfigSnapshot> {
+  return gatewayClient.request<ConfigSnapshot>('config.get')
 }
 
-async function persistSubAgentsToConfig(agentId: string, allowedSubAgents: string[]): Promise<void> {
-  const api = configApi()
-  if (!api) return
-  const res = await api.read()
-  if (!res.ok || !res.text) return
-  const config = JSON5.parse(res.text) as OpenclawConfig
-  const list = config.agents?.list
-  if (!Array.isArray(list)) return
-  const entry = list.find(a => a.id === agentId)
-  if (!entry) return
-  if (allowedSubAgents.length > 0) {
-    entry.subagents = { ...(entry.subagents ?? {}), allowAgents: allowedSubAgents }
-  } else {
-    if (entry.subagents) {
-      delete entry.subagents.allowAgents
-      if (Object.keys(entry.subagents).length === 0) delete entry.subagents
-    }
-  }
-  await api.write(JSON.stringify(config, null, 2))
+function rawList(snapshot: ConfigSnapshot): ConfigEntry[] | null {
+  const list = (snapshot.parsed ?? snapshot.config)?.agents?.list
+  return Array.isArray(list) ? list : null
 }
+
+// Send a minimal patch touching only one agent entry and one field.
+// Using the full raw list as a patch is broken because the runtime config has
+// a different shape (e.g. model as object) than the raw JSON5 (model as string),
+// causing validation failures or noop diffs when the full list is diffed against
+// the runtime config.
+async function patchAgentField(
+  agentId: string,
+  subagentsPatch: Record<string, unknown>,
+  baseHash?: string
+): Promise<void> {
+  await gatewayClient.request('config.patch', {
+    raw: JSON.stringify({ agents: { list: [{ id: agentId, subagents: subagentsPatch }] } }),
+    ...(baseHash ? { baseHash } : {}),
+  })
+}
+
+// ── store ─────────────────────────────────────────────────────────────────────
 
 interface AgentsListResult {
   defaultId: string
@@ -73,15 +76,31 @@ export const useAgentsStore = create<AgentsState>((set) => ({
   async fetch() {
     set({ loading: true, error: null })
     try {
-      const res = await gatewayClient.request<AgentsListResult>('agents.list')
-      set({ agents: res.agents ?? [], defaultId: res.defaultId ?? null, loading: false })
+      // agents.list does not return allowedSubAgents — read it from config in parallel
+      const [res, snapshot] = await Promise.all([
+        gatewayClient.request<AgentsListResult>('agents.list'),
+        getConfig().catch(() => ({} as ConfigSnapshot)),
+      ])
+
+      const configById = new Map<string, ConfigEntry>()
+      for (const entry of rawList(snapshot) ?? []) {
+        if (entry.id) configById.set(entry.id, entry)
+      }
+
+      const agents = (res.agents ?? []).map(a => {
+        const cfgEntry = configById.get(a.id)
+        const allowedSubAgents = cfgEntry?.subagents?.allowAgents
+        return allowedSubAgents?.length ? { ...a, allowedSubAgents } : a
+      })
+
+      set({ agents, defaultId: res.defaultId ?? null, loading: false })
     } catch (e) {
       set({ error: String(e), loading: false })
     }
   },
 
   async update(id, changes) {
-    // Apply immediately so UI is responsive, then confirm with the gateway
+    // Optimistic UI update
     set(s => ({
       agents: s.agents.map(a => a.id !== id ? a : {
         ...a,
@@ -89,13 +108,22 @@ export const useAgentsStore = create<AgentsState>((set) => ({
         ...(changes.allowedSubAgents !== undefined ? { allowedSubAgents: changes.allowedSubAgents } : {})
       })
     }))
+
+    // Model/name changes go through agents.update (allowedSubAgents is NOT accepted there)
     const payload: Record<string, unknown> = { agentId: id }
     if (changes.model !== undefined) payload.model = changes.model.primary
     if (changes.modelFallbacks !== undefined) payload.modelFallbacks = changes.modelFallbacks
-    if (changes.allowedSubAgents !== undefined) payload.allowedSubAgents = changes.allowedSubAgents
-    await gatewayClient.request('agents.update', payload)
+    if (Object.keys(payload).length > 1) {
+      await gatewayClient.request('agents.update', payload)
+    }
+
+    // Subagent changes go through config.patch (writes + hot-reloads gateway)
     if (changes.allowedSubAgents !== undefined) {
-      await persistSubAgentsToConfig(id, changes.allowedSubAgents).catch(() => {})
+      const snapshot = await getConfig()
+      const allowAgentsPatch = changes.allowedSubAgents.length > 0
+        ? changes.allowedSubAgents
+        : null  // null removes the key (RFC 7396)
+      await patchAgentField(id, { allowAgents: allowAgentsPatch }, snapshot.hash)
     }
   },
 
@@ -117,9 +145,7 @@ export const useAgentsStore = create<AgentsState>((set) => ({
     const res = await gatewayClient.request<Record<string, unknown>>('agents.files.get', { agentId, name: filename })
     const file = res.file as Record<string, unknown> | undefined
     const content = file?.content ?? res.content ?? res.text
-    if (content === undefined) {
-      throw new Error(`Unexpected response shape: ${JSON.stringify(res)}`)
-    }
+    if (content === undefined) throw new Error(`Unexpected response shape: ${JSON.stringify(res)}`)
     return String(content)
   },
 
@@ -132,36 +158,18 @@ export const useAgentsStore = create<AgentsState>((set) => ({
   },
 
   async readRelationship(fromId, toId) {
-    const api = configApi()
-    if (!api) return ''
-    const res = await api.read()
-    if (!res.ok || !res.text) return ''
-    const config = JSON5.parse(res.text) as OpenclawConfig
-    const entry = config.agents?.list?.find(a => a.id === fromId)
-    return (entry?.subagents as { allowAgents?: string[]; instructions?: Record<string, string> } | undefined)?.instructions?.[toId] ?? ''
+    try {
+      const snapshot = await getConfig()
+      const entry = rawList(snapshot)?.find(a => a.id === fromId)
+      return entry?.subagents?.instructions?.[toId] ?? ''
+    } catch {
+      return ''
+    }
   },
 
   async writeRelationship(fromId, toId, instructions) {
-    const api = configApi()
-    if (!api) throw new Error('Config API not available')
-    const res = await api.read()
-    if (!res.ok || !res.text) throw new Error('Could not read openclaw.json')
-    const config = JSON5.parse(res.text) as OpenclawConfig
-    const list = config.agents?.list
-    if (!Array.isArray(list)) throw new Error('No agents list in config')
-    const entry = list.find(a => a.id === fromId)
-    if (!entry) throw new Error(`Agent ${fromId} not found in config`)
-    const sub = (entry.subagents ?? {}) as { allowAgents?: string[]; instructions?: Record<string, string>; [k: string]: unknown }
-    if (instructions.trim()) {
-      sub.instructions = { ...(sub.instructions ?? {}), [toId]: instructions }
-    } else {
-      if (sub.instructions) {
-        delete sub.instructions[toId]
-        if (Object.keys(sub.instructions).length === 0) delete sub.instructions
-      }
-    }
-    entry.subagents = sub
-    const writeRes = await api.write(JSON.stringify(config, null, 2))
-    if (!writeRes.ok) throw new Error('Failed to write openclaw.json')
+    const snapshot = await getConfig()
+    const instructionValue = instructions.trim() || null  // null removes the key (RFC 7396)
+    await patchAgentField(fromId, { instructions: { [toId]: instructionValue } }, snapshot.hash)
   },
 }))

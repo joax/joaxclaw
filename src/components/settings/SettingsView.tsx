@@ -16,7 +16,7 @@ const ICON_FAMILIES: { id: IconFamily; label: string; desc: string }[] = [
 ]
 
 export function SettingsView() {
-  const { themes, activeThemeId, setActiveTheme, saveTheme, deleteTheme, showGpu, showRam, showHeartbeat, showModelName } = useSettingsStore()
+  const { themes, activeThemeId, setActiveTheme, saveTheme, deleteTheme, showGpu, showRam, showHeartbeat, showModelName, streamStallTimeout, setAppPref } = useSettingsStore()
   const activeTheme = themes.find(t => t.id === activeThemeId) ?? DEFAULT_THEME
 
   const [editing, setEditing] = useState<ThemeSettings>(activeTheme)
@@ -208,6 +208,19 @@ export function SettingsView() {
           </div>
         </Section>
 
+        {/* App preferences */}
+        <Section title="App">
+          <div className="space-y-3">
+            <SliderField
+              label="Stream stall timeout"
+              value={streamStallTimeout}
+              min={15} max={300} unit="s"
+              description="How long to wait for new tokens before showing the 'Model stopped responding' banner."
+              onChange={v => setAppPref('streamStallTimeout', v)}
+            />
+          </div>
+        </Section>
+
         {/* Mini preview */}
         <Section title="Preview">
           <div
@@ -286,8 +299,8 @@ function ColorField({ label, value, onChange, onBlur }: { label: string; value: 
   )
 }
 
-function SliderField({ label, value, min, max, unit, onChange }: {
-  label: string; value: number; min: number; max: number; unit: string; onChange: (v: number) => void
+function SliderField({ label, value, min, max, unit, description, onChange }: {
+  label: string; value: number; min: number; max: number; unit: string; description?: string; onChange: (v: number) => void
 }) {
   return (
     <div>
@@ -295,6 +308,9 @@ function SliderField({ label, value, min, max, unit, onChange }: {
         <label className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>{label}</label>
         <span className="text-xs font-mono" style={{ color: 'var(--text-primary)' }}>{value}{unit}</span>
       </div>
+      {description && (
+        <p className="text-xs mb-1.5" style={{ color: 'var(--text-secondary)', opacity: 0.65 }}>{description}</p>
+      )}
       <input
         type="range"
         min={min} max={max}

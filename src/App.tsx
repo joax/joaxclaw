@@ -10,6 +10,7 @@ import { SettingsView } from './components/settings/SettingsView'
 import { ExtensionsView } from './components/extensions/ExtensionsView'
 import { CronsView } from './components/crons/CronsView'
 import { ObsidianView } from './components/obsidian/ObsidianView'
+import { ModelsView } from './components/models/ModelsView'
 import { SystemMonitorHUD } from './components/monitor/SystemMonitorHUD'
 import { ConnectScreen } from './components/layout/ConnectScreen'
 import { useConnectionStore } from './store/connection'
@@ -17,7 +18,7 @@ import { useMetricsStore } from './store/metrics'
 import { useSettingsStore } from './store/settings'
 import { useExtensionsStore } from './store/extensions'
 
-export type NavSection = 'chat' | 'agents' | 'extensions' | 'sessions' | 'crons' | 'obsidian' | 'gateway' | 'settings'
+export type NavSection = 'chat' | 'agents' | 'extensions' | 'sessions' | 'crons' | 'obsidian' | 'models' | 'gateway' | 'settings'
 
 export default function App() {
   const [section, setSection] = useState<NavSection>('chat')
@@ -41,17 +42,19 @@ export default function App() {
     if (status === 'connected') loadExtensions()
   }, [status])
 
-  // Show connect screen while disconnected, connecting, or in error state
-  // (but let user reach Settings and Gateway even without a connection)
-  const showConnect = (status === 'disconnected' || status === 'connecting' || status === 'error')
-    && section !== 'settings'
-    && section !== 'gateway'
+  const notConnected = status !== 'connected'
+  const ALL_GATEWAY_SECTIONS: NavSection[] = ['chat', 'agents', 'extensions', 'sessions', 'crons', 'obsidian', 'models', 'gateway']
+  const disabledSections: NavSection[] = notConnected
+    ? ALL_GATEWAY_SECTIONS
+    : obsidianEnabled ? [] : ['obsidian']
+
+  const showConnect = notConnected && section !== 'settings'
 
   return (
     <div className="flex flex-col h-screen select-none">
       <TitleBar />
       <div className="flex flex-1 min-h-0">
-        <NavRail section={section} onNavigate={setSection} disabledSections={obsidianEnabled ? [] : ['obsidian']} />
+        <NavRail section={section} onNavigate={setSection} disabledSections={disabledSections} />
         <main className="flex-1 min-w-0 flex flex-col relative" style={{ background: 'var(--bg-primary)' }}>
           {showConnect ? (
             <ConnectScreen onConnect={() => setSection('chat')} />
@@ -63,6 +66,7 @@ export default function App() {
               {section === 'sessions' && <SessionsView onOpenChat={() => setSection('chat')} />}
               {section === 'crons' && <CronsView />}
               {section === 'obsidian' && <ObsidianView onNavigateExtensions={() => setSection('extensions')} />}
+              {section === 'models' && <ModelsView />}
               {section === 'gateway' && <GatewayView />}
               {section === 'settings' && <SettingsView />}
             </>

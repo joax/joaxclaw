@@ -1,17 +1,24 @@
-import { MessageSquare, Bot, ClipboardList, Settings, Palette, HelpCircle, Puzzle, Timer, Brain } from 'lucide-react'
+import { MessageSquare, Bot, ClipboardList, Settings, Palette, HelpCircle, Puzzle, Timer, Brain, Cpu } from 'lucide-react'
 import type { NavSection } from '../../App'
 
 interface NavItem { id: NavSection; icon: React.ReactNode; label: string; disabled?: boolean }
 
-const NAV_ITEMS: NavItem[] = [
-  { id: 'chat',       icon: <MessageSquare size={20} />, label: 'Chats' },
-  { id: 'agents',     icon: <Bot size={20} />,           label: 'Agents' },
-  { id: 'extensions', icon: <Puzzle size={20} />,        label: 'Extensions' },
-  { id: 'sessions',   icon: <ClipboardList size={20} />, label: 'Sessions' },
-  { id: 'crons',      icon: <Timer size={20} />,         label: 'Crons' },
-  { id: 'obsidian',   icon: <Brain size={20} />,         label: 'Memory' },
-  { id: 'gateway',    icon: <Settings size={20} />,      label: 'Gateway' },
-  { id: 'settings',   icon: <Palette size={20} />,       label: 'Settings' }
+const GROUP_1: NavItem[] = [
+  { id: 'chat',     icon: <MessageSquare size={20} />, label: 'Chats' },
+  { id: 'sessions', icon: <ClipboardList size={20} />, label: 'Sessions' },
+  { id: 'obsidian', icon: <Brain size={20} />,         label: 'Memory' },
+]
+
+const GROUP_2: NavItem[] = [
+  { id: 'agents',     icon: <Bot size={20} />,    label: 'Agents' },
+  { id: 'extensions', icon: <Puzzle size={20} />, label: 'Plugins' },
+  { id: 'crons',      icon: <Timer size={20} />,  label: 'Crons' },
+  { id: 'models',     icon: <Cpu size={20} />,    label: 'Models' },
+]
+
+const GROUP_3: NavItem[] = [
+  { id: 'gateway',  icon: <Settings size={20} />, label: 'Settings' },
+  { id: 'settings', icon: <Palette size={20} />,  label: 'Theme' },
 ]
 
 interface Props { section: NavSection; onNavigate: (s: NavSection) => void; disabledSections?: NavSection[] }
@@ -19,33 +26,60 @@ interface Props { section: NavSection; onNavigate: (s: NavSection) => void; disa
 export function NavRail({ section, onNavigate, disabledSections = [] }: Props) {
   return (
     <nav
-      className="flex flex-col items-center py-2 shrink-0 relative"
+      className="flex flex-col items-center py-2 shrink-0"
       style={{
         width: 52,
         background: 'var(--bg-surface)',
         borderRight: '1px solid var(--border)'
       }}
     >
-      <div className="flex flex-col gap-1 flex-1 w-full px-2 pt-1">
-        {NAV_ITEMS.map(item => (
-          <NavBtn
-            key={item.id}
-            active={section === item.id}
-            disabled={disabledSections.includes(item.id)}
-            label={item.label}
-            onClick={() => onNavigate(item.id)}
-          >
+      {/* Group 1: Chats, Sessions, Memory */}
+      <div className="flex flex-col gap-1 w-full px-2 pt-1">
+        {GROUP_1.map(item => (
+          <NavBtn key={item.id} active={section === item.id} disabled={disabledSections.includes(item.id)} label={item.label} onClick={() => onNavigate(item.id)}>
             {item.icon}
           </NavBtn>
         ))}
       </div>
 
-      <div className="px-2 pb-1">
+      <Divider />
+
+      {/* Group 2: Agents, Plugins, Crons */}
+      <div className="flex flex-col gap-1 w-full px-2">
+        {GROUP_2.map(item => (
+          <NavBtn key={item.id} active={section === item.id} disabled={disabledSections.includes(item.id)} label={item.label} onClick={() => onNavigate(item.id)}>
+            {item.icon}
+          </NavBtn>
+        ))}
+      </div>
+
+      {/* Spacer pushes group 3 + help to the bottom */}
+      <div className="flex-1" />
+
+      <Divider />
+
+      {/* Group 3: Settings, Theme + Help */}
+      <div className="flex flex-col gap-1 w-full px-2 pb-1">
+        {GROUP_3.map(item => (
+          <NavBtn key={item.id} active={section === item.id} disabled={disabledSections.includes(item.id)} label={item.label} onClick={() => onNavigate(item.id)}>
+            {item.icon}
+          </NavBtn>
+        ))}
         <NavBtn label="Help" onClick={() => {}}>
           <HelpCircle size={20} />
         </NavBtn>
       </div>
     </nav>
+  )
+}
+
+function Divider() {
+  return (
+    <div
+      className="w-full my-1 px-3"
+    >
+      <div style={{ height: 1, background: 'var(--border)', borderRadius: 1 }} />
+    </div>
   )
 }
 
