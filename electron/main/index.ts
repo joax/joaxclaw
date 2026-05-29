@@ -191,7 +191,10 @@ ipcMain.handle('file:readBinary', async (_event, filePath: string) => {
       png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg',
       gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml',
       bmp: 'image/bmp', ico: 'image/x-icon', tif: 'image/tiff', tiff: 'image/tiff',
-      avif: 'image/avif'
+      avif: 'image/avif',
+      mp3: 'audio/mpeg', ogg: 'audio/ogg', oga: 'audio/ogg', opus: 'audio/ogg',
+      wav: 'audio/wav', m4a: 'audio/mp4', aac: 'audio/aac', flac: 'audio/flac',
+      webm: 'audio/webm'
     }
     const mimeType = mimeTypes[ext] ?? 'image/png'
     return { ok: true, dataUrl: `data:${mimeType};base64,${data.toString('base64')}` }

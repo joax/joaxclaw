@@ -14,8 +14,16 @@ export function AudioPlayer({ attachment, accentColor }: Props) {
   const [duration, setDuration] = useState(0)
   const [srcUrl, setSrcUrl] = useState<string | null>(null)
 
-  // Build src: prefer URL, fall back to blob from base64
+  // Build src: local file paths go via IPC to avoid cross-origin; base64 becomes a blob URL
   useEffect(() => {
+    if (attachment.url?.startsWith('file://')) {
+      const localPath = attachment.url.slice('file://'.length)
+      const api = (window as unknown as { api?: { file?: { readBinary?: (p: string) => Promise<{ ok: boolean; dataUrl?: string }> } } }).api
+      api?.file?.readBinary?.(localPath)?.then(res => {
+        if (res.ok && res.dataUrl) setSrcUrl(res.dataUrl)
+      })
+      return
+    }
     if (attachment.url) {
       setSrcUrl(attachment.url)
       return

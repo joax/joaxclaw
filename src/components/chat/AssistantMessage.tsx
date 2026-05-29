@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { ChevronDown, ChevronRight, BrainCircuit, CheckCircle2, XCircle, Loader2, Clock, Hourglass, Terminal, PenLine, FileText, Search, Globe, Plug, Bot, Wrench, FolderSearch } from 'lucide-react'
 import type { ChatMessage, ToolCall } from '../../lib/types'
+import { useExtensionsStore } from '../../store/extensions'
 import { formatTimestamp } from '../../lib/dateUtils'
 import { MarkdownContent } from './MarkdownContent'
 import { AudioPlayer } from './AudioPlayer'
@@ -33,7 +34,8 @@ export function AssistantMessage({ message, showTools = true, showReasoning = tr
 
   // A running tool call is not "waiting" — suppress the indicator while tools are actively executing
   const hasRunningTool = runningToolCount > 0
-  const isWaiting = message.streaming && !hasRunningTool && (!!message.waitingForSession || isStale)
+  const isWaitingForSession = message.streaming && !hasRunningTool && !!message.waitingForSession
+  const isStalled = isStale && message.streaming && !hasRunningTool && !message.waitingForSession
 
   return (
     <div className="flex justify-start animate-fade-in">
@@ -43,16 +45,21 @@ export function AssistantMessage({ message, showTools = true, showReasoning = tr
           <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>
             {formatTimestamp(message.createdAt)}
           </span>
-          {message.streaming && !isWaiting && (
+          {message.streaming && !isWaitingForSession && !isStalled && (
             <div className="flex items-center gap-1">
               <Loader2 size={10} className="animate-spin" style={{ color: 'var(--accent)' }} />
               <span className="text-xs" style={{ color: 'var(--accent)' }}>thinking…</span>
             </div>
           )}
-          {isWaiting && (
+          {isWaitingForSession && (
             <div className="flex items-center gap-1">
               <Hourglass size={10} className="animate-pulse-dot" style={{ color: 'var(--warning)' }} />
               <span className="text-xs" style={{ color: 'var(--warning)' }}>waiting for session…</span>
+            </div>
+          )}
+          {isStalled && (
+            <div className="flex items-center gap-1">
+              <span className="text-xs" style={{ color: 'var(--danger)' }}>model stopped — send a message to continue</span>
             </div>
           )}
         </div>
@@ -71,7 +78,7 @@ export function AssistantMessage({ message, showTools = true, showReasoning = tr
         )}
 
         {/* Waiting for sub-session indicator */}
-        {isWaiting && (
+        {isWaitingForSession && (
           <WaitingBlock sessionKey={message.waitingForSession} />
         )}
 
@@ -248,6 +255,7 @@ function toolDisplayName(name: string, kind: ToolKind): string {
 
 function ToolCallsBlock({ calls }: { calls: ToolCall[] }) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  const plugins = useExtensionsStore(s => s.plugins)
   const toggle = (id: string) => setExpanded(s => {
     const n = new Set(s)
     n.has(id) ? n.delete(id) : n.add(id)
@@ -262,6 +270,7 @@ function ToolCallsBlock({ calls }: { calls: ToolCall[] }) {
         const displayName = toolDisplayName(call.name, kind)
         const isOpen = expanded.has(call.id)
         const a = parseArgs(call.args)
+        const plugin = call.pluginId ? plugins.find(p => p.id === call.pluginId) : undefined
 
         return (
           <div
@@ -293,6 +302,16 @@ function ToolCallsBlock({ calls }: { calls: ToolCall[] }) {
               >
                 {call.name}
               </span>
+              {plugin && (
+                <span
+                  className="flex items-center gap-1 text-xs px-1.5 py-0.5 rounded"
+                  style={{ background: 'color-mix(in srgb, var(--accent) 15%, transparent)', color: 'var(--accent)', flexShrink: 0, fontSize: 10 }}
+                  title={`Plugin: ${plugin.id}`}
+                >
+                  <Plug size={9} />
+                  {plugin.name ?? plugin.id}
+                </span>
+              )}
               {summary && (
                 <span className="text-xs truncate flex-1" style={{ color: 'var(--text-secondary)', fontFamily: 'monospace' }}>
                   {summary}

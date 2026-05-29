@@ -12,11 +12,19 @@ interface SettingsState {
   showHeartbeat: boolean
   showModelName: boolean
 
+  // App preferences (local, not sent to gateway)
+  streamStallTimeout: number  // seconds before "model stopped responding" banner
+
   setActiveTheme: (id: string) => void
   saveTheme: (theme: ThemeSettings) => void
   deleteTheme: (id: string) => void
   updateActiveColors: (partial: Partial<ThemeSettings>) => void
   toggleMonitor: () => void
+  setAppPref: <K extends keyof AppPrefs>(key: K, value: AppPrefs[K]) => void
+}
+
+export interface AppPrefs {
+  streamStallTimeout: number
 }
 
 export const useSettingsStore = create<SettingsState>()(
@@ -29,6 +37,7 @@ export const useSettingsStore = create<SettingsState>()(
       showRam: true,
       showHeartbeat: true,
       showModelName: true,
+      streamStallTimeout: 60,
 
       setActiveTheme(id) {
         const theme = get().themes.find(t => t.id === id)
@@ -64,7 +73,9 @@ export const useSettingsStore = create<SettingsState>()(
         get().saveTheme(updated)
       },
 
-      toggleMonitor() { set(s => ({ monitorVisible: !s.monitorVisible })) }
+      toggleMonitor() { set(s => ({ monitorVisible: !s.monitorVisible })) },
+
+      setAppPref(key, value) { set({ [key]: value } as Pick<SettingsState, typeof key>) },
     }),
     {
       name: 'joaxclaw-settings',

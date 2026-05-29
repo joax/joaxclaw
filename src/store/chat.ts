@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { nanoid } from '../lib/nanoid'
 import type { Conversation, ChatMessage, ToolCall, MediaAttachment } from '../lib/types'
 import { gatewayClient } from '../lib/gateway'
+import { useExtensionsStore } from './extensions'
 
 const AUDIO_EXT = /\.(mp3|ogg|wav|m4a|aac|opus|webm|flac)(\?[^\s]*)?$/i
 const AUDIO_MIME = /^audio\//i
@@ -56,11 +57,14 @@ function attachChatStream(convId: string, sessionKey: string, update: UpdateFn):
       // Tool stream: tool call lifecycle events
       } else if (p.stream === 'tool') {
         if (p.data?.phase === 'start') {
+          const toolName = p.data.name ?? 'unknown'
+          const pluginId = useExtensionsStore.getState().toolNameMap.get(toolName)
           const newCall: ToolCall = {
             id: p.data.toolCallId ?? nanoid(),
-            name: p.data.name ?? 'unknown',
+            name: toolName,
             args: p.data.args !== undefined ? JSON.stringify(p.data.args) : undefined,
-            status: 'running'
+            status: 'running',
+            ...(pluginId ? { pluginId } : {})
           }
           update(m => ({ ...m, toolCalls: [...(m.toolCalls ?? []), newCall], waitingForSession: undefined }))
         } else if (p.data?.phase === 'result') {
@@ -87,6 +91,10 @@ function attachChatStream(convId: string, sessionKey: string, update: UpdateFn):
         update(m => ({ ...m, content: p.deltaText ?? '', waitingForSession: undefined }))
       } else if (p.deltaText) {
         update(m => ({ ...m, content: m.content + p.deltaText, waitingForSession: undefined }))
+      }
+    } else if (p.state === 'thinking_delta') {
+      if (p.deltaText) {
+        update(m => ({ ...m, reasoning: (m.reasoning ?? '') + p.deltaText, reasoningStreaming: true, waitingForSession: undefined }))
       }
     } else if (p.state === 'waiting' || p.state === 'delegating' || p.state === 'blocked' || p.state === 'waiting_for_session') {
       const subKey = p.waitingSessionKey ?? p.subSessionKey
@@ -208,6 +216,21 @@ function extractAttachments(msg: unknown): MediaAttachment[] {
           name: b['name'] as string | undefined
         })
       }
+    }
+  }
+
+  // User messages from WhatsApp/channels store media as MediaPath/MediaPaths top-level fields
+  const mediaPaths = Array.isArray(m['MediaPaths'])
+    ? m['MediaPaths'] as string[]
+    : typeof m['MediaPath'] === 'string' ? [m['MediaPath'] as string] : []
+  const mediaTypes = Array.isArray(m['MediaTypes'])
+    ? m['MediaTypes'] as string[]
+    : typeof m['MediaType'] === 'string' ? [m['MediaType'] as string] : []
+  for (let i = 0; i < mediaPaths.length; i++) {
+    const p = mediaPaths[i]
+    const mt = mediaTypes[i] ?? ''
+    if (typeof p === 'string' && p && AUDIO_MIME.test(mt)) {
+      result.push({ type: 'audio', url: `file://${p}`, mediaType: mt || undefined })
     }
   }
 

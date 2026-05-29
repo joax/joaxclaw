@@ -48,6 +48,7 @@ export interface PluginMetaEntry {
   source?: string
   origin?: string
   status?: string
+  toolNames?: string[]
 }
 
 // ── Normalizers ───────────────────────────────────────────────────────────────
@@ -89,6 +90,7 @@ function normalizeSkills(entries: EntriesMap): Skill[] {
 interface ExtensionsState {
   plugins: Plugin[]
   skills: Skill[]
+  toolNameMap: Map<string, string>  // toolName → pluginId
   loading: boolean
   error: string | null
   dirty: boolean
@@ -109,6 +111,7 @@ interface ExtensionsState {
 export const useExtensionsStore = create<ExtensionsState>((set, get) => ({
   plugins: [],
   skills: [],
+  toolNameMap: new Map(),
   loading: false,
   error: null,
   dirty: false,
@@ -179,6 +182,20 @@ export const useExtensionsStore = create<ExtensionsState>((set, get) => ({
         }
       } catch { /* non-critical */ }
 
+      // Build toolName → pluginId map from gateway plugins.list (includes toolNames per plugin)
+      const toolNameMap = new Map<string, string>()
+      try {
+        type GwPlugin = PluginMetaEntry & { toolNames?: string[] }
+        const res = await gatewayClient.request<{ plugins?: GwPlugin[] }>('plugins.list', {})
+        for (const p of res?.plugins ?? []) {
+          if (!p.id) continue
+          for (const tn of p.toolNames ?? []) toolNameMap.set(tn, p.id)
+          // Also merge toolNames into the meta map
+          if (!pluginMetaMap[p.id]) pluginMetaMap[p.id] = p
+          else pluginMetaMap[p.id] = { ...pluginMetaMap[p.id], ...p }
+        }
+      } catch { /* non-critical */ }
+
       const plugins = normalizePlugins(pluginEntries).map(p => {
         const meta = pluginMetaMap[p.id]
         if (!meta) return p
@@ -195,6 +212,7 @@ export const useExtensionsStore = create<ExtensionsState>((set, get) => ({
       set({
         plugins,
         skills,
+        toolNameMap,
         _baseHash: snapshot.hash ?? null,
         loading: false,
         dirty: false,
