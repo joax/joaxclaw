@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react'
-import { Bot, MessageSquare, Wrench, Loader2, BookOpen, FolderOpen } from 'lucide-react'
+import { useEffect, useState, useRef, useCallback } from 'react'
+import { Bot, MessageSquare, Wrench, Loader2, BookOpen, FolderOpen, X } from 'lucide-react'
 import { useAgentsStore } from '../../store/agents'
 import { useObsidianStore } from '../../store/obsidian'
 import { gatewayClient } from '../../lib/gateway'
+import { AgentEditor } from './AgentEditor'
 import type { Agent } from '../../lib/types'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -105,12 +106,12 @@ function Block({ title, icon, children, area, accent }: {
   title: string
   icon: React.ReactNode
   children: React.ReactNode
-  area: string
+  area?: string
   accent?: boolean
 }) {
   return (
     <div style={{
-      gridArea: area,
+      ...(area ? { gridArea: area } : {}),
       background: 'var(--bg-surface)',
       border: `1px solid ${accent ? 'color-mix(in srgb, var(--accent) 40%, var(--border))' : 'var(--border)'}`,
       borderRadius: 'var(--radius)',
@@ -162,7 +163,7 @@ function shortPath(ws: string): string {
 
 // ── Entry agent card (top block) ─────────────────────────────────────────────
 
-function EntryAgentCard({ agent }: { agent: Agent }) {
+function EntryAgentCard({ agent, onClick }: { agent: Agent; onClick?: () => void }) {
   const name = agent.identity?.name ?? agent.name ?? agent.id
   const model = agent.model?.primary ?? agent.agentRuntime?.id ?? ''
   const emoji = agent.identity?.emoji
@@ -172,12 +173,19 @@ function EntryAgentCard({ agent }: { agent: Agent }) {
   const modelId  = slash !== -1 ? model.slice(slash + 1) : model
 
   return (
-    <div style={{
-      display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5,
-      padding: '10px 14px', borderRadius: 8, minWidth: 130,
-      background: 'color-mix(in srgb, var(--accent) 7%, var(--bg-elevated))',
-      border: '1px solid color-mix(in srgb, var(--accent) 25%, var(--border))',
-    }}>
+    <div
+      onClick={onClick}
+      style={{
+        display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5,
+        padding: '10px 14px', borderRadius: 8, minWidth: 130,
+        background: 'color-mix(in srgb, var(--accent) 7%, var(--bg-elevated))',
+        border: '1px solid color-mix(in srgb, var(--accent) 25%, var(--border))',
+        cursor: onClick ? 'pointer' : 'default',
+        transition: 'background 0.12s',
+      }}
+      onMouseEnter={e => { if (onClick) e.currentTarget.style.background = 'color-mix(in srgb, var(--accent) 14%, var(--bg-elevated))' }}
+      onMouseLeave={e => { if (onClick) e.currentTarget.style.background = 'color-mix(in srgb, var(--accent) 7%, var(--bg-elevated))' }}
+    >
       <span style={{ fontSize: 22, lineHeight: 1 }}>{emoji ?? '🤖'}</span>
       <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)', textAlign: 'center' }}>{name}</span>
       {model && (
@@ -198,18 +206,25 @@ function EntryAgentCard({ agent }: { agent: Agent }) {
 
 // ── Subagent row (center block, with inline workspace) ────────────────────────
 
-function AgentRow({ agent }: { agent: Agent }) {
+function AgentRow({ agent, onClick }: { agent: Agent; onClick?: () => void }) {
   const name = agent.identity?.name ?? agent.name ?? agent.id
   const model = agent.model?.primary ?? agent.agentRuntime?.id ?? ''
   const emoji = agent.identity?.emoji
 
   return (
-    <div style={{
-      display: 'flex', alignItems: 'flex-start', gap: 8, padding: '7px 9px',
-      borderRadius: 6,
-      background: 'color-mix(in srgb, var(--bg-primary) 60%, var(--bg-elevated))',
-      border: '1px solid var(--border)',
-    }}>
+    <div
+      onClick={onClick}
+      style={{
+        display: 'flex', alignItems: 'flex-start', gap: 8, padding: '7px 9px',
+        borderRadius: 6,
+        background: 'color-mix(in srgb, var(--bg-primary) 60%, var(--bg-elevated))',
+        border: '1px solid var(--border)',
+        cursor: onClick ? 'pointer' : 'default',
+        transition: 'background 0.12s',
+      }}
+      onMouseEnter={e => { if (onClick) e.currentTarget.style.background = 'var(--bg-elevated)' }}
+      onMouseLeave={e => { if (onClick) e.currentTarget.style.background = 'color-mix(in srgb, var(--bg-primary) 60%, var(--bg-elevated))' }}
+    >
       <span style={{ fontSize: 16, lineHeight: 1.25, flexShrink: 0, marginTop: 1 }}>
         {emoji ?? '🤖'}
       </span>
@@ -235,6 +250,211 @@ function AgentRow({ agent }: { agent: Agent }) {
   )
 }
 
+// ── Channel card ─────────────────────────────────────────────────────────────
+
+const CHANNEL_COLORS: Record<string, string> = {
+  whatsapp: '#25d366', slack: '#4a154b', discord: '#5865f2',
+  telegram: '#0088cc', qqbot: '#12b7f5',
+}
+
+function ChannelCard({ channel, boundAgent, onClick }: { channel: ChannelInfo; boundAgent?: Agent; onClick?: () => void }) {
+  const color = CHANNEL_COLORS[channel.id] ?? 'var(--accent)'
+  const model = boundAgent?.model?.primary ?? boundAgent?.agentRuntime?.id ?? ''
+  const slash = model.indexOf('/')
+  const provider = slash !== -1 ? model.slice(0, slash) : null
+  const modelId  = slash !== -1 ? model.slice(slash + 1) : model
+
+  return (
+    <div
+      onClick={onClick}
+      style={{
+        display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4,
+        padding: '10px 14px', borderRadius: 8, minWidth: 110,
+        background: `color-mix(in srgb, ${color} 10%, var(--bg-elevated))`,
+        border: `1px solid color-mix(in srgb, ${color} 35%, var(--border))`,
+        cursor: onClick ? 'pointer' : 'default',
+        transition: 'background 0.12s',
+      }}
+      onMouseEnter={e => { if (onClick) e.currentTarget.style.background = `color-mix(in srgb, ${color} 18%, var(--bg-elevated))` }}
+      onMouseLeave={e => { if (onClick) e.currentTarget.style.background = `color-mix(in srgb, ${color} 10%, var(--bg-elevated))` }}
+    >
+      <MessageSquare size={20} style={{ color }} />
+      <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)', textTransform: 'capitalize' }}>{channel.id}</span>
+      {channel.accounts.map(acc => (
+        <span key={acc.id} style={{ fontSize: 10, color: 'var(--text-secondary)', textAlign: 'center' }}>
+          {acc.name ?? acc.id}
+        </span>
+      ))}
+      {model && (
+        <div style={{ marginTop: 2, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1, borderTop: `1px solid color-mix(in srgb, ${color} 20%, var(--border))`, paddingTop: 4, width: '100%' }}>
+          {provider && (
+            <span style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)' }}>
+              {provider}
+            </span>
+          )}
+          <span style={{ fontSize: 10, fontFamily: 'monospace', color: 'var(--text-secondary)', textAlign: 'center', maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {modelId}
+          </span>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── TopSection: channels → SVG lines → entry agents ───────────────────────────
+
+interface SvgLine { key: string; path: string }
+
+function TopSection({ channels, entryAgents, onSelectAgent, onSelectChannel }: {
+  channels: ChannelInfo[]
+  entryAgents: Agent[]
+  onSelectAgent: (a: Agent) => void
+  onSelectChannel: (c: ChannelInfo) => void
+}) {
+  const containerRef = useRef<HTMLDivElement>(null)
+  const chRefs  = useRef(new Map<string, HTMLDivElement>())
+  const agRefs  = useRef(new Map<string, HTMLDivElement>())
+  const [lines, setLines] = useState<SvgLine[]>([])
+  const [svgW, setSvgW]   = useState(0)
+  const [svgH, setSvgH]   = useState(0)
+
+  const measure = useCallback(() => {
+    const container = containerRef.current
+    if (!container) return
+    const cr = container.getBoundingClientRect()
+    setSvgW(cr.width)
+    setSvgH(cr.height)
+    const result: SvgLine[] = []
+    for (const ch of channels) {
+      const agentId = ch.boundAgentIds[0]
+      if (!agentId) continue
+      const chEl = chRefs.current.get(ch.id)
+      const agEl = agRefs.current.get(agentId)
+      if (!chEl || !agEl) continue
+      const chR = chEl.getBoundingClientRect()
+      const agR = agEl.getBoundingClientRect()
+      const x1 = chR.left + chR.width  / 2 - cr.left
+      const y1 = chR.bottom - cr.top
+      const x2 = agR.left + agR.width  / 2 - cr.left
+      const y2 = agR.top  - cr.top
+      const cy = (y1 + y2) / 2
+      result.push({ key: `${ch.id}->${agentId}`, path: `M ${x1} ${y1} C ${x1} ${cy}, ${x2} ${cy}, ${x2} ${y2}` })
+    }
+    setLines(result)
+  }, [channels])
+
+  useEffect(() => {
+    requestAnimationFrame(measure)
+    const ro = new ResizeObserver(() => requestAnimationFrame(measure))
+    const el = containerRef.current
+    if (el) ro.observe(el)
+    return () => ro.disconnect()
+  }, [measure])
+
+  return (
+    <div ref={containerRef} style={{ gridArea: 'top', display: 'flex', flexDirection: 'column', gap: 44, position: 'relative' }}>
+      <svg
+        width={svgW} height={svgH}
+        style={{ position: 'absolute', top: 0, left: 0, pointerEvents: 'none', zIndex: 1, overflow: 'visible' }}
+      >
+        <defs>
+          <marker id="ch-arr" markerWidth="7" markerHeight="7" refX="5" refY="3.5" orient="auto">
+            <path d="M0,1 L7,3.5 L0,6 Z" fill="var(--border)" />
+          </marker>
+        </defs>
+        {lines.map(l => (
+          <path key={l.key} d={l.path} fill="none" stroke="var(--border)"
+            strokeWidth="1.5" strokeDasharray="5 3" markerEnd="url(#ch-arr)" opacity={0.7} />
+        ))}
+      </svg>
+
+      <Block title="Communication Channels" icon={<MessageSquare size={12} />}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'center' }}>
+          {channels.length === 0
+            ? <Empty text="No channels enabled" />
+            : channels.map(ch => {
+              const boundAgent = entryAgents.find(a => ch.boundAgentIds.includes(a.id))
+              return (
+                <div key={ch.id} ref={el => { if (el) chRefs.current.set(ch.id, el); else chRefs.current.delete(ch.id) }}>
+                  <ChannelCard channel={ch} boundAgent={boundAgent} onClick={() => onSelectChannel(ch)} />
+                </div>
+              )
+            })
+          }
+        </div>
+      </Block>
+
+      <Block title="Entry Agents" icon={<Bot size={12} />}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'center' }}>
+          {entryAgents.length === 0
+            ? <Empty text="No entry agents — all agents are sub-agents" />
+            : entryAgents.map(a => (
+                <div key={a.id} ref={el => { if (el) agRefs.current.set(a.id, el); else agRefs.current.delete(a.id) }}>
+                  <EntryAgentCard agent={a} onClick={() => onSelectAgent(a)} />
+                </div>
+              ))
+          }
+        </div>
+      </Block>
+    </div>
+  )
+}
+
+// ── Channel panel (sidebar) ───────────────────────────────────────────────────
+
+function ChannelPanel({ channel, boundAgent, onClose }: {
+  channel: ChannelInfo
+  boundAgent?: Agent
+  onClose: () => void
+}) {
+  const color = CHANNEL_COLORS[channel.id] ?? 'var(--accent)'
+  const model = boundAgent?.model?.primary ?? boundAgent?.agentRuntime?.id ?? ''
+
+  return (
+    <>
+      <div className="fixed inset-0 z-40" style={{ background: 'rgba(0,0,0,0.25)' }} onClick={onClose} />
+      <div className="fixed right-0 bottom-0 z-50 flex flex-col" style={{ top: 36, width: 340, background: 'var(--bg-surface)', borderLeft: '1px solid var(--border)' }}>
+        <div className="flex items-center justify-between px-5 py-4 shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
+          <div className="flex items-center gap-2">
+            <MessageSquare size={16} style={{ color }} />
+            <h2 className="font-semibold text-sm capitalize" style={{ color: 'var(--text-primary)' }}>{channel.id}</h2>
+          </div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)', padding: 4, display: 'flex' }}>
+            <X size={18} />
+          </button>
+        </div>
+        <div className="flex flex-col gap-5 p-5 overflow-y-auto flex-1 text-sm">
+          {channel.accounts.length > 0 && (
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: 'var(--text-secondary)' }}>Accounts</p>
+              <div className="flex flex-col gap-1.5">
+                {channel.accounts.map(acc => (
+                  <div key={acc.id} className="flex items-center gap-2 px-3 py-2 rounded" style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)' }}>
+                    <span style={{ color: 'var(--text-primary)' }}>{acc.name ?? acc.id}</span>
+                    {acc.name && <span className="font-mono text-xs" style={{ color: 'var(--text-secondary)' }}>{acc.id}</span>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {boundAgent && (
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: 'var(--text-secondary)' }}>Bound Agent</p>
+              <div className="flex items-center gap-2 px-3 py-2 rounded" style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)' }}>
+                <span style={{ fontSize: 18 }}>{boundAgent.identity?.emoji ?? '🤖'}</span>
+                <div className="flex flex-col">
+                  <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{boundAgent.identity?.name ?? boundAgent.name ?? boundAgent.id}</span>
+                  {model && <span className="font-mono text-xs" style={{ color: 'var(--text-secondary)' }}>{model}</span>}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </>
+  )
+}
+
 // ── Main view ─────────────────────────────────────────────────────────────────
 
 export function AgentSystemView() {
@@ -242,6 +462,8 @@ export function AgentSystemView() {
   const { vaults, loadConfig } = useObsidianStore()
   const [data, setData] = useState<OverviewData | null>(null)
   const [loading, setLoading] = useState(true)
+  const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null)
+  const [selectedChannel, setSelectedChannel] = useState<ChannelInfo | null>(null)
 
   useEffect(() => {
     loadConfig()
@@ -267,72 +489,59 @@ export function AgentSystemView() {
     <div style={{ flex: 1, overflow: 'auto', padding: '32px 40px', display: 'flex', alignItems: 'flex-start', justifyContent: 'center' }}>
       <div style={{
         display: 'grid',
-        gridTemplateColumns: 'minmax(160px, auto) 44px minmax(280px, auto) 44px minmax(180px, auto)',
-        gridTemplateRows: 'auto 44px auto 44px auto',
+        gridTemplateColumns: 'minmax(160px, auto) 44px minmax(260px, 1fr) 44px minmax(160px, auto)',
+        gridTemplateRows: 'auto 44px auto',
         gridTemplateAreas: `
-          "models  models  models  models  models"
-          ".       .       vconn1  .       ."
-          "chans   hconn1  agents  hconn2  obsidian"
-          ".       .       vconn2  .       ."
-          "tools   tools   tools   tools   tools"
+          "top     top     top     top      top"
+          ".       .       vconn1  .        ."
+          "tools   hconn1  agents  hconn2   obsidian"
         `,
+        gap: '0 0',
       }}>
 
-        {/* ── TOP: Entry agents ── */}
-        <Block area="models" title="Entry Agents" icon={<Bot size={12} />}>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'center' }}>
-            {entryAgents.length === 0
-              ? <Empty text="No entry agents — all agents are sub-agents" />
-              : entryAgents.map(a => <EntryAgentCard key={a.id} agent={a} />)
-            }
-          </div>
-        </Block>
+        {/* ── TOP: Channels → Entry Agents ── */}
+        <TopSection
+          channels={data?.channels ?? []}
+          entryAgents={entryAgents}
+          onSelectAgent={setSelectedAgent}
+          onSelectChannel={setSelectedChannel}
+        />
 
         <VertConn area="vconn1" />
-
-        {/* ── LEFT: Channels ── */}
-        <Block area="chans" title="Channels" icon={<MessageSquare size={12} />}>
-          {!data || data.channels.length === 0
-            ? <Empty text="No channels enabled" />
-            : data.channels.map(ch => {
-                const boundAgent = ch.boundAgentIds[0]
-                  ? agents.find(a => a.id === ch.boundAgentIds[0])
-                  : null
-                const boundName = boundAgent
-                  ? (boundAgent.identity?.name ?? boundAgent.name ?? boundAgent.id)
-                  : null
-                return (
-                  <div key={ch.id} style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <div style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--success)', flexShrink: 0 }} />
-                      <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', textTransform: 'capitalize' }}>{ch.id}</span>
-                    </div>
-                    {ch.accounts.map(acc => (
-                      <div key={acc.id} style={{ paddingLeft: 13, fontSize: 11, color: 'var(--text-secondary)' }}>
-                        {acc.name ? `"${acc.name}"` : acc.id}
-                      </div>
-                    ))}
-                    {boundName && (
-                      <div style={{ paddingLeft: 13, fontSize: 10, fontFamily: 'monospace', color: 'var(--text-secondary)', opacity: 0.6 }}>
-                        → {boundName}
-                      </div>
-                    )}
-                  </div>
-                )
-              })
-          }
-        </Block>
-
-        <HorizConn area="hconn1" />
 
         {/* ── CENTER: Sub-agents ── */}
         <Block area="agents" title="Sub-Agents" icon={<Bot size={12} />} accent>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             {subAgents.length === 0
               ? <Empty text={agents.length === 0 ? 'No agents configured' : 'No sub-agent relationships configured'} />
-              : subAgents.map(a => <AgentRow key={a.id} agent={a} />)
+              : subAgents.map(a => <AgentRow key={a.id} agent={a} onClick={() => setSelectedAgent(a)} />)
             }
           </div>
+        </Block>
+
+        <HorizConn area="hconn1" />
+
+        {/* ── LEFT: Tools & skills ── */}
+        <Block area="tools" title="Tools & Skills" icon={<Wrench size={12} />}>
+          {!data || (data.tools.length === 0 && data.skills.length === 0)
+            ? <Empty text="No tools enabled" />
+            : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  {data.tools.length > 0 && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      <span style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)' }}>Plugins</span>
+                      {data.tools.map(t => <Tag key={t} label={t} mono />)}
+                    </div>
+                  )}
+                  {data.skills.length > 0 && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      <span style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)' }}>Skills</span>
+                      {data.skills.map(s => <Tag key={s} label={s} mono />)}
+                    </div>
+                  )}
+                </div>
+              )
+          }
         </Block>
 
         <HorizConn area="hconn2" />
@@ -352,36 +561,18 @@ export function AgentSystemView() {
           }
         </Block>
 
-        <VertConn area="vconn2" />
-
-        {/* ── BOTTOM: Tools & skills ── */}
-        <Block area="tools" title="Tools & Skills" icon={<Wrench size={12} />}>
-          {!data || (data.tools.length === 0 && data.skills.length === 0)
-            ? <Empty text="No tools enabled" />
-            : (
-                <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
-                  {data.tools.length > 0 && (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-                      <span style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)' }}>Plugins</span>
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-                        {data.tools.map(t => <Tag key={t} label={t} mono />)}
-                      </div>
-                    </div>
-                  )}
-                  {data.skills.length > 0 && (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-                      <span style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)' }}>Skills</span>
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-                        {data.skills.map(s => <Tag key={s} label={s} mono />)}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )
-          }
-        </Block>
-
       </div>
     </div>
+
+    {selectedAgent && (
+      <AgentEditor agent={selectedAgent} onClose={() => setSelectedAgent(null)} />
+    )}
+    {selectedChannel && !selectedAgent && (
+      <ChannelPanel
+        channel={selectedChannel}
+        boundAgent={agents.find(a => selectedChannel.boundAgentIds.includes(a.id))}
+        onClose={() => setSelectedChannel(null)}
+      />
+    )}
   )
 }

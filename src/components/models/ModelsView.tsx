@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
-import { Plus, Trash2, ChevronRight, Cpu, KeyRound, Link, Pencil, Check, X, RefreshCw, AlertCircle, Save } from 'lucide-react'
+import { Plus, Trash2, ChevronRight, Cpu, KeyRound, Link, Pencil, Check, X, RefreshCw, AlertCircle, Save, BarChart2, Plug } from 'lucide-react'
 import { useModelsStore } from '../../store/models'
+import { useSessionsStore } from '../../store/sessions'
 import type { GwModelDef, GwModelProvider } from '../../lib/types'
 import { Btn } from '../ui/Btn'
 import { Input } from '../ui/Input'
@@ -94,17 +95,17 @@ function ModelRow({ model, providerId, onDelete }: { model: GwModelDef; provider
               <Field label="Max tokens (output)">
                 <input type="number" value={draft.maxTokens ?? ''} onChange={e => setDraft(d => ({ ...d, maxTokens: e.target.value ? Number(e.target.value) : undefined }))} style={inlineInputStyle} placeholder="—" />
               </Field>
-              <Field label="Input cost (per token)">
-                <input type="number" step="any" value={draft.cost?.input ?? ''} onChange={e => setDraft(d => ({ ...d, cost: { ...d.cost ?? { input:0, output:0, cacheRead:0, cacheWrite:0 }, input: Number(e.target.value) } }))} style={inlineInputStyle} placeholder="0" />
+              <Field label="Input cost ($ per 1M tokens)">
+                <input type="number" step="any" value={draft.cost?.input != null ? +(draft.cost.input * 1e6).toPrecision(6) : ''} onChange={e => setDraft(d => ({ ...d, cost: { ...d.cost ?? { input:0, output:0, cacheRead:0, cacheWrite:0 }, input: Number(e.target.value) / 1e6 } }))} style={inlineInputStyle} placeholder="0" />
               </Field>
-              <Field label="Output cost (per token)">
-                <input type="number" step="any" value={draft.cost?.output ?? ''} onChange={e => setDraft(d => ({ ...d, cost: { ...d.cost ?? { input:0, output:0, cacheRead:0, cacheWrite:0 }, output: Number(e.target.value) } }))} style={inlineInputStyle} placeholder="0" />
+              <Field label="Output cost ($ per 1M tokens)">
+                <input type="number" step="any" value={draft.cost?.output != null ? +(draft.cost.output * 1e6).toPrecision(6) : ''} onChange={e => setDraft(d => ({ ...d, cost: { ...d.cost ?? { input:0, output:0, cacheRead:0, cacheWrite:0 }, output: Number(e.target.value) / 1e6 } }))} style={inlineInputStyle} placeholder="0" />
               </Field>
-              <Field label="Cache read cost (per token)">
-                <input type="number" step="any" value={draft.cost?.cacheRead ?? ''} onChange={e => setDraft(d => ({ ...d, cost: { ...d.cost ?? { input:0, output:0, cacheRead:0, cacheWrite:0 }, cacheRead: Number(e.target.value) } }))} style={inlineInputStyle} placeholder="0" />
+              <Field label="Cache read cost ($ per 1M tokens)">
+                <input type="number" step="any" value={draft.cost?.cacheRead != null ? +(draft.cost.cacheRead * 1e6).toPrecision(6) : ''} onChange={e => setDraft(d => ({ ...d, cost: { ...d.cost ?? { input:0, output:0, cacheRead:0, cacheWrite:0 }, cacheRead: Number(e.target.value) / 1e6 } }))} style={inlineInputStyle} placeholder="0" />
               </Field>
-              <Field label="Cache write cost (per token)">
-                <input type="number" step="any" value={draft.cost?.cacheWrite ?? ''} onChange={e => setDraft(d => ({ ...d, cost: { ...d.cost ?? { input:0, output:0, cacheRead:0, cacheWrite:0 }, cacheWrite: Number(e.target.value) } }))} style={inlineInputStyle} placeholder="0" />
+              <Field label="Cache write cost ($ per 1M tokens)">
+                <input type="number" step="any" value={draft.cost?.cacheWrite != null ? +(draft.cost.cacheWrite * 1e6).toPrecision(6) : ''} onChange={e => setDraft(d => ({ ...d, cost: { ...d.cost ?? { input:0, output:0, cacheRead:0, cacheWrite:0 }, cacheWrite: Number(e.target.value) / 1e6 } }))} style={inlineInputStyle} placeholder="0" />
               </Field>
               <Field label="Input modalities (comma-separated)">
                 <input value={(draft.input ?? []).join(', ')} onChange={e => setDraft(d => ({ ...d, input: e.target.value.split(',').map(s => s.trim()).filter(Boolean) }))} style={inlineInputStyle} placeholder="text, image" />
@@ -118,10 +119,6 @@ function ModelRow({ model, providerId, onDelete }: { model: GwModelDef; provider
               <label className="flex items-center gap-2 cursor-pointer select-none text-sm" style={{ color: 'var(--text-primary)' }}>
                 <input type="checkbox" checked={!!draft.compat?.supportsTools} onChange={e => setDraft(d => ({ ...d, compat: { ...d.compat, supportsTools: e.target.checked } }))} />
                 Supports tools
-              </label>
-              <label className="flex items-center gap-2 cursor-pointer select-none text-sm" style={{ color: 'var(--text-primary)' }}>
-                <input type="checkbox" checked={!!draft.compat?.supportsVision} onChange={e => setDraft(d => ({ ...d, compat: { ...d.compat, supportsVision: e.target.checked } }))} />
-                Vision
               </label>
             </div>
             <div className="flex gap-2">
@@ -168,7 +165,6 @@ function ModelRow({ model, providerId, onDelete }: { model: GwModelDef; provider
         <div className="flex items-center justify-center gap-2">
           {model.reasoning && <span className="text-xs" style={{ color: '#f59e0b' }} title="Reasoning">🧠</span>}
           {model.compat?.supportsTools && <span className="text-xs" title="Tools">⚙</span>}
-          {model.compat?.supportsVision && <span className="text-xs" title="Vision">👁</span>}
         </div>
       </td>
       <td style={{ ...tdStyle, width: 52 }}>
@@ -365,17 +361,313 @@ function AddProviderForm({ onDone }: { onDone: () => void }) {
 
 // ── Main view ─────────────────────────────────────────────────────────────────
 
+// ── Usage tab ─────────────────────────────────────────────────────────────────
+
+function fmtTokensBig(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`
+  if (n >= 1_000)     return `${(n / 1_000).toFixed(1)}K`
+  return String(n)
+}
+
+function fmtUsd(n: number): string {
+  if (n === 0) return '—'
+  if (n < 0.01) return `$${n.toPrecision(3)}`
+  return `$${n.toFixed(4)}`
+}
+
+function UsageTab() {
+  const { sessions, fetch } = useSessionsStore()
+  const { providers } = useModelsStore()
+
+  useEffect(() => { fetch() }, [])
+
+  type Row = {
+    model: string; provider: string; count: number
+    inputTokens: number; outputTokens: number; estimatedCostUsd: number
+  }
+
+  const byModel = Object.values(
+    sessions.reduce<Record<string, Row>>((acc, s) => {
+      if (!s.model) return acc
+      const key = s.model
+      if (!acc[key]) acc[key] = { model: s.model, provider: s.modelProvider ?? '', count: 0, inputTokens: 0, outputTokens: 0, estimatedCostUsd: 0 }
+      acc[key].count++
+      acc[key].inputTokens    += s.inputTokens    ?? 0
+      acc[key].outputTokens   += s.outputTokens   ?? 0
+      acc[key].estimatedCostUsd += s.estimatedCostUsd ?? 0
+      return acc
+    }, {})
+  ).sort((a, b) => b.inputTokens - a.inputTokens)
+
+  // If gateway doesn't compute cost, estimate from model pricing
+  function computedCost(row: Row): number {
+    if (row.estimatedCostUsd > 0) return row.estimatedCostUsd
+    const slash = row.model.indexOf('/')
+    const pid = slash >= 0 ? row.model.slice(0, slash) : row.provider
+    const mid = slash >= 0 ? row.model.slice(slash + 1) : row.model
+    const def = providers[pid]?.models.find(m => m.id === mid)
+    if (!def?.cost) return 0
+    return row.inputTokens * def.cost.input + row.outputTokens * def.cost.output
+  }
+
+  const totalInput  = byModel.reduce((s, r) => s + r.inputTokens, 0)
+  const totalOutput = byModel.reduce((s, r) => s + r.outputTokens, 0)
+  const totalCost   = byModel.reduce((s, r) => s + computedCost(r), 0)
+
+  if (byModel.length === 0) {
+    return (
+      <div className="flex-1 flex flex-col items-center justify-center gap-2" style={{ color: 'var(--text-secondary)' }}>
+        <BarChart2 size={32} style={{ opacity: 0.2 }} />
+        <p className="text-sm">No session data yet</p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+      {/* Totals bar */}
+      <div className="flex gap-8 px-5 py-3 shrink-0 text-sm" style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-surface)' }}>
+        <div>
+          <span style={{ color: 'var(--text-secondary)', fontSize: 11 }}>Total input</span>
+          <p className="font-mono font-semibold" style={{ color: 'var(--text-primary)' }}>{fmtTokensBig(totalInput)}</p>
+        </div>
+        <div>
+          <span style={{ color: 'var(--text-secondary)', fontSize: 11 }}>Total output</span>
+          <p className="font-mono font-semibold" style={{ color: 'var(--text-primary)' }}>{fmtTokensBig(totalOutput)}</p>
+        </div>
+        <div>
+          <span style={{ color: 'var(--text-secondary)', fontSize: 11 }}>Estimated cost</span>
+          <p className="font-mono font-semibold" style={{ color: totalCost > 0 ? 'var(--text-primary)' : 'var(--text-secondary)' }}>{totalCost > 0 ? fmtUsd(totalCost) : '—'}</p>
+        </div>
+      </div>
+
+      {/* Table */}
+      <div className="flex-1 overflow-auto">
+        <table className="w-full text-sm" style={{ borderCollapse: 'collapse' }}>
+          <thead>
+            <tr style={{ background: 'var(--bg-surface)', borderBottom: '1px solid var(--border)', position: 'sticky', top: 0, zIndex: 1 }}>
+              <th style={{ ...thStyle, textAlign: 'left' }}>Model</th>
+              <th style={{ ...thStyle, textAlign: 'right' }}>Sessions</th>
+              <th style={{ ...thStyle, textAlign: 'right' }}>Input tokens</th>
+              <th style={{ ...thStyle, textAlign: 'right' }}>Output tokens</th>
+              <th style={{ ...thStyle, textAlign: 'right' }}>Est. cost</th>
+            </tr>
+          </thead>
+          <tbody>
+            {byModel.map(row => {
+              const cost = computedCost(row)
+              const slash = row.model.indexOf('/')
+              const pid = slash >= 0 ? row.model.slice(0, slash) : row.provider
+              const mid = slash >= 0 ? row.model.slice(slash + 1) : row.model
+              return (
+                <tr key={row.model} style={{ borderBottom: '1px solid var(--border)' }}
+                  onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-surface)')}
+                  onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                >
+                  <td style={tdStyle}>
+                    <div className="font-mono text-xs" style={{ color: 'var(--text-primary)' }}>{mid}</div>
+                    {pid && <div className="text-xs" style={{ color: 'var(--text-secondary)', opacity: 0.6 }}>{pid}</div>}
+                  </td>
+                  <td style={{ ...tdStyle, textAlign: 'right', color: 'var(--text-secondary)', fontFamily: 'monospace', fontSize: 12 }}>{row.count}</td>
+                  <td style={{ ...tdStyle, textAlign: 'right', color: 'var(--text-primary)',   fontFamily: 'monospace', fontSize: 12 }}>{fmtTokensBig(row.inputTokens)}</td>
+                  <td style={{ ...tdStyle, textAlign: 'right', color: 'var(--text-secondary)', fontFamily: 'monospace', fontSize: 12 }}>{fmtTokensBig(row.outputTokens)}</td>
+                  <td style={{ ...tdStyle, textAlign: 'right', color: cost > 0 ? 'var(--success)' : 'var(--text-secondary)', fontFamily: 'monospace', fontSize: 12 }}>{fmtUsd(cost)}</td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+// ── Plugin provider panel — with OpenRouter pricing fetch ─────────────────────
+
+interface ORPricing { prompt: string; completion: string }
+interface ORModel { id: string; name: string; context_length: number; pricing: ORPricing; top_provider?: { max_completion_tokens?: number } }
+
+async function fetchORModels(): Promise<Map<string, ORModel>> {
+  const res = await fetch('https://openrouter.ai/api/v1/models')
+  if (!res.ok) throw new Error(`OpenRouter returned ${res.status}`)
+  const data = await res.json() as { data: ORModel[] }
+  return new Map(data.data.map(m => [m.id, m]))
+}
+
+function PluginProviderPanel({ id, modelIds }: { id: string; modelIds: string[] }) {
+  const { addProvider } = useModelsStore()
+  const [orModels, setOrModels] = useState<Map<string, ORModel> | null>(null)
+  const [fetching, setFetching] = useState(false)
+  const [fetchErr, setFetchErr] = useState<string | null>(null)
+  const [promoted, setPromoted] = useState(false)
+
+  async function handleFetch() {
+    setFetching(true); setFetchErr(null)
+    try { setOrModels(await fetchORModels()) }
+    catch (e) { setFetchErr(String(e)) }
+    finally { setFetching(false) }
+  }
+
+  function handlePromote() {
+    const models: GwModelDef[] = modelIds.map(fullId => {
+      const slash = fullId.indexOf('/')
+      const mid = slash >= 0 ? fullId.slice(slash + 1) : fullId
+      const or = orModels?.get(fullId)
+      return {
+        id: mid,
+        name: or?.name ?? mid,
+        contextWindow: or?.context_length,
+        maxTokens: or?.top_provider?.max_completion_tokens,
+        input: ['text'],
+        compat: { supportsTools: true },
+        cost: or ? {
+          input:      parseFloat(or.pricing.prompt),
+          output:     parseFloat(or.pricing.completion),
+          cacheRead:  0,
+          cacheWrite: 0,
+        } : { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      }
+    })
+    addProvider(id, { models })
+    setPromoted(true)
+  }
+
+  const matchCount = orModels ? modelIds.filter(fid => orModels.has(fid)).length : 0
+
+  return (
+    <div className="flex flex-col flex-1 min-h-0" style={{ background: 'var(--bg-primary)' }}>
+      {/* Header */}
+      <div className="px-5 py-3 flex items-center gap-3" style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-surface)' }}>
+        <div style={{ width: 32, height: 32, borderRadius: 8, background: 'color-mix(in srgb, var(--warning) 15%, var(--bg-elevated))', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--warning)', flexShrink: 0 }}>
+          <Plug size={16} />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <p className="font-semibold text-sm" style={{ color: 'var(--text-primary)' }}>{id}</p>
+            <span className="text-xs px-1.5 py-0.5 rounded" style={{ background: 'color-mix(in srgb, var(--warning) 15%, transparent)', color: 'var(--warning)', border: '1px solid color-mix(in srgb, var(--warning) 30%, transparent)' }}>via plugin</span>
+          </div>
+          <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>{modelIds.length} model{modelIds.length !== 1 ? 's' : ''}</p>
+        </div>
+        <div className="flex items-center gap-2">
+          {orModels && matchCount > 0 && !promoted && (
+            <Btn size="sm" onClick={handlePromote} icon={<Plus size={12} />}>
+              Add to providers ({matchCount} priced)
+            </Btn>
+          )}
+          {promoted && <span className="text-xs" style={{ color: 'var(--success)' }}>Added ✓</span>}
+          <Btn size="sm" variant="outline" loading={fetching} onClick={handleFetch}>
+            Fetch pricing from OpenRouter
+          </Btn>
+        </div>
+      </div>
+
+      {fetchErr && (
+        <div className="mx-5 mt-3 px-3 py-2 rounded text-xs flex items-center gap-1.5" style={{ background: 'color-mix(in srgb, var(--danger) 10%, transparent)', color: 'var(--danger)', border: '1px solid var(--danger)' }}>
+          <AlertCircle size={11} /> {fetchErr}
+        </div>
+      )}
+      {orModels && (
+        <div className="px-5 py-2 text-xs" style={{ color: 'var(--text-secondary)' }}>
+          Matched {matchCount} of {modelIds.length} models on OpenRouter.{matchCount < modelIds.length ? ' Unmatched models will have no pricing.' : ''}
+        </div>
+      )}
+
+      {/* Table */}
+      <div className="flex-1 overflow-auto">
+        <table className="w-full text-sm" style={{ borderCollapse: 'collapse' }}>
+          <thead>
+            <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-surface)', position: 'sticky', top: 0, zIndex: 1 }}>
+              <th style={{ ...thStyle, textAlign: 'left' }}>Model</th>
+              <th style={{ ...thStyle, textAlign: 'right' }}>Context</th>
+              <th style={{ ...thStyle, textAlign: 'right' }}>In /1M</th>
+              <th style={{ ...thStyle, textAlign: 'right' }}>Out /1M</th>
+            </tr>
+          </thead>
+          <tbody>
+            {modelIds.map((fullId, i) => {
+              const slash = fullId.indexOf('/')
+              const mid = slash >= 0 ? fullId.slice(slash + 1) : fullId
+              const or = orModels?.get(fullId)
+              const inputPerM  = or ? parseFloat(or.pricing.prompt)     * 1e6 : null
+              const outputPerM = or ? parseFloat(or.pricing.completion)  * 1e6 : null
+              return (
+                <tr key={fullId} style={{ borderBottom: i < modelIds.length - 1 ? '1px solid var(--border)' : 'none' }}
+                  onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-surface)')}
+                  onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                >
+                  <td style={tdStyle}>
+                    <div className="font-mono text-xs" style={{ color: 'var(--text-primary)' }}>{mid}</div>
+                    {or?.name && or.name !== mid && <div className="text-xs" style={{ color: 'var(--text-secondary)' }}>{or.name}</div>}
+                  </td>
+                  <td style={{ ...tdStyle, textAlign: 'right', fontFamily: 'monospace', fontSize: 12, color: 'var(--text-secondary)' }}>
+                    {or ? fmtTokens(or.context_length) : <span style={{ opacity: 0.3 }}>—</span>}
+                  </td>
+                  <td style={{ ...tdStyle, textAlign: 'right', fontFamily: 'monospace', fontSize: 12, color: inputPerM != null && inputPerM > 0 ? 'var(--text-primary)' : 'var(--text-secondary)' }}>
+                    {inputPerM != null ? fmtCost(parseFloat(or!.pricing.prompt)) : <span style={{ opacity: 0.3 }}>—</span>}
+                  </td>
+                  <td style={{ ...tdStyle, textAlign: 'right', fontFamily: 'monospace', fontSize: 12, color: outputPerM != null && outputPerM > 0 ? 'var(--text-primary)' : 'var(--text-secondary)' }}>
+                    {outputPerM != null ? fmtCost(parseFloat(or!.pricing.completion)) : <span style={{ opacity: 0.3 }}>—</span>}
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+// ── Main view ─────────────────────────────────────────────────────────────────
+
 export function ModelsView() {
-  const { providers, pluginEnabled, selectedId, loading, error, dirty, saving, load, selectProvider, setProviderEnabled, deleteProvider, save } = useModelsStore()
+  const { providers, agentDefaultModelIds, pluginEnabled, selectedId, loading, error, dirty, saving, load, selectProvider, setProviderEnabled, deleteProvider, save } = useModelsStore()
   const [addingProvider, setAddingProvider] = useState(false)
+  const [tab, setTab] = useState<'providers' | 'usage'>('providers')
+  const [selectedPluginId, setSelectedPluginId] = useState<string | null>(null)
 
   useEffect(() => { load() }, [])
 
   const selectedProvider = selectedId ? providers[selectedId] : null
   const providerIds = Object.keys(providers)
 
+  // Plugin-only providers: models in agentDefaultModelIds not covered by any provider entry
+  const providerModelIds = new Set(
+    Object.entries(providers).flatMap(([pid, p]) => p.models.map(m => `${pid}/${m.id}`))
+  )
+  const pluginProviders: Record<string, string[]> = {}
+  for (const fullId of agentDefaultModelIds) {
+    if (providerModelIds.has(fullId)) continue
+    const slash = fullId.indexOf('/')
+    const pid = slash >= 0 ? fullId.slice(0, slash) : 'other'
+    ;(pluginProviders[pid] ??= []).push(fullId)
+  }
+
+  const tabBtn = (t: typeof tab, label: string, icon: React.ReactNode) => (
+    <button
+      onClick={() => setTab(t)}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 5, padding: '6px 12px',
+        fontSize: 12, fontWeight: 500, cursor: 'pointer', border: 'none',
+        borderBottom: `2px solid ${tab === t ? 'var(--accent)' : 'transparent'}`,
+        background: 'none', color: tab === t ? 'var(--accent)' : 'var(--text-secondary)',
+        transition: 'color 0.1s',
+      }}
+    >
+      {icon}{label}
+    </button>
+  )
+
   return (
     <div className="flex flex-col flex-1 min-h-0">
+      {/* Tab bar */}
+      <div className="flex items-center px-2 shrink-0" style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-surface)' }}>
+        {tabBtn('providers', 'Providers', <Cpu size={12} />)}
+        {tabBtn('usage', 'Usage', <BarChart2 size={12} />)}
+      </div>
+
+      {tab === 'usage' && <UsageTab />}
+      {tab === 'providers' && <>
       {/* Dirty / save bar */}
       {(dirty || saving) && (
         <div className="flex items-center gap-3 px-4 py-2.5" style={{ background: 'color-mix(in srgb, var(--warning) 10%, var(--bg-surface))', borderBottom: '1px solid color-mix(in srgb, var(--warning) 30%, transparent)' }}>
@@ -403,16 +695,16 @@ export function ModelsView() {
           )}
 
           <div className="flex-1 overflow-y-auto py-1">
-            {providerIds.length === 0 && !loading && (
+            {providerIds.length === 0 && Object.keys(pluginProviders).length === 0 && !loading && (
               <p className="px-4 py-3 text-xs" style={{ color: 'var(--text-secondary)' }}>No providers in config</p>
             )}
             {providerIds.map(pid => {
-              const active = pid === selectedId
+              const active = pid === selectedId && !selectedPluginId
               const enabled = pluginEnabled[pid] !== false
               return (
                 <div key={pid}
                   className="group relative flex items-center gap-2.5 px-3 py-2.5 cursor-pointer"
-                  onClick={() => selectProvider(pid)}
+                  onClick={() => { selectProvider(pid); setSelectedPluginId(null) }}
                   style={{ background: active ? 'color-mix(in srgb, var(--accent) 12%, var(--bg-elevated))' : 'transparent', borderLeft: `3px solid ${active ? 'var(--accent)' : 'transparent'}`, transition: 'background 0.1s' }}
                   onMouseEnter={e => { if (!active) e.currentTarget.style.background = 'var(--bg-elevated)' }}
                   onMouseLeave={e => { if (!active) e.currentTarget.style.background = 'transparent' }}
@@ -437,6 +729,34 @@ export function ModelsView() {
                 </div>
               )
             })}
+
+            {/* Plugin-only providers */}
+            {Object.keys(pluginProviders).length > 0 && (
+              <>
+                <div className="px-3 pt-3 pb-1" style={{ borderTop: providerIds.length > 0 ? '1px solid var(--border)' : 'none', marginTop: providerIds.length > 0 ? 4 : 0 }}>
+                  <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--text-secondary)' }}>Via plugin</p>
+                </div>
+                {Object.entries(pluginProviders).map(([pid, ids]) => {
+                  const active = selectedPluginId === pid
+                  return (
+                    <div key={pid}
+                      className="flex items-center gap-2.5 px-3 py-2.5 cursor-pointer"
+                      onClick={() => { setSelectedPluginId(pid); selectProvider('') }}
+                      style={{ background: active ? 'color-mix(in srgb, var(--warning) 10%, var(--bg-elevated))' : 'transparent', borderLeft: `3px solid ${active ? 'var(--warning)' : 'transparent'}`, transition: 'background 0.1s' }}
+                      onMouseEnter={e => { if (!active) e.currentTarget.style.background = 'var(--bg-elevated)' }}
+                      onMouseLeave={e => { if (!active) e.currentTarget.style.background = 'transparent' }}
+                    >
+                      <Plug size={11} style={{ color: 'var(--warning)', flexShrink: 0 }} />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-mono truncate" style={{ color: 'var(--text-primary)' }}>{pid}</p>
+                        <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>{ids.length} model{ids.length !== 1 ? 's' : ''}</p>
+                      </div>
+                      {active && <ChevronRight size={11} style={{ color: 'var(--text-secondary)' }} />}
+                    </div>
+                  )
+                })}
+              </>
+            )}
           </div>
 
           {addingProvider ? (
@@ -449,7 +769,9 @@ export function ModelsView() {
         </div>
 
         {/* Right panel */}
-        {selectedId && selectedProvider ? (
+        {selectedPluginId && pluginProviders[selectedPluginId] ? (
+          <PluginProviderPanel id={selectedPluginId} modelIds={pluginProviders[selectedPluginId]} />
+        ) : selectedId && selectedProvider ? (
           <ProviderPanel key={selectedId} id={selectedId} provider={selectedProvider} />
         ) : (
           <div className="flex-1 flex flex-col items-center justify-center gap-2" style={{ background: 'var(--bg-primary)' }}>
@@ -460,6 +782,7 @@ export function ModelsView() {
           </div>
         )}
       </div>
+      </>}
     </div>
   )
 }

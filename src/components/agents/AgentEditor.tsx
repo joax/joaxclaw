@@ -3,9 +3,9 @@ import { X, Plus, Trash2, FileText, Pencil, Loader2, AlertCircle, Check, Save } 
 import Editor from '@monaco-editor/react'
 import type { Agent, AgentFile } from '../../lib/types'
 import { useAgentsStore } from '../../store/agents'
-import { useMetricsStore } from '../../store/metrics'
 import { Btn } from '../ui/Btn'
 import { Input } from '../ui/Input'
+import { ModelPicker } from '../ui/ModelPicker'
 
 interface Props { agent: Agent; onClose: () => void }
 
@@ -461,75 +461,6 @@ function FileEditorModal({ filename, content, loading, error, saving, saved, isD
   )
 }
 
-// ── Model picker combobox ─────────────────────────────────────────────────────
-
-function ModelPicker({ value, onChange, placeholder }: { value: string; onChange: (v: string) => void; placeholder?: string }) {
-  const { ollamaModels } = useMetricsStore()
-  const [open, setOpen] = useState(false)
-  const [search, setSearch] = useState(value)
-  const containerRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => { setSearch(value) }, [value])
-
-  const fullName = (name: string) => `ollama/${name}`
-  const filtered = ollamaModels.filter(m => {
-    if (!search) return true
-    const q = search.toLowerCase()
-    return fullName(m.name).includes(q) || m.name.toLowerCase().includes(q)
-  })
-  const showDropdown = open && (filtered.length > 0 || ollamaModels.length > 0)
-
-  function handleSelect(name: string) {
-    const full = fullName(name)
-    onChange(full); setSearch(full); setOpen(false)
-  }
-
-  return (
-    <div ref={containerRef} style={{ position: 'relative' }}>
-      <input
-        value={search}
-        onChange={e => { setSearch(e.target.value); onChange(e.target.value); setOpen(true) }}
-        onFocus={e => { setOpen(true); e.currentTarget.style.borderColor = 'var(--accent)' }}
-        onBlur={e => { setTimeout(() => setOpen(false), 120); e.currentTarget.style.borderColor = 'var(--border)' }}
-        placeholder={placeholder}
-        style={{
-          display: 'block', width: '100%', padding: '7px 12px',
-          borderRadius: 'var(--radius)', border: '1px solid var(--border)',
-          background: 'var(--bg-elevated)', color: 'var(--text-primary)',
-          fontSize: 14, outline: 'none', boxSizing: 'border-box'
-        }}
-      />
-      {showDropdown && (
-        <div style={{
-          position: 'absolute', left: 0, right: 0, top: '100%', marginTop: 4,
-          zIndex: 100, paddingBlock: 4, maxHeight: 220, overflowY: 'auto',
-          background: 'var(--bg-elevated)', border: '1px solid var(--border)',
-          borderRadius: 'var(--radius)', boxShadow: '0 6px 16px rgba(0,0,0,0.35)'
-        }}>
-          {filtered.length === 0 && (
-            <p style={{ padding: '8px 12px', fontSize: 12, color: 'var(--text-secondary)' }}>No matching models</p>
-          )}
-          {filtered.map(m => (
-            <button key={m.name} onMouseDown={() => handleSelect(m.name)} style={{
-              display: 'flex', alignItems: 'center', gap: 8, width: '100%',
-              padding: '7px 12px', background: 'none', border: 'none',
-              cursor: 'pointer', color: 'var(--text-primary)', textAlign: 'left'
-            }}
-              onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-primary)')}
-              onMouseLeave={e => (e.currentTarget.style.background = 'none')}
-            >
-              <span style={{ width: 7, height: 7, borderRadius: '50%', flexShrink: 0, background: m.loaded ? 'var(--success)' : 'var(--border)' }} />
-              <span style={{ flex: 1, fontFamily: 'monospace', fontSize: 13 }}>
-                <span style={{ opacity: 0.5 }}>ollama/</span>{m.name}
-              </span>
-              {m.size > 0 && <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>{(m.size / 1e9).toFixed(1)} GB</span>}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 

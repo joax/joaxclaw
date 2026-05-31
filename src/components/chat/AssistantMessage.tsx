@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
-import { ChevronDown, ChevronRight, BrainCircuit, CheckCircle2, XCircle, Loader2, Clock, Hourglass, Terminal, PenLine, FileText, Search, Globe, Plug, Bot, Wrench, FolderSearch } from 'lucide-react'
-import type { ChatMessage, ToolCall } from '../../lib/types'
+import { ChevronDown, ChevronRight, BrainCircuit, CheckCircle2, XCircle, Loader2, Clock, Hourglass, Terminal, PenLine, FileText, Search, Globe, Plug, Bot, Wrench, FolderSearch, AlertTriangle } from 'lucide-react'
+import type { ChatMessage, ContextOverflowInfo, ToolCall } from '../../lib/types'
 import { useExtensionsStore } from '../../store/extensions'
 import { formatTimestamp } from '../../lib/dateUtils'
 import { MarkdownContent } from './MarkdownContent'
@@ -82,8 +82,14 @@ export function AssistantMessage({ message, showTools = true, showReasoning = tr
           <WaitingBlock sessionKey={message.waitingForSession} />
         )}
 
+        {/* Context overflow indicator */}
+        {message.contextOverflow && (
+          <OverflowBlock overflow={message.contextOverflow} />
+        )}
+
         {/* Message content */}
-        {(message.content || message.streaming || message.attachments?.length) && (
+        {(message.content || message.streaming || message.attachments?.length ||
+          (!message.streaming && !hasTools && !hasReasoning && !message.contextOverflow)) && (
           <div
             className="px-4 py-3 text-sm"
             style={{
@@ -96,8 +102,10 @@ export function AssistantMessage({ message, showTools = true, showReasoning = tr
           >
             {message.content ? (
               <MarkdownContent text={message.content} streaming={message.streaming} />
+            ) : message.streaming ? (
+              <span className="streaming-cursor" style={{ color: 'var(--text-secondary)' }} />
             ) : (
-              message.streaming && <span className="streaming-cursor" style={{ color: 'var(--text-secondary)' }} />
+              <span style={{ color: 'var(--text-secondary)', fontStyle: 'italic', fontSize: 12 }}>No response</span>
             )}
             {message.attachments?.filter(a => a.type === 'image').map((a, i) => (
               <WorkspaceImage key={i} src={a.url ?? `data:${a.mediaType ?? 'image/png'};base64,${a.data}`} alt={a.name} />
@@ -486,6 +494,44 @@ function WaitingBlock({ sessionKey }: { sessionKey?: string }) {
         ) : 'sub-session'} to finish
       </span>
       <span style={{ letterSpacing: 1, minWidth: '1.5ch' }}>{'.'.repeat(dots)}</span>
+    </div>
+  )
+}
+
+function OverflowBlock({ overflow }: { overflow: ContextOverflowInfo }) {
+  const tokens = typeof overflow.compactionTokens === 'number'
+    ? overflow.compactionTokens.toLocaleString()
+    : null
+
+  return (
+    <div
+      className="mb-2 flex flex-col gap-1.5 px-3 py-2.5 text-xs"
+      style={{
+        background: 'color-mix(in srgb, var(--warning) 8%, transparent)',
+        border: '1px solid color-mix(in srgb, var(--warning) 30%, transparent)',
+        borderRadius: 'var(--radius)',
+        color: 'var(--warning)'
+      }}
+    >
+      <div className="flex items-center gap-2 font-semibold">
+        <AlertTriangle size={13} style={{ flexShrink: 0 }} />
+        <span>Context window exceeded</span>
+      </div>
+      <div style={{ color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+        {overflow.messages != null && tokens != null
+          ? `The conversation reached ${overflow.messages} messages (${tokens} tokens), which is too long for the model.`
+          : overflow.messages != null
+          ? `The conversation reached ${overflow.messages} messages, which is too long for the model.`
+          : overflow.error}
+        {overflow.provider && (
+          <span className="block mt-1 font-mono" style={{ fontSize: 10, color: 'var(--text-secondary)', opacity: 0.7 }}>
+            {overflow.provider}
+          </span>
+        )}
+      </div>
+      <div style={{ color: 'var(--text-secondary)', opacity: 0.8 }}>
+        Start a new conversation to continue.
+      </div>
     </div>
   )
 }

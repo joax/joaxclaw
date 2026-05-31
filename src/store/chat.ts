@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { nanoid } from '../lib/nanoid'
-import type { Conversation, ChatMessage, ToolCall, MediaAttachment } from '../lib/types'
+import type { Conversation, ChatMessage, ContextOverflowInfo, ToolCall, MediaAttachment } from '../lib/types'
 import { gatewayClient } from '../lib/gateway'
 import { useExtensionsStore } from './extensions'
 
@@ -46,9 +46,25 @@ type UpdateFn = (updater: (msg: ChatMessage) => ChatMessage) => void
 // Shared chat event handler — used by both sendMessage and watchSession
 function attachChatStream(convId: string, sessionKey: string, update: UpdateFn): void {
   const unsub = gatewayClient.on((frame) => {
-    if (frame.event !== 'chat' && frame.event !== 'agent') return
-    const p = frame.payload as ChatEventPayload & AgentEventPayload
+    if (frame.event !== 'chat' && frame.event !== 'agent' && frame.event !== 'context-overflow-diag') return
+    const p = frame.payload as ChatEventPayload & AgentEventPayload & {
+      provider?: string; messages?: number; compactionTokens?: number
+      observedTokens?: number | string; error?: string; diagId?: string
+    }
     if (p.sessionKey !== sessionKey) return
+
+    if (frame.event === 'context-overflow-diag') {
+      const overflow: ContextOverflowInfo = {
+        provider: p.provider,
+        messages: p.messages,
+        compactionTokens: p.compactionTokens,
+        observedTokens: p.observedTokens,
+        error: p.error ?? 'Context overflow',
+        diagId: p.diagId
+      }
+      update(m => ({ ...m, contextOverflow: overflow }))
+      return
+    }
 
     if (frame.event === 'agent') {
       // Thinking stream: real-time reasoning text
@@ -121,7 +137,11 @@ function attachChatStream(convId: string, sessionKey: string, update: UpdateFn):
       activeStreams.delete(convId)
       unsub()
     } else if (p.state === 'aborted') {
-      update(m => ({ ...m, streaming: false }))
+      update(m => ({
+        ...m,
+        streaming: false,
+        ...(p.errorMessage && !m.content ? { content: `Aborted: ${p.errorMessage}` } : {})
+      }))
       activeStreams.delete(convId)
       unsub()
     }
@@ -135,7 +155,7 @@ interface ChatState {
 
   newConversation: (agentId: string, agentName: string, sessionKey?: string) => string
   selectConversation: (id: string) => void
-  sendMessage: (convId: string, text: string) => Promise<void>
+  sendMessage: (convId: string, text: string, attachments?: MediaAttachment[]) => Promise<void>
   abortStream: (convId: string) => Promise<void>
   watchSession: (convId: string, sessionKey: string) => void
   deleteConversation: (id: string) => void
@@ -349,12 +369,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
     await gatewayClient.request('sessions.abort', { key: entry.sessionKey }).catch(() => {})
   },
 
-  async sendMessage(convId, text) {
+  async sendMessage(convId, text, attachments) {
     const userMsg: ChatMessage = {
       id: nanoid(),
       sessionId: '',
       role: 'user',
       content: text,
+      attachments: attachments?.length ? attachments : undefined,
       createdAt: new Date().toISOString()
     }
 
@@ -362,8 +383,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
       conversations: s.conversations.map(c =>
         c.id !== convId ? c : {
           ...c,
-          title: c.messages.length === 0 ? makeTitle(text) : c.title,
-          lastMessage: text,
+          title: c.messages.length === 0 ? makeTitle(text || 'Media') : c.title,
+          lastMessage: text || (attachments?.length ? `[${attachments.length} attachment${attachments.length > 1 ? 's' : ''}]` : ''),
           lastAt: userMsg.createdAt,
           messages: [...c.messages, userMsg]
         }
@@ -418,6 +439,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       await gatewayClient.request('chat.send', {
         sessionKey,
         message: text,
+        ...(attachments?.length ? { attachments } : {}),
         idempotencyKey: nanoid(16)
       })
     } catch (err) {

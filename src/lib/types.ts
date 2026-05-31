@@ -55,10 +55,10 @@ export interface Session {
   startedAt?: number
   hasActiveRun?: boolean
   isHeartbeat?: boolean
-  contextTokens?: number
-  inputTokens?: number
-  outputTokens?: number
-  totalTokens?: number
+  contextTokens?: number   // context window limit (max capacity), not current usage
+  inputTokens?: number    // cumulative input tokens across all runs in the session
+  outputTokens?: number   // cumulative output tokens across all runs
+  totalTokens?: number    // last-run input+output; best approximation of current context size
   lastMessage?: string
 }
 
@@ -83,6 +83,15 @@ export interface ToolCall {
   pluginId?: string
 }
 
+export interface ContextOverflowInfo {
+  provider?: string
+  messages?: number
+  compactionTokens?: number
+  observedTokens?: number | string
+  error: string
+  diagId?: string
+}
+
 export interface ChatMessage {
   id: string
   sessionId: string
@@ -95,6 +104,7 @@ export interface ChatMessage {
   streaming?: boolean
   reasoningStreaming?: boolean
   waitingForSession?: string   // key of sub-session being awaited, if known
+  contextOverflow?: ContextOverflowInfo
 }
 
 export interface Conversation {
@@ -249,7 +259,6 @@ export interface GwModelCost {
 export interface GwModelCompat {
   supportsTools?: boolean
   supportsUsageInStreaming?: boolean
-  supportsVision?: boolean
 }
 
 export interface GwModelDef {
