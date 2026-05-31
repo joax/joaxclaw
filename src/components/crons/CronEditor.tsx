@@ -3,6 +3,7 @@ import { X, Check, AlertCircle, ChevronDown } from 'lucide-react'
 import type { CronJob, CronSchedule, CronPayload, CronDelivery } from '../../lib/types'
 import { useCronsStore } from '../../store/crons'
 import { Btn } from '../ui/Btn'
+import { ModelPicker } from '../ui/ModelPicker'
 
 // ── Duration helpers ──────────────────────────────────────────────────────────
 
@@ -380,7 +381,7 @@ export function CronEditor({ job, onClose }: Props) {
                       placeholder="Check for new tasks and update the status." />
                   </Field>
                   <Field label="Model" hint="Override the agent's default model for this job. Leave blank to use the agent default.">
-                    <TextInput value={payloadModel} onChange={setPayloadModel} placeholder="ollama:qwen3.5:9b" mono />
+                    <ModelPicker value={payloadModel} onChange={setPayloadModel} placeholder="Leave blank to use agent default" inputStyle={{ fontSize: 13 }} />
                   </Field>
                   <Field label="Options">
                     <div className="space-y-3">

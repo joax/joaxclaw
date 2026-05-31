@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react'
-import { Plus, Search, Trash2, MessageSquare, Wrench, Brain, Radio, Heart } from 'lucide-react'
+import { Plus, Search, Trash2, MessageSquare, Wrench, Brain, Radio, Heart, Layers } from 'lucide-react'
 import { useChatStore } from '../../store/chat'
 import { useAgentsStore } from '../../store/agents'
 import { useSessionsStore } from '../../store/sessions'
+import { useModelsStore } from '../../store/models'
 import { MessageThread } from './MessageThread'
 import { MessageInput } from './MessageInput'
 import { Btn } from '../ui/Btn'
@@ -22,6 +23,10 @@ export function ChatView() {
   const [showNewMenu, setShowNewMenu] = useState(false)
   const [showTools, setShowTools] = useState(true)
   const [showReasoning, setShowReasoning] = useState(true)
+  const [showContext, setShowContext] = useState(false)
+  const { load: loadModels } = useModelsStore()
+
+  useEffect(() => { if (showContext) loadModels() }, [showContext])
 
   useEffect(() => { fetchAgents() }, [])
 
@@ -229,9 +234,18 @@ export function ChatView() {
                   icon={<Wrench size={12} />}
                   label="Actions"
                 />
+                <ToggleBtn
+                  active={showContext}
+                  onClick={() => setShowContext(v => !v)}
+                  icon={<Layers size={12} />}
+                  label="Context"
+                />
               </div>
             </div>
 
+            {showContext && activeConv.sessionKey && (
+              <ContextBar sessionKey={activeConv.sessionKey} />
+            )}
             <MessageThread conv={activeConv} showTools={showTools} showReasoning={showReasoning} />
             <MessageInput convId={activeConv.id} />
           </>
@@ -245,6 +259,68 @@ export function ChatView() {
           </div>
         )}
       </div>
+    </div>
+  )
+}
+
+function ContextBar({ sessionKey }: { sessionKey: string }) {
+  const session = useSessionsStore(s => s.sessions.find(sess => sess.key === sessionKey))
+  const providers = useModelsStore(s => s.providers)
+
+  const contextWindow = (() => {
+    if (!session?.model) return undefined
+    const raw = session.model
+    const slash = raw.indexOf('/')
+    const modelId = slash >= 0 ? raw.slice(slash + 1) : raw
+    const providerId = slash >= 0 ? raw.slice(0, slash) : session.modelProvider
+    return providers[providerId ?? '']?.models.find(m => m.id === modelId)?.contextWindow
+  })()
+
+  const tokens = session?.totalTokens
+
+  const fillPct = tokens != null && contextWindow
+    ? Math.min((tokens / contextWindow) * 100, 100)
+    : null
+
+  const fillColor = fillPct == null ? 'var(--accent)'
+    : fillPct > 90 ? 'var(--danger)'
+    : fillPct > 70 ? 'var(--warning)'
+    : 'var(--success)'
+
+  if (!session) return null
+
+  return (
+    <div
+      className="flex items-center gap-4 px-4 py-2 text-xs shrink-0"
+      style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-elevated)' }}
+    >
+      <div className="flex items-center gap-1.5">
+        <span style={{ color: 'var(--text-secondary)' }}>Context</span>
+        <span className="font-mono font-semibold" style={{ color: 'var(--text-primary)' }}>
+          {tokens != null ? tokens.toLocaleString() : '—'}
+        </span>
+        {contextWindow && (
+          <span style={{ color: 'var(--text-secondary)' }}>/ {contextWindow.toLocaleString()}</span>
+        )}
+        <span style={{ color: 'var(--text-secondary)' }}>tokens</span>
+      </div>
+
+      {fillPct != null && (
+        <div className="flex items-center gap-1.5" style={{ minWidth: 120 }}>
+          <div style={{ flex: 1, height: 4, background: 'var(--bg-primary)', borderRadius: 2 }}>
+            <div style={{ width: `${fillPct}%`, height: '100%', background: fillColor, borderRadius: 2, transition: 'width 0.4s' }} />
+          </div>
+          <span className="font-mono" style={{ color: fillColor, minWidth: '3ch', textAlign: 'right' }}>
+            {fillPct.toFixed(0)}%
+          </span>
+        </div>
+      )}
+
+      {session.model && (
+        <span className="font-mono ml-auto" style={{ color: 'var(--text-secondary)', fontSize: 10, opacity: 0.7 }}>
+          {session.modelProvider ? `${session.modelProvider}/` : ''}{session.model}
+        </span>
+      )}
     </div>
   )
 }

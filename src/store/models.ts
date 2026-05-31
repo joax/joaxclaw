@@ -5,6 +5,8 @@ import type { GwModelProvider, GwModelDef } from '../lib/types'
 interface ModelsState {
   // config.models.providers  — keyed by provider id
   providers: Record<string, GwModelProvider>
+  // config.agents.defaults.models keys — "provider/modelId" strings (includes plugin-provided models)
+  agentDefaultModelIds: string[]
   // config.plugins.entries   — only the enabled flag per provider id
   pluginEnabled: Record<string, boolean>
 
@@ -31,6 +33,7 @@ interface ModelsState {
 
 export const useModelsStore = create<ModelsState>((set, get) => ({
   providers: {},
+  agentDefaultModelIds: [],
   pluginEnabled: {},
   selectedId: null,
   loading: false,
@@ -48,6 +51,10 @@ export const useModelsStore = create<ModelsState>((set, get) => ({
       const modelsSection = (config.models ?? {}) as Record<string, unknown>
       const providers = (modelsSection.providers ?? {}) as Record<string, GwModelProvider>
 
+      const agentsSection = (config.agents ?? {}) as Record<string, unknown>
+      const agentDefaults = (agentsSection.defaults ?? {}) as Record<string, unknown>
+      const agentDefaultModelIds = Object.keys((agentDefaults.models ?? {}) as Record<string, unknown>)
+
       const pluginsSection = (config.plugins ?? {}) as Record<string, unknown>
       const pluginEntries = (pluginsSection.entries ?? {}) as Record<string, { enabled?: boolean }>
       const pluginEnabled: Record<string, boolean> = {}
@@ -57,7 +64,7 @@ export const useModelsStore = create<ModelsState>((set, get) => ({
 
       const selectedId = get().selectedId ?? Object.keys(providers)[0] ?? null
 
-      set({ providers, pluginEnabled, selectedId, loading: false, dirty: false, error: null, _baseHash: snapshot.hash ?? null })
+      set({ providers, agentDefaultModelIds, pluginEnabled, selectedId, loading: false, dirty: false, error: null, _baseHash: snapshot.hash ?? null })
     } catch (e) {
       set({ loading: false, error: String(e) })
     }
