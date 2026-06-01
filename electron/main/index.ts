@@ -387,6 +387,30 @@ ipcMain.handle('obsidian:writeSkill', async (_event, vaults: Array<{ name: strin
   }
 })
 
+// ── IPC: JoaxClaw local store (~/.joaxclaw/store.json) ───────────────────────
+const joaxclawDir = join(homedir(), '.joaxclaw')
+const joaxclawStorePath = join(joaxclawDir, 'store.json')
+
+ipcMain.handle('localstore:read', async () => {
+  try {
+    if (!existsSync(joaxclawStorePath)) return { ok: true, data: {} }
+    const text = await readFile(joaxclawStorePath, 'utf8')
+    return { ok: true, data: JSON.parse(text) }
+  } catch (e: unknown) {
+    return { ok: false, error: String(e), data: {} }
+  }
+})
+
+ipcMain.handle('localstore:write', async (_event, data: unknown) => {
+  try {
+    await mkdir(joaxclawDir, { recursive: true })
+    await writeFile(joaxclawStorePath, JSON.stringify(data, null, 2), 'utf8')
+    return { ok: true }
+  } catch (e: unknown) {
+    return { ok: false, error: String(e) }
+  }
+})
+
 // ── IPC: System metrics ───────────────────────────────────────────────────────
 ipcMain.handle('metrics:get', async () => {
   try {

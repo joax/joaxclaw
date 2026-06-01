@@ -2,9 +2,12 @@ import { useEffect, useState, useRef, useCallback } from 'react'
 import { Bot, MessageSquare, Wrench, Loader2, BookOpen, FolderOpen, X } from 'lucide-react'
 import { useAgentsStore } from '../../store/agents'
 import { useObsidianStore } from '../../store/obsidian'
+import { useSessionsStore } from '../../store/sessions'
+import { useCronsStore } from '../../store/crons'
 import { gatewayClient } from '../../lib/gateway'
 import { AgentEditor } from './AgentEditor'
-import type { Agent } from '../../lib/types'
+import { ModelIcon } from '../ui/ModelIcon'
+import type { Agent, Session } from '../../lib/types'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -161,9 +164,24 @@ function shortPath(ws: string): string {
   return parts.length <= 2 ? ws : `…/${parts.slice(-2).join('/')}`
 }
 
+// ── Running indicator ─────────────────────────────────────────────────────────
+
+function RunningDot() {
+  return (
+    <span style={{ position: 'absolute', top: 7, right: 7 }}>
+      <span style={{
+        display: 'block', width: 8, height: 8, borderRadius: '50%',
+        background: 'var(--success, #22c55e)',
+        boxShadow: '0 0 0 0 color-mix(in srgb, var(--success, #22c55e) 60%, transparent)',
+        animation: 'pulse-ring 1.5s ease-out infinite',
+      }} />
+    </span>
+  )
+}
+
 // ── Entry agent card (top block) ─────────────────────────────────────────────
 
-function EntryAgentCard({ agent, onClick }: { agent: Agent; onClick?: () => void }) {
+function EntryAgentCard({ agent, onClick, running }: { agent: Agent; onClick?: () => void; running?: boolean }) {
   const name = agent.identity?.name ?? agent.name ?? agent.id
   const model = agent.model?.primary ?? agent.agentRuntime?.id ?? ''
   const emoji = agent.identity?.emoji
@@ -176,16 +194,22 @@ function EntryAgentCard({ agent, onClick }: { agent: Agent; onClick?: () => void
     <div
       onClick={onClick}
       style={{
+        position: 'relative',
         display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5,
         padding: '10px 14px', borderRadius: 8, minWidth: 130,
-        background: 'color-mix(in srgb, var(--accent) 7%, var(--bg-elevated))',
-        border: '1px solid color-mix(in srgb, var(--accent) 25%, var(--border))',
+        background: running
+          ? 'color-mix(in srgb, var(--success, #22c55e) 8%, var(--bg-elevated))'
+          : 'color-mix(in srgb, var(--accent) 7%, var(--bg-elevated))',
+        border: running
+          ? '1px solid color-mix(in srgb, var(--success, #22c55e) 40%, var(--border))'
+          : '1px solid color-mix(in srgb, var(--accent) 25%, var(--border))',
         cursor: onClick ? 'pointer' : 'default',
         transition: 'background 0.12s',
       }}
-      onMouseEnter={e => { if (onClick) e.currentTarget.style.background = 'color-mix(in srgb, var(--accent) 14%, var(--bg-elevated))' }}
-      onMouseLeave={e => { if (onClick) e.currentTarget.style.background = 'color-mix(in srgb, var(--accent) 7%, var(--bg-elevated))' }}
+      onMouseEnter={e => { if (onClick) e.currentTarget.style.background = running ? 'color-mix(in srgb, var(--success, #22c55e) 14%, var(--bg-elevated))' : 'color-mix(in srgb, var(--accent) 14%, var(--bg-elevated))' }}
+      onMouseLeave={e => { if (onClick) e.currentTarget.style.background = running ? 'color-mix(in srgb, var(--success, #22c55e) 8%, var(--bg-elevated))' : 'color-mix(in srgb, var(--accent) 7%, var(--bg-elevated))' }}
     >
+      {running && <RunningDot />}
       <span style={{ fontSize: 22, lineHeight: 1 }}>{emoji ?? '🤖'}</span>
       <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)', textAlign: 'center' }}>{name}</span>
       {model && (
@@ -195,9 +219,12 @@ function EntryAgentCard({ agent, onClick }: { agent: Agent; onClick?: () => void
               {provider}
             </span>
           )}
-          <span style={{ fontSize: 10, fontFamily: 'monospace', color: 'var(--text-secondary)', textAlign: 'center', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {modelId}
-          </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
+            <ModelIcon model={model} size={9} />
+            <span style={{ fontSize: 10, fontFamily: 'monospace', color: 'var(--text-secondary)', maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {modelId}
+            </span>
+          </div>
         </div>
       )}
     </div>
@@ -206,7 +233,7 @@ function EntryAgentCard({ agent, onClick }: { agent: Agent; onClick?: () => void
 
 // ── Subagent row (center block, with inline workspace) ────────────────────────
 
-function AgentRow({ agent, onClick }: { agent: Agent; onClick?: () => void }) {
+function AgentRow({ agent, onClick, running }: { agent: Agent; onClick?: () => void; running?: boolean }) {
   const name = agent.identity?.name ?? agent.name ?? agent.id
   const model = agent.model?.primary ?? agent.agentRuntime?.id ?? ''
   const emoji = agent.identity?.emoji
@@ -215,16 +242,22 @@ function AgentRow({ agent, onClick }: { agent: Agent; onClick?: () => void }) {
     <div
       onClick={onClick}
       style={{
+        position: 'relative',
         display: 'flex', alignItems: 'flex-start', gap: 8, padding: '7px 9px',
         borderRadius: 6,
-        background: 'color-mix(in srgb, var(--bg-primary) 60%, var(--bg-elevated))',
-        border: '1px solid var(--border)',
+        background: running
+          ? 'color-mix(in srgb, var(--success, #22c55e) 6%, var(--bg-elevated))'
+          : 'color-mix(in srgb, var(--bg-primary) 60%, var(--bg-elevated))',
+        border: running
+          ? '1px solid color-mix(in srgb, var(--success, #22c55e) 35%, var(--border))'
+          : '1px solid var(--border)',
         cursor: onClick ? 'pointer' : 'default',
         transition: 'background 0.12s',
       }}
-      onMouseEnter={e => { if (onClick) e.currentTarget.style.background = 'var(--bg-elevated)' }}
-      onMouseLeave={e => { if (onClick) e.currentTarget.style.background = 'color-mix(in srgb, var(--bg-primary) 60%, var(--bg-elevated))' }}
+      onMouseEnter={e => { if (onClick) e.currentTarget.style.background = running ? 'color-mix(in srgb, var(--success, #22c55e) 12%, var(--bg-elevated))' : 'var(--bg-elevated)' }}
+      onMouseLeave={e => { if (onClick) e.currentTarget.style.background = running ? 'color-mix(in srgb, var(--success, #22c55e) 6%, var(--bg-elevated))' : 'color-mix(in srgb, var(--bg-primary) 60%, var(--bg-elevated))' }}
     >
+      {running && <RunningDot />}
       <span style={{ fontSize: 16, lineHeight: 1.25, flexShrink: 0, marginTop: 1 }}>
         {emoji ?? '🤖'}
       </span>
@@ -233,8 +266,11 @@ function AgentRow({ agent, onClick }: { agent: Agent; onClick?: () => void }) {
           {name}
         </span>
         {model && (
-          <div style={{ fontSize: 10, fontFamily: 'monospace', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 1 }}>
-            {model}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 3, marginTop: 1 }}>
+            <ModelIcon model={model} size={9} />
+            <span style={{ fontSize: 10, fontFamily: 'monospace', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {model}
+            </span>
           </div>
         )}
         {agent.workspace && (
@@ -292,9 +328,12 @@ function ChannelCard({ channel, boundAgent, onClick }: { channel: ChannelInfo; b
               {provider}
             </span>
           )}
-          <span style={{ fontSize: 10, fontFamily: 'monospace', color: 'var(--text-secondary)', textAlign: 'center', maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {modelId}
-          </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
+            <ModelIcon model={model} size={9} />
+            <span style={{ fontSize: 10, fontFamily: 'monospace', color: 'var(--text-secondary)', maxWidth: 130, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {modelId}
+            </span>
+          </div>
         </div>
       )}
     </div>
@@ -305,9 +344,10 @@ function ChannelCard({ channel, boundAgent, onClick }: { channel: ChannelInfo; b
 
 interface SvgLine { key: string; path: string }
 
-function TopSection({ channels, entryAgents, onSelectAgent, onSelectChannel }: {
+function TopSection({ channels, entryAgents, activeAgentIds, onSelectAgent, onSelectChannel }: {
   channels: ChannelInfo[]
   entryAgents: Agent[]
+  activeAgentIds: Set<string>
   onSelectAgent: (a: Agent) => void
   onSelectChannel: (c: ChannelInfo) => void
 }) {
@@ -390,7 +430,7 @@ function TopSection({ channels, entryAgents, onSelectAgent, onSelectChannel }: {
             ? <Empty text="No entry agents — all agents are sub-agents" />
             : entryAgents.map(a => (
                 <div key={a.id} ref={el => { if (el) agRefs.current.set(a.id, el); else agRefs.current.delete(a.id) }}>
-                  <EntryAgentCard agent={a} onClick={() => onSelectAgent(a)} />
+                  <EntryAgentCard agent={a} running={activeAgentIds.has(a.id)} onClick={() => onSelectAgent(a)} />
                 </div>
               ))
           }
@@ -457,20 +497,98 @@ function ChannelPanel({ channel, boundAgent, onClose }: {
 
 // ── Main view ─────────────────────────────────────────────────────────────────
 
+function sessionAgentId(key: string): string {
+  const atIdx = key.indexOf('@')
+  return atIdx > 0 ? key.slice(0, atIdx) : key
+}
+
+const TERMINAL_STATUSES = new Set(['idle', 'done', 'failed', 'killed', 'timeout'])
+
+function sessionIsRunning(s: Session): boolean {
+  if (s.status && TERMINAL_STATUSES.has(s.status)) return false
+  if (s.hasActiveRun === false) return false
+  if (s.status === 'running') return true
+  return s.hasActiveRun ?? false
+}
+
+// Probe the gateway for background/isolated session data.
+// Tries tasks.list and sessions.list with broader params — logs raw results
+// so we can see the actual gateway response shapes.
+async function probeBackgroundTasks(): Promise<string[]> {
+  const agentIds: string[] = []
+
+  // ── Probe 1: tasks.list ────────────────────────────────────────────────────
+  try {
+    const res = await gatewayClient.request<unknown>('tasks.list', {})
+    console.log('[AgentSystemView] tasks.list response:', res)
+    const tasks = (res as Record<string, unknown>)?.tasks
+    if (Array.isArray(tasks)) {
+      for (const t of tasks) {
+        const task = t as Record<string, unknown>
+        const isRunning = task.status === 'running' || task.status === 'active'
+        const aid = task.agentId ?? task.agent_id
+        if (isRunning && typeof aid === 'string') agentIds.push(aid)
+      }
+    }
+  } catch (e) {
+    console.log('[AgentSystemView] tasks.list not available:', e)
+  }
+
+  // ── Probe 2: sessions.list with includeAll / includeIsolated ───────────────
+  try {
+    const res = await gatewayClient.request<{ sessions?: unknown[] }>('sessions.list', {
+      includeAll: true,
+      includeIsolated: true,
+      status: 'running',
+    })
+    console.log('[AgentSystemView] sessions.list(includeAll) response:', res)
+    for (const s of res.sessions ?? []) {
+      const sess = s as Record<string, unknown>
+      const key = typeof sess.key === 'string' ? sess.key : ''
+      const isRunning = sess.status === 'running' || sess.hasActiveRun === true
+      if (isRunning && key) {
+        const aid = typeof sess.agentId === 'string' ? sess.agentId : sessionAgentId(key)
+        if (aid) agentIds.push(aid)
+      }
+    }
+  } catch (e) {
+    console.log('[AgentSystemView] sessions.list(includeAll) failed:', e)
+  }
+
+  return agentIds
+}
+
 export function AgentSystemView() {
-  const { agents } = useAgentsStore()
+  const { agents, fetch: fetchAgents } = useAgentsStore()
   const { vaults, loadConfig } = useObsidianStore()
+  const sessions = useSessionsStore(s => s.sessions)
+  const fetchSessions = useSessionsStore(s => s.fetch)
+  const cronJobs = useCronsStore(s => s.jobs)
+  const cronRunningNow = useCronsStore(s => s.runningNow)
+  const fetchCronJobs = useCronsStore(s => s.fetch)
   const [data, setData] = useState<OverviewData | null>(null)
   const [loading, setLoading] = useState(true)
   const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null)
   const [selectedChannel, setSelectedChannel] = useState<ChannelInfo | null>(null)
+  const [backgroundAgentIds, setBackgroundAgentIds] = useState<string[]>([])
 
   useEffect(() => {
     loadConfig()
+    fetchAgents()
+    fetchCronJobs()
     setLoading(true)
     loadOverviewData()
       .then(d => { setData(d); setLoading(false) })
       .catch(() => setLoading(false))
+    fetchSessions()
+    const t = setInterval(fetchSessions, 10_000)
+
+    // Probe gateway for background sessions; repeat on same cadence
+    const runProbe = () => probeBackgroundTasks().then(ids => setBackgroundAgentIds(ids))
+    runProbe()
+    const tp = setInterval(runProbe, 10_000)
+
+    return () => { clearInterval(t); clearInterval(tp) }
   }, [])
 
   if (loading) {
@@ -485,7 +603,22 @@ export function AgentSystemView() {
   const entryAgents = agents.filter(a => !allSubIds.has(a.id))
   const subAgents   = agents.filter(a =>  allSubIds.has(a.id))
 
+  // Active agent IDs from open sessions (user chats)
+  const activeAgentIds = new Set(sessions.filter(sessionIsRunning).map(s => sessionAgentId(s.key)))
+
+  // Agents running via cron-triggered isolated sessions
+  // Mirror CronsView: runningAtMs (scheduled) OR runningNow (manually triggered)
+  for (const job of cronJobs) {
+    if ((job.state?.runningAtMs || cronRunningNow.has(job.id)) && job.agentId) {
+      activeAgentIds.add(job.agentId)
+    }
+  }
+
+  // Agents found via gateway background task probes (tasks.list / sessions.list+includeAll)
+  for (const aid of backgroundAgentIds) activeAgentIds.add(aid)
+
   return (
+    <>
     <div style={{ flex: 1, overflow: 'auto', padding: '32px 40px', display: 'flex', alignItems: 'flex-start', justifyContent: 'center' }}>
       <div style={{
         display: 'grid',
@@ -503,6 +636,7 @@ export function AgentSystemView() {
         <TopSection
           channels={data?.channels ?? []}
           entryAgents={entryAgents}
+          activeAgentIds={activeAgentIds}
           onSelectAgent={setSelectedAgent}
           onSelectChannel={setSelectedChannel}
         />
@@ -514,7 +648,7 @@ export function AgentSystemView() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             {subAgents.length === 0
               ? <Empty text={agents.length === 0 ? 'No agents configured' : 'No sub-agent relationships configured'} />
-              : subAgents.map(a => <AgentRow key={a.id} agent={a} onClick={() => setSelectedAgent(a)} />)
+              : subAgents.map(a => <AgentRow key={a.id} agent={a} running={activeAgentIds.has(a.id)} onClick={() => setSelectedAgent(a)} />)
             }
           </div>
         </Block>
@@ -574,5 +708,6 @@ export function AgentSystemView() {
         onClose={() => setSelectedChannel(null)}
       />
     )}
+    </>
   )
 }

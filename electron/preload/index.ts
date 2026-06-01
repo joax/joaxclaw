@@ -42,6 +42,12 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke('obsidian:writeSkill', vaults)
   },
 
+  // JoaxClaw local persistent store (~/.joaxclaw/store.json)
+  localstore: {
+    read: () => ipcRenderer.invoke('localstore:read'),
+    write: (data: unknown) => ipcRenderer.invoke('localstore:write', data)
+  },
+
   // System info (resolved at load time in Node context)
   system: {
     homedir: homedir()

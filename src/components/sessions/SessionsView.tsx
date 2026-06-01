@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { RefreshCw, ChevronUp, ChevronDown, Square, MessageSquare, Trash2, Heart, Pencil, Cpu } from 'lucide-react'
+import { ModelIcon } from '../ui/ModelIcon'
 import { useSessionsStore } from '../../store/sessions'
 import { useChatStore } from '../../store/chat'
 import type { Session } from '../../lib/types'
@@ -284,6 +285,7 @@ function ModelCell({ session, running }: { session: Session; running: boolean })
         {running && (
           <Cpu size={10} className="animate-pulse" style={{ color: 'var(--success)', flexShrink: 0 }} />
         )}
+        <ModelIcon model={model} size={10} />
         <span
           className="text-xs font-mono truncate"
           style={{ color: running ? 'var(--success)' : 'var(--text-secondary)', maxWidth: 160 }}

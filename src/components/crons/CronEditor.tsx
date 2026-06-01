@@ -222,7 +222,7 @@ export function CronEditor({ job, onClose }: Props) {
     const resolvedSessionTarget = sessionTargetSelect === '__custom__' ? customSessionTarget.trim() : sessionTarget
     const patch: Record<string, unknown> = {
       name: name.trim(),
-      description: description.trim() || null,
+      description: description.trim(),
       enabled,
       deleteAfterRun,
       agentId: agentId.trim() || null,

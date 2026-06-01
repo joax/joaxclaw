@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Plus, Search, Trash2, MessageSquare, Wrench, Brain, Radio, Heart, Layers } from 'lucide-react'
+import { ModelIcon } from '../ui/ModelIcon'
 import { useChatStore } from '../../store/chat'
 import { useAgentsStore } from '../../store/agents'
 import { useSessionsStore } from '../../store/sessions'
@@ -274,6 +275,7 @@ function ContextBar({ sessionKey }: { sessionKey: string }) {
     const modelId = slash >= 0 ? raw.slice(slash + 1) : raw
     const providerId = slash >= 0 ? raw.slice(0, slash) : session.modelProvider
     return providers[providerId ?? '']?.models.find(m => m.id === modelId)?.contextWindow
+      ?? session?.contextTokens  // gateway reports this as the model's context window limit
   })()
 
   const tokens = session?.totalTokens
@@ -317,9 +319,12 @@ function ContextBar({ sessionKey }: { sessionKey: string }) {
       )}
 
       {session.model && (
-        <span className="font-mono ml-auto" style={{ color: 'var(--text-secondary)', fontSize: 10, opacity: 0.7 }}>
-          {session.modelProvider ? `${session.modelProvider}/` : ''}{session.model}
-        </span>
+        <div className="flex items-center gap-1 ml-auto">
+          <ModelIcon model={session.modelProvider ? `${session.modelProvider}/${session.model}` : session.model} size={10} />
+          <span className="font-mono" style={{ color: 'var(--text-secondary)', fontSize: 10, opacity: 0.7 }}>
+            {session.modelProvider ? `${session.modelProvider}/` : ''}{session.model}
+          </span>
+        </div>
       )}
     </div>
   )

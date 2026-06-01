@@ -105,6 +105,7 @@ export interface ChatMessage {
   reasoningStreaming?: boolean
   waitingForSession?: string   // key of sub-session being awaited, if known
   contextOverflow?: ContextOverflowInfo
+  model?: string               // actual model used for this assistant message (provider/model or bare model id)
 }
 
 export interface Conversation {

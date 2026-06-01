@@ -1,13 +1,18 @@
 import { create } from 'zustand'
 import { gatewayClient } from '../lib/gateway'
+import { readLocalStore, patchLocalStore } from '../lib/localStore'
 import type { GwModelProvider, GwModelDef } from '../lib/types'
 
 interface ModelsState {
-  // config.models.providers  — keyed by provider id
   providers: Record<string, GwModelProvider>
-  // config.agents.defaults.models keys — "provider/modelId" strings (includes plugin-provided models)
-  agentDefaultModelIds: string[]
-  // config.plugins.entries   — only the enabled flag per provider id
+  // provider IDs that came from plugin discovery (not originally in config.models.providers)
+  pluginProviderIds: Set<string>
+  // provider IDs present in the user's raw JSON5 config (not just plugin-injected runtime defaults)
+  _parsedProviderIds: Set<string>
+  // provider IDs the user explicitly added this session (not yet in the persisted config)
+  _userAddedProviderIds: Set<string>
+  // "pid/mid" keys for models added as stubs from plugin discovery (no user config yet)
+  _stubModelKeys: Set<string>
   pluginEnabled: Record<string, boolean>
 
   selectedId: string | null
@@ -33,7 +38,10 @@ interface ModelsState {
 
 export const useModelsStore = create<ModelsState>((set, get) => ({
   providers: {},
-  agentDefaultModelIds: [],
+  pluginProviderIds: new Set(),
+  _parsedProviderIds: new Set(),
+  _userAddedProviderIds: new Set(),
+  _stubModelKeys: new Set(),
   pluginEnabled: {},
   selectedId: null,
   loading: false,
@@ -45,11 +53,24 @@ export const useModelsStore = create<ModelsState>((set, get) => ({
   async load() {
     set({ loading: true, error: null })
     try {
-      const snapshot = await gatewayClient.request<{ config?: Record<string, unknown>; hash?: string }>('config.get', {})
+      const snapshot = await gatewayClient.request<{ config?: Record<string, unknown>; parsed?: Record<string, unknown>; hash?: string }>('config.get', {})
       const config = snapshot.config ?? {}
 
+      // Providers in the user's raw JSON5 config (excludes plugin-injected runtime defaults)
+      const parsedRaw = (snapshot.parsed ?? snapshot.config ?? {}) as Record<string, unknown>
+      const parsedModels = (parsedRaw['models'] ?? {}) as Record<string, unknown>
+      const parsedProviders = (parsedModels['providers'] ?? {}) as Record<string, unknown>
+      const _parsedProviderIds = new Set(Object.keys(parsedProviders))
+
       const modelsSection = (config.models ?? {}) as Record<string, unknown>
-      const providers = (modelsSection.providers ?? {}) as Record<string, GwModelProvider>
+      const configProvidersRaw = (modelsSection.providers ?? {}) as Record<string, GwModelProvider>
+      const configProviderIds = new Set(Object.keys(configProvidersRaw))
+
+      // Deep-copy so we can safely append stub models
+      const providers: Record<string, GwModelProvider> = {}
+      for (const [pid, p] of Object.entries(configProvidersRaw)) {
+        providers[pid] = { ...p, models: [...(p.models ?? [])] }
+      }
 
       const agentsSection = (config.agents ?? {}) as Record<string, unknown>
       const agentDefaults = (agentsSection.defaults ?? {}) as Record<string, unknown>
@@ -62,9 +83,46 @@ export const useModelsStore = create<ModelsState>((set, get) => ({
         pluginEnabled[id] = val.enabled !== false
       }
 
+      // Merge plugin-provided model IDs into providers as stub entries
+      const pluginProviderIds = new Set<string>()
+      const _stubModelKeys = new Set<string>()
+
+      for (const fullId of agentDefaultModelIds) {
+        const slash = fullId.indexOf('/')
+        const pid = slash >= 0 ? fullId.slice(0, slash) : 'other'
+        const mid = slash >= 0 ? fullId.slice(slash + 1) : fullId
+
+        if (!configProviderIds.has(pid)) {
+          pluginProviderIds.add(pid)
+        }
+
+        if (!providers[pid]) {
+          providers[pid] = { models: [] }
+        }
+
+        if (!providers[pid].models.find(m => m.id === mid)) {
+          providers[pid] = { ...providers[pid], models: [...providers[pid].models, { id: mid, name: mid }] }
+          _stubModelKeys.add(`${pid}/${mid}`)
+        }
+      }
+
+      // Overlay locally-persisted model pricing for plugin-managed providers
+      const localStore = await readLocalStore()
+      const localPricing = localStore.modelPricing ?? {}
+      for (const [pid, modelOverrides] of Object.entries(localPricing)) {
+        if (!providers[pid]) continue
+        providers[pid] = {
+          ...providers[pid],
+          models: providers[pid].models.map(m => {
+            const override = modelOverrides[m.id]
+            return override ? { ...m, cost: override } : m
+          }),
+        }
+      }
+
       const selectedId = get().selectedId ?? Object.keys(providers)[0] ?? null
 
-      set({ providers, agentDefaultModelIds, pluginEnabled, selectedId, loading: false, dirty: false, error: null, _baseHash: snapshot.hash ?? null })
+      set({ providers, pluginProviderIds, _parsedProviderIds, _userAddedProviderIds: new Set(), _stubModelKeys, pluginEnabled, selectedId, loading: false, dirty: false, error: null, _baseHash: snapshot.hash ?? null })
     } catch (e) {
       set({ loading: false, error: String(e) })
     }
@@ -89,6 +147,7 @@ export const useModelsStore = create<ModelsState>((set, get) => ({
     set(s => ({
       providers: { ...s.providers, [id]: provider },
       pluginEnabled: { ...s.pluginEnabled, [id]: true },
+      _userAddedProviderIds: new Set([...s._userAddedProviderIds, id]),
       selectedId: id,
       dirty: true,
     }))
@@ -100,8 +159,10 @@ export const useModelsStore = create<ModelsState>((set, get) => ({
       delete providers[id]
       const pluginEnabled = { ...s.pluginEnabled }
       delete pluginEnabled[id]
+      const pluginProviderIds = new Set(s.pluginProviderIds)
+      pluginProviderIds.delete(id)
       const selectedId = s.selectedId === id ? (Object.keys(providers)[0] ?? null) : s.selectedId
-      return { providers, pluginEnabled, selectedId, dirty: true }
+      return { providers, pluginEnabled, pluginProviderIds, selectedId, dirty: true }
     })
   },
 
@@ -113,7 +174,10 @@ export const useModelsStore = create<ModelsState>((set, get) => ({
       const models = existing >= 0
         ? provider.models.map((m, i) => i === existing ? model : m)
         : [...provider.models, model]
-      return { providers: { ...s.providers, [providerId]: { ...provider, models } }, dirty: true }
+      // Promote stub to configured model
+      const _stubModelKeys = new Set(s._stubModelKeys)
+      _stubModelKeys.delete(`${providerId}/${model.id}`)
+      return { providers: { ...s.providers, [providerId]: { ...provider, models } }, dirty: true, _stubModelKeys }
     })
   },
 
@@ -121,25 +185,66 @@ export const useModelsStore = create<ModelsState>((set, get) => ({
     set(s => {
       const provider = s.providers[providerId]
       if (!provider) return s
+      const _stubModelKeys = new Set(s._stubModelKeys)
+      _stubModelKeys.delete(`${providerId}/${modelId}`)
       return {
         providers: { ...s.providers, [providerId]: { ...provider, models: provider.models.filter(m => m.id !== modelId) } },
         dirty: true,
+        _stubModelKeys,
       }
     })
   },
 
   async save() {
-    const { providers, pluginEnabled, _baseHash } = get()
+    const { providers, pluginProviderIds, _parsedProviderIds, _userAddedProviderIds, pluginEnabled, _baseHash, _stubModelKeys } = get()
     set({ saving: true })
     try {
-      // Build minimal plugin entries patch — only touch the enabled field per provider
       const pluginEntries: Record<string, unknown> = {}
       for (const [id, enabled] of Object.entries(pluginEnabled)) {
         pluginEntries[id] = { enabled }
       }
 
+      // Build providers payload:
+      // - Only save providers that are in the user's JSON5 config OR explicitly added this session.
+      //   Plugin-managed providers (in runtime config but not in the user's parsed JSON5) are skipped
+      //   because the gateway deep-merges patches with plugin defaults — those defaults may include
+      //   invalid values (e.g. baseUrl: "") that fail schema validation and cannot be overridden via patch.
+      // - Strip empty-string fields: gateway rejects e.g. baseUrl: "" (must be >=1 chars or absent)
+      const providersToSave: Record<string, GwModelProvider> = {}
+      for (const [pid, p] of Object.entries(providers)) {
+        const isPluginOnly = pluginProviderIds.has(pid)
+        const isPluginManaged = !_parsedProviderIds.has(pid) && !_userAddedProviderIds.has(pid)
+        if (isPluginManaged) continue  // skip — gateway plugin owns this provider's config
+
+        const models = p.models.filter(m => !_stubModelKeys.has(`${pid}/${m.id}`))
+        const cleaned: GwModelProvider = {
+          ...(p.baseUrl ? { baseUrl: p.baseUrl } : {}),
+          ...(p.api     ? { api: p.api }         : {}),
+          ...(p.apiKey  ? { apiKey: p.apiKey }   : {}),
+          models,
+        }
+        if (!isPluginOnly) {
+          providersToSave[pid] = cleaned
+        } else if (models.length > 0 || cleaned.baseUrl || cleaned.api || cleaned.apiKey) {
+          providersToSave[pid] = cleaned
+        }
+      }
+
+      // Persist model pricing for plugin-managed providers to local store
+      const localPricing: Record<string, Record<string, { input: number; output: number; cacheRead: number; cacheWrite: number }>> = {}
+      for (const [pid, p] of Object.entries(providers)) {
+        const isPluginManaged = !_parsedProviderIds.has(pid) && !_userAddedProviderIds.has(pid)
+        if (!isPluginManaged) continue
+        const modelPricing: Record<string, { input: number; output: number; cacheRead: number; cacheWrite: number }> = {}
+        for (const m of p.models) {
+          if (m.cost) modelPricing[m.id] = m.cost
+        }
+        if (Object.keys(modelPricing).length > 0) localPricing[pid] = modelPricing
+      }
+      await patchLocalStore({ modelPricing: localPricing })
+
       const patch = {
-        models: { providers },
+        models: { providers: providersToSave },
         plugins: { entries: pluginEntries },
       }
       const params: Record<string, unknown> = { raw: JSON.stringify(patch) }

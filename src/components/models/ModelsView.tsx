@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react'
 import { Plus, Trash2, ChevronRight, Cpu, KeyRound, Link, Pencil, Check, X, RefreshCw, AlertCircle, Save, BarChart2, Plug } from 'lucide-react'
 import { useModelsStore } from '../../store/models'
 import { useSessionsStore } from '../../store/sessions'
+import { useCronsStore } from '../../store/crons'
+import { gatewayClient } from '../../lib/gateway'
 import type { GwModelDef, GwModelProvider } from '../../lib/types'
 import { Btn } from '../ui/Btn'
 import { Input } from '../ui/Input'
@@ -46,13 +48,41 @@ function Toggle({ value, onChange }: { value: boolean; onChange: (v: boolean) =>
 
 // ── Input modality badges ─────────────────────────────────────────────────────
 
+const MODALITIES = ['text', 'image', 'audio', 'video'] as const
+const MODALITY_COLORS: Record<string, string> = { text: 'var(--text-secondary)', image: '#3b82f6', audio: '#8b5cf6', video: '#ec4899' }
+
 function ModalityBadge({ type }: { type: string }) {
-  const colors: Record<string, string> = { text: 'var(--text-secondary)', image: '#3b82f6', audio: '#8b5cf6', video: '#ec4899' }
-  const color = colors[type] ?? 'var(--text-secondary)'
+  const color = MODALITY_COLORS[type] ?? 'var(--text-secondary)'
   return (
     <span style={{ fontSize: 10, padding: '1px 5px', borderRadius: 4, border: `1px solid ${color}44`, background: `${color}11`, color, whiteSpace: 'nowrap' }}>
       {type}
     </span>
+  )
+}
+
+function ModalitySelect({ value, onChange }: { value: string[]; onChange: (v: string[]) => void }) {
+  const toggle = (m: string) => onChange(value.includes(m) ? value.filter(x => x !== m) : [...value, m])
+  return (
+    <div className="flex gap-1.5 flex-wrap">
+      {MODALITIES.map(m => {
+        const active = value.includes(m)
+        const color = MODALITY_COLORS[m]
+        return (
+          <button
+            key={m}
+            type="button"
+            onClick={() => toggle(m)}
+            style={{
+              fontSize: 11, padding: '3px 8px', borderRadius: 4, cursor: 'pointer',
+              border: `1px solid ${active ? color : 'var(--border)'}`,
+              background: active ? `${color}22` : 'var(--bg-elevated)',
+              color: active ? color : 'var(--text-secondary)',
+              transition: 'all 0.1s',
+            }}
+          >{m}</button>
+        )
+      })}
+    </div>
   )
 }
 
@@ -107,8 +137,8 @@ function ModelRow({ model, providerId, onDelete }: { model: GwModelDef; provider
               <Field label="Cache write cost ($ per 1M tokens)">
                 <input type="number" step="any" value={draft.cost?.cacheWrite != null ? +(draft.cost.cacheWrite * 1e6).toPrecision(6) : ''} onChange={e => setDraft(d => ({ ...d, cost: { ...d.cost ?? { input:0, output:0, cacheRead:0, cacheWrite:0 }, cacheWrite: Number(e.target.value) / 1e6 } }))} style={inlineInputStyle} placeholder="0" />
               </Field>
-              <Field label="Input modalities (comma-separated)">
-                <input value={(draft.input ?? []).join(', ')} onChange={e => setDraft(d => ({ ...d, input: e.target.value.split(',').map(s => s.trim()).filter(Boolean) }))} style={inlineInputStyle} placeholder="text, image" />
+              <Field label="Input modalities">
+                <ModalitySelect value={draft.input ?? []} onChange={v => setDraft(d => ({ ...d, input: v }))} />
               </Field>
             </div>
             <div className="flex items-center gap-4">
@@ -376,30 +406,59 @@ function fmtUsd(n: number): string {
 }
 
 function UsageTab() {
-  const { sessions, fetch } = useSessionsStore()
+  const { sessions, fetch: fetchSessions } = useSessionsStore()
+  const { jobs, runs, fetch: fetchJobs, fetchRuns } = useCronsStore()
   const { providers } = useModelsStore()
+  const [fetchingRuns, setFetchingRuns] = useState(false)
 
-  useEffect(() => { fetch() }, [])
+  useEffect(() => {
+    fetchSessions()
+    fetchJobs()
+  }, [])
+
+  // Once jobs are loaded, fetch all their run history
+  useEffect(() => {
+    if (jobs.length === 0) return
+    setFetchingRuns(true)
+    Promise.all(jobs.map(j => fetchRuns(j.id, true))).finally(() => setFetchingRuns(false))
+  }, [jobs.length])
 
   type Row = {
-    model: string; provider: string; count: number
+    model: string; provider: string
+    sessionCount: number; cronRuns: number
     inputTokens: number; outputTokens: number; estimatedCostUsd: number
   }
 
-  const byModel = Object.values(
-    sessions.reduce<Record<string, Row>>((acc, s) => {
-      if (!s.model) return acc
-      const key = s.model
-      if (!acc[key]) acc[key] = { model: s.model, provider: s.modelProvider ?? '', count: 0, inputTokens: 0, outputTokens: 0, estimatedCostUsd: 0 }
-      acc[key].count++
-      acc[key].inputTokens    += s.inputTokens    ?? 0
-      acc[key].outputTokens   += s.outputTokens   ?? 0
-      acc[key].estimatedCostUsd += s.estimatedCostUsd ?? 0
-      return acc
-    }, {})
-  ).sort((a, b) => b.inputTokens - a.inputTokens)
+  const acc: Record<string, Row> = {}
 
-  // If gateway doesn't compute cost, estimate from model pricing
+  // Sessions
+  sessions.forEach(s => {
+    if (!s.model) return
+    const key = s.model
+    if (!acc[key]) acc[key] = { model: s.model, provider: s.modelProvider ?? '', sessionCount: 0, cronRuns: 0, inputTokens: 0, outputTokens: 0, estimatedCostUsd: 0 }
+    acc[key].sessionCount++
+    acc[key].inputTokens      += s.inputTokens      ?? 0
+    acc[key].outputTokens     += s.outputTokens     ?? 0
+    acc[key].estimatedCostUsd += s.estimatedCostUsd ?? 0
+  })
+
+  // Cron runs
+  Object.values(runs).forEach(jobRuns => {
+    jobRuns.forEach(run => {
+      if (!run.model || !run.usage) return
+      const key = run.model
+      if (!acc[key]) {
+        const slash = run.model.indexOf('/')
+        acc[key] = { model: run.model, provider: slash >= 0 ? run.model.slice(0, slash) : '', sessionCount: 0, cronRuns: 0, inputTokens: 0, outputTokens: 0, estimatedCostUsd: 0 }
+      }
+      acc[key].cronRuns++
+      acc[key].inputTokens  += run.usage.input_tokens  ?? 0
+      acc[key].outputTokens += run.usage.output_tokens ?? 0
+    })
+  })
+
+  const byModel = Object.values(acc).sort((a, b) => b.inputTokens - a.inputTokens)
+
   function computedCost(row: Row): number {
     if (row.estimatedCostUsd > 0) return row.estimatedCostUsd
     const slash = row.model.indexOf('/')
@@ -418,7 +477,7 @@ function UsageTab() {
     return (
       <div className="flex-1 flex flex-col items-center justify-center gap-2" style={{ color: 'var(--text-secondary)' }}>
         <BarChart2 size={32} style={{ opacity: 0.2 }} />
-        <p className="text-sm">No session data yet</p>
+        <p className="text-sm">{fetchingRuns ? 'Loading…' : 'No usage data yet'}</p>
       </div>
     )
   }
@@ -439,6 +498,11 @@ function UsageTab() {
           <span style={{ color: 'var(--text-secondary)', fontSize: 11 }}>Estimated cost</span>
           <p className="font-mono font-semibold" style={{ color: totalCost > 0 ? 'var(--text-primary)' : 'var(--text-secondary)' }}>{totalCost > 0 ? fmtUsd(totalCost) : '—'}</p>
         </div>
+        {fetchingRuns && (
+          <div className="flex items-center gap-1.5 ml-auto text-xs" style={{ color: 'var(--text-secondary)' }}>
+            <RefreshCw size={11} style={{ animation: 'spin 1s linear infinite' }} /> Loading cron history…
+          </div>
+        )}
       </div>
 
       {/* Table */}
@@ -448,6 +512,7 @@ function UsageTab() {
             <tr style={{ background: 'var(--bg-surface)', borderBottom: '1px solid var(--border)', position: 'sticky', top: 0, zIndex: 1 }}>
               <th style={{ ...thStyle, textAlign: 'left' }}>Model</th>
               <th style={{ ...thStyle, textAlign: 'right' }}>Sessions</th>
+              <th style={{ ...thStyle, textAlign: 'right' }}>Cron runs</th>
               <th style={{ ...thStyle, textAlign: 'right' }}>Input tokens</th>
               <th style={{ ...thStyle, textAlign: 'right' }}>Output tokens</th>
               <th style={{ ...thStyle, textAlign: 'right' }}>Est. cost</th>
@@ -468,7 +533,8 @@ function UsageTab() {
                     <div className="font-mono text-xs" style={{ color: 'var(--text-primary)' }}>{mid}</div>
                     {pid && <div className="text-xs" style={{ color: 'var(--text-secondary)', opacity: 0.6 }}>{pid}</div>}
                   </td>
-                  <td style={{ ...tdStyle, textAlign: 'right', color: 'var(--text-secondary)', fontFamily: 'monospace', fontSize: 12 }}>{row.count}</td>
+                  <td style={{ ...tdStyle, textAlign: 'right', color: 'var(--text-secondary)', fontFamily: 'monospace', fontSize: 12 }}>{row.sessionCount || '—'}</td>
+                  <td style={{ ...tdStyle, textAlign: 'right', color: 'var(--text-secondary)', fontFamily: 'monospace', fontSize: 12 }}>{row.cronRuns || '—'}</td>
                   <td style={{ ...tdStyle, textAlign: 'right', color: 'var(--text-primary)',   fontFamily: 'monospace', fontSize: 12 }}>{fmtTokensBig(row.inputTokens)}</td>
                   <td style={{ ...tdStyle, textAlign: 'right', color: 'var(--text-secondary)', fontFamily: 'monospace', fontSize: 12 }}>{fmtTokensBig(row.outputTokens)}</td>
                   <td style={{ ...tdStyle, textAlign: 'right', color: cost > 0 ? 'var(--success)' : 'var(--text-secondary)', fontFamily: 'monospace', fontSize: 12 }}>{fmtUsd(cost)}</td>
@@ -482,166 +548,22 @@ function UsageTab() {
   )
 }
 
-// ── Plugin provider panel — with OpenRouter pricing fetch ─────────────────────
-
-interface ORPricing { prompt: string; completion: string }
-interface ORModel { id: string; name: string; context_length: number; pricing: ORPricing; top_provider?: { max_completion_tokens?: number } }
-
-async function fetchORModels(): Promise<Map<string, ORModel>> {
-  const res = await fetch('https://openrouter.ai/api/v1/models')
-  if (!res.ok) throw new Error(`OpenRouter returned ${res.status}`)
-  const data = await res.json() as { data: ORModel[] }
-  return new Map(data.data.map(m => [m.id, m]))
-}
-
-function PluginProviderPanel({ id, modelIds }: { id: string; modelIds: string[] }) {
-  const { addProvider } = useModelsStore()
-  const [orModels, setOrModels] = useState<Map<string, ORModel> | null>(null)
-  const [fetching, setFetching] = useState(false)
-  const [fetchErr, setFetchErr] = useState<string | null>(null)
-  const [promoted, setPromoted] = useState(false)
-
-  async function handleFetch() {
-    setFetching(true); setFetchErr(null)
-    try { setOrModels(await fetchORModels()) }
-    catch (e) { setFetchErr(String(e)) }
-    finally { setFetching(false) }
-  }
-
-  function handlePromote() {
-    const models: GwModelDef[] = modelIds.map(fullId => {
-      const slash = fullId.indexOf('/')
-      const mid = slash >= 0 ? fullId.slice(slash + 1) : fullId
-      const or = orModels?.get(fullId)
-      return {
-        id: mid,
-        name: or?.name ?? mid,
-        contextWindow: or?.context_length,
-        maxTokens: or?.top_provider?.max_completion_tokens,
-        input: ['text'],
-        compat: { supportsTools: true },
-        cost: or ? {
-          input:      parseFloat(or.pricing.prompt),
-          output:     parseFloat(or.pricing.completion),
-          cacheRead:  0,
-          cacheWrite: 0,
-        } : { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      }
-    })
-    addProvider(id, { models })
-    setPromoted(true)
-  }
-
-  const matchCount = orModels ? modelIds.filter(fid => orModels.has(fid)).length : 0
-
-  return (
-    <div className="flex flex-col flex-1 min-h-0" style={{ background: 'var(--bg-primary)' }}>
-      {/* Header */}
-      <div className="px-5 py-3 flex items-center gap-3" style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-surface)' }}>
-        <div style={{ width: 32, height: 32, borderRadius: 8, background: 'color-mix(in srgb, var(--warning) 15%, var(--bg-elevated))', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--warning)', flexShrink: 0 }}>
-          <Plug size={16} />
-        </div>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <p className="font-semibold text-sm" style={{ color: 'var(--text-primary)' }}>{id}</p>
-            <span className="text-xs px-1.5 py-0.5 rounded" style={{ background: 'color-mix(in srgb, var(--warning) 15%, transparent)', color: 'var(--warning)', border: '1px solid color-mix(in srgb, var(--warning) 30%, transparent)' }}>via plugin</span>
-          </div>
-          <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>{modelIds.length} model{modelIds.length !== 1 ? 's' : ''}</p>
-        </div>
-        <div className="flex items-center gap-2">
-          {orModels && matchCount > 0 && !promoted && (
-            <Btn size="sm" onClick={handlePromote} icon={<Plus size={12} />}>
-              Add to providers ({matchCount} priced)
-            </Btn>
-          )}
-          {promoted && <span className="text-xs" style={{ color: 'var(--success)' }}>Added ✓</span>}
-          <Btn size="sm" variant="outline" loading={fetching} onClick={handleFetch}>
-            Fetch pricing from OpenRouter
-          </Btn>
-        </div>
-      </div>
-
-      {fetchErr && (
-        <div className="mx-5 mt-3 px-3 py-2 rounded text-xs flex items-center gap-1.5" style={{ background: 'color-mix(in srgb, var(--danger) 10%, transparent)', color: 'var(--danger)', border: '1px solid var(--danger)' }}>
-          <AlertCircle size={11} /> {fetchErr}
-        </div>
-      )}
-      {orModels && (
-        <div className="px-5 py-2 text-xs" style={{ color: 'var(--text-secondary)' }}>
-          Matched {matchCount} of {modelIds.length} models on OpenRouter.{matchCount < modelIds.length ? ' Unmatched models will have no pricing.' : ''}
-        </div>
-      )}
-
-      {/* Table */}
-      <div className="flex-1 overflow-auto">
-        <table className="w-full text-sm" style={{ borderCollapse: 'collapse' }}>
-          <thead>
-            <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-surface)', position: 'sticky', top: 0, zIndex: 1 }}>
-              <th style={{ ...thStyle, textAlign: 'left' }}>Model</th>
-              <th style={{ ...thStyle, textAlign: 'right' }}>Context</th>
-              <th style={{ ...thStyle, textAlign: 'right' }}>In /1M</th>
-              <th style={{ ...thStyle, textAlign: 'right' }}>Out /1M</th>
-            </tr>
-          </thead>
-          <tbody>
-            {modelIds.map((fullId, i) => {
-              const slash = fullId.indexOf('/')
-              const mid = slash >= 0 ? fullId.slice(slash + 1) : fullId
-              const or = orModels?.get(fullId)
-              const inputPerM  = or ? parseFloat(or.pricing.prompt)     * 1e6 : null
-              const outputPerM = or ? parseFloat(or.pricing.completion)  * 1e6 : null
-              return (
-                <tr key={fullId} style={{ borderBottom: i < modelIds.length - 1 ? '1px solid var(--border)' : 'none' }}
-                  onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-surface)')}
-                  onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-                >
-                  <td style={tdStyle}>
-                    <div className="font-mono text-xs" style={{ color: 'var(--text-primary)' }}>{mid}</div>
-                    {or?.name && or.name !== mid && <div className="text-xs" style={{ color: 'var(--text-secondary)' }}>{or.name}</div>}
-                  </td>
-                  <td style={{ ...tdStyle, textAlign: 'right', fontFamily: 'monospace', fontSize: 12, color: 'var(--text-secondary)' }}>
-                    {or ? fmtTokens(or.context_length) : <span style={{ opacity: 0.3 }}>—</span>}
-                  </td>
-                  <td style={{ ...tdStyle, textAlign: 'right', fontFamily: 'monospace', fontSize: 12, color: inputPerM != null && inputPerM > 0 ? 'var(--text-primary)' : 'var(--text-secondary)' }}>
-                    {inputPerM != null ? fmtCost(parseFloat(or!.pricing.prompt)) : <span style={{ opacity: 0.3 }}>—</span>}
-                  </td>
-                  <td style={{ ...tdStyle, textAlign: 'right', fontFamily: 'monospace', fontSize: 12, color: outputPerM != null && outputPerM > 0 ? 'var(--text-primary)' : 'var(--text-secondary)' }}>
-                    {outputPerM != null ? fmtCost(parseFloat(or!.pricing.completion)) : <span style={{ opacity: 0.3 }}>—</span>}
-                  </td>
-                </tr>
-              )
-            })}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  )
-}
-
 // ── Main view ─────────────────────────────────────────────────────────────────
 
 export function ModelsView() {
-  const { providers, agentDefaultModelIds, pluginEnabled, selectedId, loading, error, dirty, saving, load, selectProvider, setProviderEnabled, deleteProvider, save } = useModelsStore()
+  const { providers, pluginProviderIds, pluginEnabled, selectedId, loading, error, dirty, saving, load, selectProvider, setProviderEnabled, deleteProvider, save } = useModelsStore()
   const [addingProvider, setAddingProvider] = useState(false)
   const [tab, setTab] = useState<'providers' | 'usage'>('providers')
-  const [selectedPluginId, setSelectedPluginId] = useState<string | null>(null)
 
   useEffect(() => { load() }, [])
 
   const selectedProvider = selectedId ? providers[selectedId] : null
-  const providerIds = Object.keys(providers)
 
-  // Plugin-only providers: models in agentDefaultModelIds not covered by any provider entry
-  const providerModelIds = new Set(
-    Object.entries(providers).flatMap(([pid, p]) => p.models.map(m => `${pid}/${m.id}`))
-  )
-  const pluginProviders: Record<string, string[]> = {}
-  for (const fullId of agentDefaultModelIds) {
-    if (providerModelIds.has(fullId)) continue
-    const slash = fullId.indexOf('/')
-    const pid = slash >= 0 ? fullId.slice(0, slash) : 'other'
-    ;(pluginProviders[pid] ??= []).push(fullId)
-  }
+  // Config-origin providers first (alphabetical), then plugin-only ones (alphabetical)
+  const allProviderIds = [
+    ...Object.keys(providers).filter(pid => !pluginProviderIds.has(pid)).sort(),
+    ...Object.keys(providers).filter(pid => pluginProviderIds.has(pid)).sort(),
+  ]
 
   const tabBtn = (t: typeof tab, label: string, icon: React.ReactNode) => (
     <button
@@ -695,21 +617,25 @@ export function ModelsView() {
           )}
 
           <div className="flex-1 overflow-y-auto py-1">
-            {providerIds.length === 0 && Object.keys(pluginProviders).length === 0 && !loading && (
+            {allProviderIds.length === 0 && !loading && (
               <p className="px-4 py-3 text-xs" style={{ color: 'var(--text-secondary)' }}>No providers in config</p>
             )}
-            {providerIds.map(pid => {
-              const active = pid === selectedId && !selectedPluginId
+            {allProviderIds.map(pid => {
+              const active = pid === selectedId
               const enabled = pluginEnabled[pid] !== false
+              const isPlugin = pluginProviderIds.has(pid)
               return (
                 <div key={pid}
                   className="group relative flex items-center gap-2.5 px-3 py-2.5 cursor-pointer"
-                  onClick={() => { selectProvider(pid); setSelectedPluginId(null) }}
+                  onClick={() => selectProvider(pid)}
                   style={{ background: active ? 'color-mix(in srgb, var(--accent) 12%, var(--bg-elevated))' : 'transparent', borderLeft: `3px solid ${active ? 'var(--accent)' : 'transparent'}`, transition: 'background 0.1s' }}
                   onMouseEnter={e => { if (!active) e.currentTarget.style.background = 'var(--bg-elevated)' }}
                   onMouseLeave={e => { if (!active) e.currentTarget.style.background = 'transparent' }}
                 >
-                  <div style={{ width: 7, height: 7, borderRadius: '50%', flexShrink: 0, background: enabled ? 'var(--success)' : 'var(--border)' }} />
+                  {isPlugin
+                    ? <Plug size={11} style={{ color: enabled ? 'var(--success)' : 'var(--border)', flexShrink: 0 }} />
+                    : <div style={{ width: 7, height: 7, borderRadius: '50%', flexShrink: 0, background: enabled ? 'var(--success)' : 'var(--border)' }} />
+                  }
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-mono truncate" style={{ color: 'var(--text-primary)', opacity: enabled ? 1 : 0.5 }}>{pid}</p>
                     <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>{providers[pid]?.models.length ?? 0} models</p>
@@ -718,45 +644,19 @@ export function ModelsView() {
                     <Toggle value={enabled} onChange={v => setProviderEnabled(pid, v)} />
                     {active && <ChevronRight size={11} style={{ color: 'var(--text-secondary)' }} />}
                   </div>
-                  <button
-                    onClick={e => { e.stopPropagation(); deleteProvider(pid) }}
-                    className="absolute right-2 opacity-0 group-hover:opacity-100 transition-opacity"
-                    style={{ ...iconBtnStyle }}
-                    title="Remove provider"
-                    onMouseEnter={e => ((e.currentTarget as HTMLElement).style.color = 'var(--danger)')}
-                    onMouseLeave={e => ((e.currentTarget as HTMLElement).style.color = 'var(--text-secondary)')}
-                  ><Trash2 size={13} /></button>
+                  {!isPlugin && (
+                    <button
+                      onClick={e => { e.stopPropagation(); deleteProvider(pid) }}
+                      className="absolute right-2 opacity-0 group-hover:opacity-100 transition-opacity"
+                      style={{ ...iconBtnStyle }}
+                      title="Remove provider"
+                      onMouseEnter={e => ((e.currentTarget as HTMLElement).style.color = 'var(--danger)')}
+                      onMouseLeave={e => ((e.currentTarget as HTMLElement).style.color = 'var(--text-secondary)')}
+                    ><Trash2 size={13} /></button>
+                  )}
                 </div>
               )
             })}
-
-            {/* Plugin-only providers */}
-            {Object.keys(pluginProviders).length > 0 && (
-              <>
-                <div className="px-3 pt-3 pb-1" style={{ borderTop: providerIds.length > 0 ? '1px solid var(--border)' : 'none', marginTop: providerIds.length > 0 ? 4 : 0 }}>
-                  <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--text-secondary)' }}>Via plugin</p>
-                </div>
-                {Object.entries(pluginProviders).map(([pid, ids]) => {
-                  const active = selectedPluginId === pid
-                  return (
-                    <div key={pid}
-                      className="flex items-center gap-2.5 px-3 py-2.5 cursor-pointer"
-                      onClick={() => { setSelectedPluginId(pid); selectProvider('') }}
-                      style={{ background: active ? 'color-mix(in srgb, var(--warning) 10%, var(--bg-elevated))' : 'transparent', borderLeft: `3px solid ${active ? 'var(--warning)' : 'transparent'}`, transition: 'background 0.1s' }}
-                      onMouseEnter={e => { if (!active) e.currentTarget.style.background = 'var(--bg-elevated)' }}
-                      onMouseLeave={e => { if (!active) e.currentTarget.style.background = 'transparent' }}
-                    >
-                      <Plug size={11} style={{ color: 'var(--warning)', flexShrink: 0 }} />
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-mono truncate" style={{ color: 'var(--text-primary)' }}>{pid}</p>
-                        <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>{ids.length} model{ids.length !== 1 ? 's' : ''}</p>
-                      </div>
-                      {active && <ChevronRight size={11} style={{ color: 'var(--text-secondary)' }} />}
-                    </div>
-                  )
-                })}
-              </>
-            )}
           </div>
 
           {addingProvider ? (
@@ -769,9 +669,7 @@ export function ModelsView() {
         </div>
 
         {/* Right panel */}
-        {selectedPluginId && pluginProviders[selectedPluginId] ? (
-          <PluginProviderPanel id={selectedPluginId} modelIds={pluginProviders[selectedPluginId]} />
-        ) : selectedId && selectedProvider ? (
+        {selectedId && selectedProvider ? (
           <ProviderPanel key={selectedId} id={selectedId} provider={selectedProvider} />
         ) : (
           <div className="flex-1 flex flex-col items-center justify-center gap-2" style={{ background: 'var(--bg-primary)' }}>

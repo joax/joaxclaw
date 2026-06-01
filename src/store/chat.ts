@@ -85,14 +85,18 @@ function attachChatStream(convId: string, sessionKey: string, update: UpdateFn):
           update(m => ({ ...m, toolCalls: [...(m.toolCalls ?? []), newCall], waitingForSession: undefined }))
         } else if (p.data?.phase === 'result') {
           const callId = p.data.toolCallId
+          const rawResult = p.data!.result
+          const resultStr = rawResult !== undefined
+            ? (typeof rawResult === 'string' ? rawResult : JSON.stringify(rawResult, null, 2))
+            : undefined
           update(m => ({
             ...m,
             toolCalls: (m.toolCalls ?? []).map(tc =>
               tc.id !== callId ? tc : {
                 ...tc,
                 status: p.data!.isError ? 'error' : 'done',
-                result: p.data!.result !== undefined ? JSON.stringify(p.data!.result) : undefined,
-                error: p.data!.isError ? 'Tool returned an error' : undefined
+                result: p.data!.isError ? undefined : resultStr,
+                error: p.data!.isError ? (resultStr ?? 'Tool returned an error') : undefined
               }
             )
           }))
@@ -120,12 +124,14 @@ function attachChatStream(convId: string, sessionKey: string, update: UpdateFn):
       const finalReasoning = extractReasoning(p.message)
       const finalToolCalls = extractToolCalls(p.message)
       const finalAttachments = extractAttachments(p.message)
+      const finalModel = extractModel(p.message) ?? (p as Record<string, unknown>).model as string | undefined
       update(m => ({
         ...m,
         ...(finalText ? { content: finalText } : {}),
         ...(finalReasoning ? { reasoning: finalReasoning } : {}),
         ...(finalToolCalls.length ? { toolCalls: finalToolCalls } : {}),
         ...(finalAttachments.length ? { attachments: finalAttachments } : {}),
+        ...(finalModel ? { model: finalModel } : {}),
         streaming: false,
         reasoningStreaming: false,
         waitingForSession: undefined
@@ -182,6 +188,13 @@ function sessionTitle(sessionKey: string, agentName: string): string {
   const parts = sessionKey.split(':').filter(Boolean)
   if (parts.length >= 2) return parts.slice(-2).join(' · ')
   return sessionKey.slice(0, 32)
+}
+
+function extractModel(msg: unknown): string | undefined {
+  if (!msg || typeof msg !== 'object') return undefined
+  const m = msg as Record<string, unknown>
+  if (typeof m.model === 'string' && m.model) return m.model
+  return undefined
 }
 
 function extractText(msg: unknown): string {
@@ -370,6 +383,23 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   async sendMessage(convId, text, attachments) {
+    // Close any stuck streaming message from a previous run that never received final/error/aborted
+    const stuckStream = activeStreams.get(convId)
+    if (stuckStream) {
+      stuckStream.unsub()
+      activeStreams.delete(convId)
+      set(s => ({
+        conversations: s.conversations.map(c =>
+          c.id !== convId ? c : {
+            ...c,
+            messages: c.messages.map(m =>
+              m.streaming ? { ...m, streaming: false, reasoningStreaming: false } : m
+            )
+          }
+        )
+      }))
+    }
+
     const userMsg: ChatMessage = {
       id: nanoid(),
       sessionId: '',
@@ -466,10 +496,24 @@ export const useChatStore = create<ChatState>((set, get) => ({
             reasoning: extractReasoning(m) || undefined,
             toolCalls: extractToolCalls(m).length ? extractToolCalls(m) : undefined,
             attachments: atts.length ? atts : undefined,
+            model: extractModel(m),
             createdAt: typeof m['timestamp'] === 'number'
               ? new Date(m['timestamp']).toISOString()
               : new Date().toISOString()
           }
+        })
+        .filter(msg => {
+          if (msg.role !== 'assistant') return true
+          if (msg.toolCalls?.length || msg.attachments?.length || msg.reasoning) return true
+          // Keep messages that have real thinking content inside complete <think>...</think> blocks
+          const thinkContent = [...msg.content.matchAll(/<think>([\s\S]*?)<\/think>/gi)]
+            .map(m => m[1].trim()).join('')
+          if (thinkContent) return true
+          // Drop messages whose only content is a bare unclosed <think> tag (no real text, no thinking)
+          const bare = msg.content
+            .replace(/<think>[\s\S]*/gi, '')
+            .trim()
+          return bare !== ''
         })
 
       const existing = get().conversations.find(c => c.sessionKey === sessionKey)
