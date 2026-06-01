@@ -330,30 +330,27 @@ export const useChatStore = create<ChatState>((set, get) => ({
   watchSession(convId, sessionKey) {
     if (activeStreams.has(convId)) return
 
-    // Lazy placeholder — only added to the conversation on the first real event
-    let msgId: string | null = null
+    // Add a streaming placeholder immediately so the user sees activity
+    // even while the agent is between tool calls or hasn't emitted a delta yet.
+    const msgId = nanoid()
+    const placeholder: ChatMessage = {
+      id: msgId,
+      sessionId: sessionKey,
+      role: 'assistant',
+      content: '',
+      reasoning: '',
+      toolCalls: [],
+      createdAt: new Date().toISOString(),
+      streaming: true,
+      reasoningStreaming: false
+    }
+    set(s => ({
+      conversations: s.conversations.map(c =>
+        c.id !== convId ? c : { ...c, messages: [...c.messages, placeholder] }
+      )
+    }))
 
     const update: UpdateFn = (updater) => {
-      if (!msgId) {
-        const id = nanoid()
-        msgId = id
-        const placeholder: ChatMessage = {
-          id,
-          sessionId: sessionKey,
-          role: 'assistant',
-          content: '',
-          reasoning: '',
-          toolCalls: [],
-          createdAt: new Date().toISOString(),
-          streaming: true,
-          reasoningStreaming: false
-        }
-        set(s => ({
-          conversations: s.conversations.map(c =>
-            c.id !== convId ? c : { ...c, messages: [...c.messages, placeholder] }
-          )
-        }))
-      }
       set(s => ({
         conversations: s.conversations.map(c =>
           c.id !== convId ? c : {
