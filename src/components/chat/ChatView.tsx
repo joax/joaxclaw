@@ -24,7 +24,7 @@ export function ChatView() {
   const [showNewMenu, setShowNewMenu] = useState(false)
   const [showTools, setShowTools] = useState(true)
   const [showReasoning, setShowReasoning] = useState(true)
-  const [showContext, setShowContext] = useState(false)
+  const [showContext, setShowContext] = useState(true)
   const { load: loadModels } = useModelsStore()
 
   useEffect(() => { if (showContext) loadModels() }, [showContext])
@@ -264,22 +264,28 @@ export function ChatView() {
   )
 }
 
+function fmtCost(usd: number): string {
+  if (usd === 0) return '$0'
+  if (usd < 0.001) return `$${usd.toPrecision(2)}`
+  if (usd < 0.01)  return `$${usd.toFixed(4)}`
+  return `$${usd.toFixed(3)}`
+}
+
 function ContextBar({ sessionKey }: { sessionKey: string }) {
-  const session = useSessionsStore(s => s.sessions.find(sess => sess.key === sessionKey))
+  const session  = useSessionsStore(s => s.sessions.find(sess => sess.key === sessionKey))
   const providers = useModelsStore(s => s.providers)
 
-  const contextWindow = (() => {
+  const modelDef = (() => {
     if (!session?.model) return undefined
     const raw = session.model
     const slash = raw.indexOf('/')
-    const modelId = slash >= 0 ? raw.slice(slash + 1) : raw
+    const modelId    = slash >= 0 ? raw.slice(slash + 1) : raw
     const providerId = slash >= 0 ? raw.slice(0, slash) : session.modelProvider
-    return providers[providerId ?? '']?.models.find(m => m.id === modelId)?.contextWindow
-      ?? session?.contextTokens  // gateway reports this as the model's context window limit
+    return providers[providerId ?? '']?.models.find(m => m.id === modelId)
   })()
 
-  const tokens = session?.totalTokens
-
+  const contextWindow = modelDef?.contextWindow ?? session?.contextTokens
+  const tokens  = session?.totalTokens
   const fillPct = tokens != null && contextWindow
     ? Math.min((tokens / contextWindow) * 100, 100)
     : null
@@ -289,6 +295,16 @@ function ContextBar({ sessionKey }: { sessionKey: string }) {
     : fillPct > 70 ? 'var(--warning)'
     : 'var(--success)'
 
+  // Cost: prefer gateway-provided value, fall back to per-token calculation
+  const costUsd = (() => {
+    if (session?.estimatedCostUsd != null && session.estimatedCostUsd > 0) return session.estimatedCostUsd
+    if (!modelDef?.cost) return null
+    const inp = session?.inputTokens ?? 0
+    const out = session?.outputTokens ?? 0
+    if (!inp && !out) return null
+    return inp * modelDef.cost.input + out * modelDef.cost.output
+  })()
+
   if (!session) return null
 
   return (
@@ -296,6 +312,7 @@ function ContextBar({ sessionKey }: { sessionKey: string }) {
       className="flex items-center gap-4 px-4 py-2 text-xs shrink-0"
       style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-elevated)' }}
     >
+      {/* Token count + fill bar */}
       <div className="flex items-center gap-1.5">
         <span style={{ color: 'var(--text-secondary)' }}>Context</span>
         <span className="font-mono font-semibold" style={{ color: 'var(--text-primary)' }}>
@@ -308,7 +325,7 @@ function ContextBar({ sessionKey }: { sessionKey: string }) {
       </div>
 
       {fillPct != null && (
-        <div className="flex items-center gap-1.5" style={{ minWidth: 120 }}>
+        <div className="flex items-center gap-1.5" style={{ minWidth: 100 }}>
           <div style={{ flex: 1, height: 4, background: 'var(--bg-primary)', borderRadius: 2 }}>
             <div style={{ width: `${fillPct}%`, height: '100%', background: fillColor, borderRadius: 2, transition: 'width 0.4s' }} />
           </div>
@@ -318,6 +335,17 @@ function ContextBar({ sessionKey }: { sessionKey: string }) {
         </div>
       )}
 
+      {/* Cost estimate */}
+      {costUsd != null && (
+        <div className="flex items-center gap-1">
+          <span style={{ color: 'var(--text-secondary)' }}>Cost</span>
+          <span className="font-mono font-semibold" style={{ color: costUsd > 0.1 ? 'var(--warning)' : 'var(--text-primary)' }}>
+            {fmtCost(costUsd)}
+          </span>
+        </div>
+      )}
+
+      {/* Model */}
       {session.model && (
         <div className="flex items-center gap-1 ml-auto">
           <ModelIcon model={session.modelProvider ? `${session.modelProvider}/${session.model}` : session.model} size={10} />

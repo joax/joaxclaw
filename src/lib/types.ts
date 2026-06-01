@@ -59,6 +59,7 @@ export interface Session {
   inputTokens?: number    // cumulative input tokens across all runs in the session
   outputTokens?: number   // cumulative output tokens across all runs
   totalTokens?: number    // last-run input+output; best approximation of current context size
+  estimatedCostUsd?: number  // gateway-computed cost estimate when available
   lastMessage?: string
 }
 
