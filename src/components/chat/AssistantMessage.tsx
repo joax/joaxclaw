@@ -50,7 +50,10 @@ interface GatewayAction {
 // Known content-bearing gateway action tags
 const CONTENT_TAGS = new Set(['edit', 'write', 'create', 'bash', 'shell', 'read', 'search', 'delete', 'move'])
 const CONTENT_TAG_RE = new RegExp(`<(${[...CONTENT_TAGS].join('|')})([^>]*)>([\\s\\S]*?)<\\/\\1>`, 'gi')
-const SELFCLOSE_TAG_RE = /<([a-zA-Z][a-zA-Z0-9_-]*)\s+([^/]*?)\s*\/>/g
+// Captures self-closing gateway action tags.
+// The attribute group uses quote-aware alternation so values containing "/"
+// (e.g. file paths, JSON with "/" characters) are captured correctly.
+const SELFCLOSE_TAG_RE = /<([a-zA-Z][a-zA-Z0-9_-]*)((?:\s+[a-zA-Z][a-zA-Z0-9_-]*=(?:"[^"]*"|'[^']*'))*)\s*\/>/g
 
 function parseAttrs(raw: string): Record<string, string> {
   const out: Record<string, string> = {}
@@ -196,7 +199,7 @@ function ActionPill({ resource, action, scalarAttrs, jsonAttrs, inlineContent }:
         {action && <><span style={{ color: 'var(--text-secondary)', opacity: 0.4 }}>·</span><span className="font-mono" style={{ color: 'var(--text-secondary)' }}>{action}</span></>}
         {scalarAttrs.map(([k, v]) => (
           <span key={k} className="font-mono" style={{ color: 'var(--text-secondary)', opacity: 0.7 }}>
-            {k}=<span style={{ color: 'var(--text-primary)' }}>{v.length > 36 ? v.slice(0, 36) + '…' : v}</span>
+            {k}=<span style={{ color: 'var(--text-primary)' }}>{v.length > 48 ? v.slice(0, 48) + '…' : v}</span>
           </span>
         ))}
         {inlineContent && !action && (
