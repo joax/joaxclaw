@@ -163,6 +163,7 @@ interface ChatState {
   selectConversation: (id: string) => void
   sendMessage: (convId: string, text: string, attachments?: MediaAttachment[]) => Promise<void>
   abortStream: (convId: string) => Promise<void>
+  compact: (convId: string) => Promise<void>
   watchSession: (convId: string, sessionKey: string) => void
   deleteConversation: (id: string) => void
   loadSessionMessages: (sessionKey: string, agentId: string, agentName: string) => Promise<string>
@@ -380,6 +381,59 @@ export const useChatStore = create<ChatState>((set, get) => ({
       )
     }))
     await gatewayClient.request('sessions.abort', { key: entry.sessionKey }).catch(() => {})
+  },
+
+  async compact(convId) {
+    const conv = get().conversations.find(c => c.id === convId)
+    if (!conv?.sessionKey) return
+
+    // Insert a pending system notice so the user gets immediate feedback
+    const noticeId = nanoid()
+    const notice: ChatMessage = {
+      id: noticeId,
+      sessionId: conv.sessionKey,
+      role: 'assistant',
+      content: '',
+      createdAt: new Date().toISOString(),
+      streaming: true,
+    }
+    set(s => ({
+      conversations: s.conversations.map(c =>
+        c.id !== convId ? c : { ...c, messages: [...c.messages, notice] }
+      )
+    }))
+
+    const finish = (content: string) => set(s => ({
+      conversations: s.conversations.map(c =>
+        c.id !== convId ? c : {
+          ...c,
+          messages: c.messages.map(m =>
+            m.id === noticeId ? { ...m, content, streaming: false } : m
+          )
+        }
+      )
+    }))
+
+    try {
+      // Try the most likely gateway compact endpoints in order
+      let ok = false
+      for (const method of ['sessions.compact', 'chat.compact']) {
+        try {
+          await gatewayClient.request(method, { sessionKey: conv.sessionKey })
+          ok = true
+          break
+        } catch {
+          // try next
+        }
+      }
+      if (ok) {
+        finish('✓ Context compacted.')
+      } else {
+        finish('⚠ Compact not supported by this gateway version.')
+      }
+    } catch (e) {
+      finish(`⚠ Compact failed: ${String(e)}`)
+    }
   },
 
   async sendMessage(convId, text, attachments) {

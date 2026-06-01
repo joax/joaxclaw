@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { ChevronDown, ChevronRight, BrainCircuit, CheckCircle2, XCircle, Loader2, Clock, Hourglass, Terminal, PenLine, FileText, Search, Globe, Plug, Bot, Wrench, FolderSearch, AlertTriangle } from 'lucide-react'
+import { ChevronDown, ChevronRight, BrainCircuit, CheckCircle2, XCircle, Loader2, Clock, Hourglass, Terminal, PenLine, FileText, Search, Globe, Plug, Bot, Wrench, FolderSearch, AlertTriangle, Zap } from 'lucide-react'
 import type { ChatMessage, ContextOverflowInfo, ToolCall } from '../../lib/types'
 import { useExtensionsStore } from '../../store/extensions'
 import { formatTimestamp } from '../../lib/dateUtils'
@@ -34,10 +34,217 @@ function stripProtocolTags(text: string): string {
   return text.replace(/<\/?final>/gi, '').trim()
 }
 
+// ── Gateway XML action tags ───────────────────────────────────────────────────
+// Models running inside Openclaw emit XML tags to invoke gateway actions.
+// Two forms:
+//   Self-closing:    <cron action="list" />
+//   Content-bearing: <edit>path: "..." edits: ...</edit>
+
+interface GatewayAction {
+  resource: string
+  action: string
+  attrs: Record<string, string>
+  content?: string  // present for content-bearing tags
+}
+
+// Known content-bearing gateway action tags
+const CONTENT_TAGS = new Set(['edit', 'write', 'create', 'bash', 'shell', 'read', 'search', 'delete', 'move'])
+const CONTENT_TAG_RE = new RegExp(`<(${[...CONTENT_TAGS].join('|')})([^>]*)>([\\s\\S]*?)<\\/\\1>`, 'gi')
+const SELFCLOSE_TAG_RE = /<([a-zA-Z][a-zA-Z0-9_-]*)\s+([^/]*?)\s*\/>/g
+
+function parseAttrs(raw: string): Record<string, string> {
+  const out: Record<string, string> = {}
+  // Handle both quoting styles independently so single-quoted values can contain
+  // double quotes (e.g. patch='{"key":"val"}') and vice versa.
+  const re = /([a-zA-Z][a-zA-Z0-9_-]*)=(?:"([^"]*)"|'([^']*)')/g
+  let m
+  while ((m = re.exec(raw)) !== null) out[m[1]] = m[2] ?? m[3]
+  return out
+}
+
+function extractGatewayActions(content: string): { actions: GatewayAction[]; text: string } {
+  const actions: GatewayAction[] = []
+
+  // Content-bearing tags first
+  let text = content.replace(CONTENT_TAG_RE, (_, resource, attrStr, body) => {
+    const attrs = parseAttrs(attrStr ?? '')
+    const action = attrs.action ?? ''
+    const { action: _a, ...rest } = attrs
+    actions.push({ resource: resource.toLowerCase(), action, attrs: rest, content: body.trim() })
+    return ''
+  })
+
+  // Self-closing tags
+  text = text.replace(SELFCLOSE_TAG_RE, (_, resource, attrStr) => {
+    const attrs = parseAttrs(attrStr)
+    const action = attrs.action ?? ''
+    const { action: _a, ...rest } = attrs
+    actions.push({ resource, action, attrs: rest })
+    return ''
+  })
+
+  return { actions, text: text.trim() }
+}
+
+// ── Edit block renderer ───────────────────────────────────────────────────────
+
+interface EditPair { oldText: string; newText: string }
+
+function parseEditContent(raw: string): { path: string; edits: EditPair[] } | null {
+  const pathMatch = raw.match(/path:\s*["']?([^\n"']+)["']?/)
+  if (!pathMatch) return null
+  const path = pathMatch[1].trim()
+
+  const edits: EditPair[] = []
+  // Match oldText/newText pairs (quoted values, allow HTML/special chars inside)
+  const re = /oldText:\s*"([\s\S]*?)"\s*newText:\s*"([\s\S]*?)"/g
+  let m
+  while ((m = re.exec(raw)) !== null) edits.push({ oldText: m[1], newText: m[2] })
+  return edits.length ? { path, edits } : null
+}
+
+function EditBlock({ content }: { content: string }) {
+  const [expanded, setExpanded] = useState(false)
+  const parsed = parseEditContent(content)
+
+  if (!parsed) {
+    // Fallback: show raw content in a code block
+    return (
+      <div className="mb-2" style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius)', overflow: 'hidden' }}>
+        <div className="flex items-center gap-2 px-3 py-1.5" style={{ background: 'var(--bg-elevated)', borderBottom: '1px solid var(--border)' }}>
+          <PenLine size={11} style={{ color: 'var(--accent)', flexShrink: 0 }} />
+          <span className="text-xs font-semibold" style={{ color: 'var(--accent)' }}>Edit</span>
+        </div>
+        <pre className="text-xs px-3 py-2" style={{ color: 'var(--text-secondary)', whiteSpace: 'pre-wrap', wordBreak: 'break-word', margin: 0 }}>{content}</pre>
+      </div>
+    )
+  }
+
+  const filename = parsed.path.split('/').pop() ?? parsed.path
+  const n = parsed.edits.length
+
+  return (
+    <div className="mb-2" style={{ border: '1px solid color-mix(in srgb, var(--accent) 25%, var(--border))', borderRadius: 'var(--radius)', overflow: 'hidden' }}>
+      {/* Header */}
+      <div
+        className="flex items-center gap-2 px-3 py-1.5 cursor-pointer select-none"
+        style={{ background: 'color-mix(in srgb, var(--accent) 7%, var(--bg-elevated))', borderBottom: expanded ? '1px solid var(--border)' : 'none' }}
+        onClick={() => setExpanded(v => !v)}
+      >
+        <PenLine size={11} style={{ color: 'var(--accent)', flexShrink: 0 }} />
+        <span className="text-xs font-semibold" style={{ color: 'var(--accent)' }}>Edit</span>
+        <span className="text-xs font-mono font-semibold truncate" style={{ color: 'var(--text-primary)' }}>{filename}</span>
+        <span className="text-xs ml-auto shrink-0" style={{ color: 'var(--text-secondary)', opacity: 0.6 }}>
+          {n} edit{n !== 1 ? 's' : ''}
+        </span>
+        <ChevronDown size={11} style={{ color: 'var(--text-secondary)', flexShrink: 0, transform: expanded ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
+      </div>
+
+      {/* Path */}
+      {expanded && (
+        <div className="px-3 py-1.5 text-xs font-mono truncate" style={{ color: 'var(--text-secondary)', opacity: 0.6, borderBottom: '1px solid var(--border)', background: 'var(--bg-primary)' }}>
+          {parsed.path}
+        </div>
+      )}
+
+      {/* Diffs */}
+      {expanded && parsed.edits.map((e, i) => (
+        <div key={i} style={{ borderBottom: i < parsed.edits.length - 1 ? '1px solid var(--border)' : 'none' }}>
+          <div className="px-3 py-1.5 text-xs font-mono" style={{ background: 'color-mix(in srgb, var(--danger) 8%, var(--bg-primary))', color: 'var(--danger)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+            {'− '}{e.oldText}
+          </div>
+          <div className="px-3 py-1.5 text-xs font-mono" style={{ background: 'color-mix(in srgb, var(--success) 8%, var(--bg-primary))', color: 'var(--success)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+            {'+ '}{e.newText}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// ── Generic gateway action pill (self-closing / unknown content tags) ─────────
+
+function looksLikeJson(v: string): boolean {
+  const t = v.trim()
+  return (t.startsWith('{') || t.startsWith('[')) && (t.endsWith('}') || t.endsWith(']'))
+}
+
+function prettyJson(v: string): string {
+  try { return JSON.stringify(JSON.parse(v), null, 2) } catch { return v }
+}
+
+function ActionPill({ resource, action, scalarAttrs, jsonAttrs, inlineContent }: {
+  resource: string
+  action: string
+  scalarAttrs: [string, string][]
+  jsonAttrs: [string, string][]
+  inlineContent?: string
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const hasExpando = jsonAttrs.length > 0
+
+  return (
+    <div style={{ border: '1px solid color-mix(in srgb, var(--accent) 20%, var(--border))', borderRadius: 'var(--radius)', overflow: 'hidden' }}>
+      {/* Header row */}
+      <div
+        className="flex items-center gap-2 px-3 py-1.5 text-xs"
+        style={{ background: 'color-mix(in srgb, var(--accent) 7%, var(--bg-elevated))', cursor: hasExpando ? 'pointer' : 'default' }}
+        onClick={() => hasExpando && setExpanded(v => !v)}
+      >
+        <Zap size={11} style={{ color: 'var(--accent)', flexShrink: 0 }} />
+        <span style={{ color: 'var(--accent)', fontWeight: 600 }}>{resource}</span>
+        {action && <><span style={{ color: 'var(--text-secondary)', opacity: 0.4 }}>·</span><span className="font-mono" style={{ color: 'var(--text-secondary)' }}>{action}</span></>}
+        {scalarAttrs.map(([k, v]) => (
+          <span key={k} className="font-mono" style={{ color: 'var(--text-secondary)', opacity: 0.7 }}>
+            {k}=<span style={{ color: 'var(--text-primary)' }}>{v.length > 36 ? v.slice(0, 36) + '…' : v}</span>
+          </span>
+        ))}
+        {inlineContent && !action && (
+          <span className="font-mono truncate flex-1" style={{ color: 'var(--text-secondary)', opacity: 0.6 }}>
+            {inlineContent.slice(0, 60)}{inlineContent.length > 60 ? '…' : ''}
+          </span>
+        )}
+        {hasExpando && (
+          <ChevronDown size={11} style={{ color: 'var(--text-secondary)', marginLeft: 'auto', flexShrink: 0, transform: expanded ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
+        )}
+      </div>
+      {/* JSON payload(s) */}
+      {expanded && jsonAttrs.map(([k, v]) => (
+        <div key={k} style={{ borderTop: '1px solid var(--border)' }}>
+          <div className="px-3 pt-1.5 pb-0.5 text-xs font-semibold" style={{ color: 'var(--text-secondary)', background: 'var(--bg-elevated)' }}>{k}</div>
+          <pre style={{ margin: 0, padding: '6px 12px 8px', fontSize: 11, fontFamily: 'monospace', background: 'var(--bg-primary)', color: 'var(--text-primary)', whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflowX: 'auto' }}>
+            {prettyJson(v)}
+          </pre>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function GatewayActionBlock({ actions }: { actions: GatewayAction[] }) {
+  if (actions.length === 0) return null
+  return (
+    <div className="mb-2 flex flex-col gap-1.5">
+      {actions.map((a, i) => {
+        if (a.content !== undefined && a.resource === 'edit') {
+          return <EditBlock key={i} content={a.content} />
+        }
+        const scalarAttrs = Object.entries(a.attrs).filter(([, v]) => !looksLikeJson(v))
+        const jsonAttrs   = Object.entries(a.attrs).filter(([, v]) =>  looksLikeJson(v))
+        return (
+          <ActionPill key={i} resource={a.resource} action={a.action} scalarAttrs={scalarAttrs} jsonAttrs={jsonAttrs} inlineContent={a.content} />
+        )
+      })}
+    </div>
+  )
+}
+
 interface Props { message: ChatMessage; showTools?: boolean; showReasoning?: boolean }
 
 export function AssistantMessage({ message, showTools = true, showReasoning = true }: Props) {
-  const { thinking: inlineThinking, text: cleanContent } = extractThinkTags(stripProtocolTags(message.content))
+  const stripped = stripProtocolTags(message.content)
+  const { actions: gatewayActions, text: noActions } = extractGatewayActions(stripped)
+  const { thinking: inlineThinking, text: cleanContent } = extractThinkTags(noActions)
   const allReasoning = [message.reasoning, inlineThinking].filter(Boolean).join('\n\n')
   const hasReasoning = !!allReasoning
   const hasTools = !!(message.toolCalls?.length)
@@ -97,6 +304,11 @@ export function AssistantMessage({ message, showTools = true, showReasoning = tr
             text={allReasoning}
             streaming={(message.reasoningStreaming) || (!!inlineThinking && (message.streaming ?? false))}
           />
+        )}
+
+        {/* Gateway XML action tags */}
+        {gatewayActions.length > 0 && (
+          <GatewayActionBlock actions={gatewayActions} />
         )}
 
         {/* Tool calls */}

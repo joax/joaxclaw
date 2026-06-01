@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
-import { RefreshCw, Play, Trash2, ChevronDown, Clock, CheckCircle2, XCircle, SkipForward, Loader2, ToggleLeft, ToggleRight, AlertCircle, Pencil } from 'lucide-react'
+import { RefreshCw, Play, Trash2, ChevronDown, Clock, CheckCircle2, XCircle, SkipForward, Loader2, ToggleLeft, ToggleRight, AlertCircle, Pencil, MessageSquare } from 'lucide-react'
 import { ModelIcon } from '../ui/ModelIcon'
 import { useCronsStore } from '../../store/crons'
+import { useChatStore } from '../../store/chat'
 import type { CronJob, CronRunEntry, CronSchedule } from '../../lib/types'
 import { Btn } from '../ui/Btn'
 import { CronEditor } from './CronEditor'
@@ -265,7 +266,7 @@ function JobRow({ job, active, onClick }: { job: CronJob; active: boolean; onCli
 
 // ── Run history entry ─────────────────────────────────────────────────────────
 
-function RunEntryRow({ entry }: { entry: CronRunEntry }) {
+function RunEntryRow({ entry, onViewConversation }: { entry: CronRunEntry; onViewConversation?: () => void }) {
   const [expanded, setExpanded] = useState(false)
   const status = entry.status as RunStatus
   const hasDetails = Boolean(entry.error || entry.summary || entry.model || entry.usage)
@@ -292,6 +293,17 @@ function RunEntryRow({ entry }: { entry: CronRunEntry }) {
         >
           {formatAgo(entry.runAtMs ?? entry.ts)}
         </span>
+        {onViewConversation && (
+          <button
+            onClick={onViewConversation}
+            title="View conversation"
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)', padding: 0, display: 'flex' }}
+            onMouseEnter={e => (e.currentTarget.style.color = 'var(--accent)')}
+            onMouseLeave={e => (e.currentTarget.style.color = 'var(--text-secondary)')}
+          >
+            <MessageSquare size={13} />
+          </button>
+        )}
         {hasDetails && (
           <button
             onClick={() => setExpanded(v => !v)}
@@ -362,10 +374,16 @@ function RunEntryRow({ entry }: { entry: CronRunEntry }) {
 
 // ── Job detail panel ──────────────────────────────────────────────────────────
 
-function JobDetail({ job }: { job: CronJob }) {
+function JobDetail({ job, onOpenChat }: { job: CronJob; onOpenChat?: () => void }) {
   const { fetchRuns, toggle, runNow, remove, runs, runsHasMore, loadingRuns, runningNow } = useCronsStore()
+  const { loadSessionMessages } = useChatStore()
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [editing, setEditing] = useState(false)
+
+  function viewConversation(sessionKey: string) {
+    const agentId = job.agentId ?? (sessionKey.includes('@') ? sessionKey.slice(0, sessionKey.indexOf('@')) : sessionKey)
+    loadSessionMessages(sessionKey, agentId, job.name).then(() => onOpenChat?.())
+  }
   const jobRuns = runs[job.id] ?? []
   const isLoadingRuns = loadingRuns.has(job.id)
   const isRunningNow = runningNow.has(job.id)
@@ -507,7 +525,11 @@ function JobDetail({ job }: { job: CronJob }) {
         )}
 
         {jobRuns.map((entry, i) => (
-          <RunEntryRow key={`${entry.runAtMs ?? entry.ts}-${i}`} entry={entry} />
+          <RunEntryRow
+            key={`${entry.runAtMs ?? entry.ts}-${i}`}
+            entry={entry}
+            onViewConversation={entry.sessionKey ? () => viewConversation(entry.sessionKey!) : undefined}
+          />
         ))}
 
         {runsHasMore[job.id] && (
@@ -544,7 +566,7 @@ function InfoChip({ label, value, mono }: { label: string; value: string; mono?:
 
 // ── Main view ─────────────────────────────────────────────────────────────────
 
-export function CronsView() {
+export function CronsView({ onOpenChat }: { onOpenChat?: () => void }) {
   const { jobs, loadingJobs, error, fetch } = useCronsStore()
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [search, setSearch] = useState('')
@@ -634,7 +656,7 @@ export function CronsView() {
       {/* Detail panel */}
       <div className="flex flex-1 flex-col min-w-0 min-h-0" style={{ background: 'var(--bg-primary)' }}>
         {selectedJob ? (
-          <JobDetail key={selectedJob.id} job={selectedJob} />
+          <JobDetail key={selectedJob.id} job={selectedJob} onOpenChat={onOpenChat} />
         ) : (
           <div className="flex flex-1 flex-col items-center justify-center gap-3">
             <Clock size={40} style={{ color: 'var(--text-secondary)', opacity: 0.3 }} />

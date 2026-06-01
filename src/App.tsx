@@ -64,7 +64,7 @@ export default function App() {
               {section === 'agents' && <AgentsView onOpenChat={() => setSection('chat')} />}
               {section === 'extensions' && <ExtensionsView />}
               {section === 'sessions' && <SessionsView onOpenChat={() => setSection('chat')} />}
-              {section === 'crons' && <CronsView />}
+              {section === 'crons' && <CronsView onOpenChat={() => setSection('chat')} />}
               {section === 'obsidian' && <ObsidianView onNavigateExtensions={() => setSection('extensions')} />}
               {section === 'models' && <ModelsView />}
               {section === 'gateway' && <GatewayView />}
