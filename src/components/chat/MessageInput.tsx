@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { Send, Square, RotateCcw, Paperclip, X, Image } from 'lucide-react'
+import { Send, Square, RotateCcw, Paperclip, X, Image, Mic, MicOff, AudioWaveform } from 'lucide-react'
 import { useChatStore } from '../../store/chat'
 import { useSettingsStore } from '../../store/settings'
 import type { MediaAttachment } from '../../lib/types'
@@ -38,6 +38,18 @@ function fileToAttachment(file: File): Promise<PendingAttachment> {
   })
 }
 
+function pickMimeType(): string {
+  for (const t of ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/mp4']) {
+    if (MediaRecorder.isTypeSupported(t)) return t
+  }
+  return ''
+}
+
+function formatRecTime(ms: number): string {
+  const s = Math.floor(ms / 1000)
+  return `${Math.floor(s / 60).toString().padStart(2, '0')}:${(s % 60).toString().padStart(2, '0')}`
+}
+
 interface Props { convId: string }
 
 export function MessageInput({ convId }: Props) {
@@ -46,10 +58,15 @@ export function MessageInput({ convId }: Props) {
   const [isStalled, setIsStalled] = useState(false)
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([])
   const [isDragOver, setIsDragOver] = useState(false)
-  const { sendMessage, abortStream, conversations } = useChatStore()
+  const [recording, setRecording] = useState(false)
+  const [recordingMs, setRecordingMs] = useState(0)
+  const { sendMessage, abortStream, compact, conversations } = useChatStore()
   const stallTimeoutMs = useSettingsStore(s => s.streamStallTimeout * 1000)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null)
+  const recChunksRef = useRef<Blob[]>([])
+  const recTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const conv = conversations.find(c => c.id === convId)
   const isStreaming = conv?.messages.some(m => m.streaming) ?? false
@@ -78,11 +95,65 @@ export function MessageInput({ convId }: Props) {
     prevBlocked.current = isBlocked
   }, [isBlocked])
 
+  // Stop recording on unmount
+  useEffect(() => () => {
+    mediaRecorderRef.current?.state !== 'inactive' && mediaRecorderRef.current?.stop()
+    recTimerRef.current && clearInterval(recTimerRef.current)
+  }, [])
+
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const mimeType = pickMimeType()
+      const mr = new MediaRecorder(stream, mimeType ? { mimeType } : undefined)
+      mediaRecorderRef.current = mr
+      recChunksRef.current = []
+
+      mr.ondataavailable = e => { if (e.data.size > 0) recChunksRef.current.push(e.data) }
+      mr.onstop = () => {
+        stream.getTracks().forEach(t => t.stop())
+        const blob = new Blob(recChunksRef.current, { type: mr.mimeType })
+        const ext = mr.mimeType.includes('ogg') ? 'ogg' : mr.mimeType.includes('mp4') ? 'mp4' : 'webm'
+        const file = new File([blob], `voice-${Date.now()}.${ext}`, { type: mr.mimeType })
+        fileToAttachment(file).then(att => setPendingAttachments(prev => [...prev, att]))
+        setRecording(false)
+        setRecordingMs(0)
+        if (recTimerRef.current) { clearInterval(recTimerRef.current); recTimerRef.current = null }
+      }
+
+      mr.start(100)
+      setRecording(true)
+      setRecordingMs(0)
+      recTimerRef.current = setInterval(() => setRecordingMs(ms => ms + 100), 100)
+    } catch {
+      // Permission denied or no mic — silently ignore
+    }
+  }
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop()
+    }
+  }
+
   const canSend = !isBlocked && (!!text.trim() || pendingAttachments.length > 0)
 
   const handleSend = async (overrideText?: string) => {
     const msg = (overrideText ?? text).trim()
     if ((!msg && pendingAttachments.length === 0) || sending || isBlocked) return
+
+    // ── Slash commands ────────────────────────────────────────────────────────
+    if (msg.startsWith('/') && !overrideText) {
+      const cmd = msg.slice(1).trim().toLowerCase()
+      if (cmd === 'compact') {
+        setText('')
+        if (textareaRef.current) textareaRef.current.style.height = 'auto'
+        await compact(convId)
+        return
+      }
+      // Unknown slash command — let it through as a regular message
+    }
+
     setText('')
     if (textareaRef.current) textareaRef.current.style.height = 'auto'
     const atts: MediaAttachment[] = pendingAttachments.map(a => ({
@@ -171,6 +242,13 @@ export function MessageInput({ convId }: Props) {
             <div key={att.id} style={{ position: 'relative', display: 'inline-block' }}>
               {att.type === 'image' ? (
                 <img src={att.dataUrl} alt={att.name} style={{ height: 72, maxWidth: 120, borderRadius: 8, objectFit: 'cover', border: '1px solid var(--border)' }} />
+              ) : att.type === 'audio' ? (
+                <div style={{ height: 56, minWidth: 120, maxWidth: 180, borderRadius: 8, background: 'color-mix(in srgb, var(--accent) 10%, var(--bg-elevated))', border: '1px solid color-mix(in srgb, var(--accent) 25%, var(--border))', display: 'flex', alignItems: 'center', gap: 8, padding: '0 10px' }}>
+                  <AudioWaveform size={18} style={{ color: 'var(--accent)', flexShrink: 0 }} />
+                  <span style={{ fontSize: 10, color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {att.name.startsWith('voice-') ? 'Voice note' : att.name}
+                  </span>
+                </div>
               ) : (
                 <div style={{ height: 72, width: 72, borderRadius: 8, background: 'var(--bg-elevated)', border: '1px solid var(--border)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
                   <Image size={20} style={{ color: 'var(--text-secondary)' }} />
@@ -188,36 +266,71 @@ export function MessageInput({ convId }: Props) {
       <div
         className="flex items-end gap-2 p-2 rounded"
         style={{
-          border: `1px solid ${isDragOver ? 'var(--accent)' : isStalled ? 'var(--danger)' : 'var(--border)'}`,
-          background: isDragOver ? 'color-mix(in srgb, var(--accent) 5%, var(--bg-elevated))' : 'var(--bg-elevated)',
+          border: `1px solid ${recording ? 'var(--danger)' : isDragOver ? 'var(--accent)' : isStalled ? 'var(--danger)' : 'var(--border)'}`,
+          background: recording ? 'color-mix(in srgb, var(--danger) 4%, var(--bg-elevated))' : isDragOver ? 'color-mix(in srgb, var(--accent) 5%, var(--bg-elevated))' : 'var(--bg-elevated)',
           borderRadius: 'var(--radius)', transition: 'border-color 0.2s, background 0.2s'
         }}
       >
-        <button onClick={() => fileInputRef.current?.click()} title="Attach file" disabled={isBlocked} style={{ flexShrink: 0, width: 28, height: 28, border: 'none', background: 'none', cursor: isBlocked ? 'default' : 'pointer', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 6, opacity: isBlocked ? 0.4 : 1 }}
-          onMouseEnter={e => { if (!isBlocked) (e.currentTarget as HTMLElement).style.background = 'var(--bg-primary)' }}
-          onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'none' }}
-        >
-          <Paperclip size={15} />
-        </button>
-        <textarea
-          ref={textareaRef}
-          value={text}
-          onChange={handleInput}
-          onKeyDown={handleKey}
-          onPaste={handlePaste}
-          placeholder={isDragOver ? 'Drop files here…' : isStalled ? 'Type to continue or use the buttons above…' : 'Message…'}
-          rows={1}
-          disabled={isBlocked}
-          style={{ flex: 1, resize: 'none', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: 14, outline: 'none', fontFamily: 'var(--font-family)', lineHeight: 1.5, padding: '4px 4px', minHeight: 28, maxHeight: 160, overflowY: 'auto' }}
-        />
-        <button
-          onClick={isBlocked ? handleStop : () => handleSend()}
-          disabled={!isBlocked && !canSend}
-          title={isBlocked ? 'Stop' : 'Send (Enter)'}
-          style={{ width: 32, height: 32, borderRadius: 'calc(var(--radius) / 1.5)', border: 'none', background: canSend || isBlocked ? 'var(--accent)' : 'var(--border)', color: 'var(--accent-fg)', cursor: canSend || isBlocked ? 'pointer' : 'default', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'background 0.15s', flexShrink: 0 }}
-        >
-          {isBlocked ? <Square size={13} /> : <Send size={13} />}
-        </button>
+        {/* Paperclip — hidden while recording */}
+        {!recording && (
+          <button onClick={() => fileInputRef.current?.click()} title="Attach file" disabled={isBlocked} style={{ flexShrink: 0, width: 28, height: 28, border: 'none', background: 'none', cursor: isBlocked ? 'default' : 'pointer', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 6, opacity: isBlocked ? 0.4 : 1 }}
+            onMouseEnter={e => { if (!isBlocked) (e.currentTarget as HTMLElement).style.background = 'var(--bg-primary)' }}
+            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'none' }}
+          >
+            <Paperclip size={15} />
+          </button>
+        )}
+
+        {/* Recording indicator — replaces textarea while recording */}
+        {recording ? (
+          <>
+            <div className="flex items-center gap-2 flex-1 px-1">
+              <span className="animate-pulse-dot" style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--danger)', flexShrink: 0 }} />
+              <span className="font-mono text-sm" style={{ color: 'var(--danger)' }}>{formatRecTime(recordingMs)}</span>
+              <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>Recording…</span>
+            </div>
+            <button
+              onClick={stopRecording}
+              title="Stop recording"
+              style={{ flexShrink: 0, width: 32, height: 32, border: 'none', background: 'var(--danger)', color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 'calc(var(--radius) / 1.5)' }}
+            >
+              <MicOff size={14} />
+            </button>
+          </>
+        ) : (
+          <>
+            <textarea
+              ref={textareaRef}
+              value={text}
+              onChange={handleInput}
+              onKeyDown={handleKey}
+              onPaste={handlePaste}
+              placeholder={isDragOver ? 'Drop files here…' : isStalled ? 'Type to continue or use the buttons above…' : 'Message…'}
+              rows={1}
+              disabled={isBlocked}
+              style={{ flex: 1, resize: 'none', border: 'none', background: 'transparent', color: 'var(--text-primary)', fontSize: 14, outline: 'none', fontFamily: 'var(--font-family)', lineHeight: 1.5, padding: '4px 4px', minHeight: 28, maxHeight: 160, overflowY: 'auto' }}
+            />
+            {/* Mic button */}
+            <button
+              onClick={startRecording}
+              title="Record voice note"
+              disabled={isBlocked}
+              style={{ flexShrink: 0, width: 28, height: 28, border: 'none', background: 'none', cursor: isBlocked ? 'default' : 'pointer', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 6, opacity: isBlocked ? 0.4 : 1 }}
+              onMouseEnter={e => { if (!isBlocked) { (e.currentTarget as HTMLElement).style.background = 'var(--bg-primary)'; (e.currentTarget as HTMLElement).style.color = 'var(--accent)' } }}
+              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'none'; (e.currentTarget as HTMLElement).style.color = 'var(--text-secondary)' }}
+            >
+              <Mic size={15} />
+            </button>
+            <button
+              onClick={isBlocked ? handleStop : () => handleSend()}
+              disabled={!isBlocked && !canSend}
+              title={isBlocked ? 'Stop' : 'Send (Enter)'}
+              style={{ width: 32, height: 32, borderRadius: 'calc(var(--radius) / 1.5)', border: 'none', background: canSend || isBlocked ? 'var(--accent)' : 'var(--border)', color: 'var(--accent-fg)', cursor: canSend || isBlocked ? 'pointer' : 'default', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'background 0.15s', flexShrink: 0 }}
+            >
+              {isBlocked ? <Square size={13} /> : <Send size={13} />}
+            </button>
+          </>
+        )}
       </div>
       <p className="text-center mt-1.5 text-xs" style={{ color: 'var(--text-secondary)', opacity: 0.5 }}>
         Enter to send · Shift+Enter for new line · Paste or drag images
