@@ -1,14 +1,21 @@
 import { useEffect, useRef, useState } from 'react'
 import { Wifi, WifiOff, Heart, Cpu, MemoryStick, ChevronUp } from 'lucide-react'
+import { ModelIcon } from '../ui/ModelIcon'
 import { useConnectionStore } from '../../store/connection'
 import { useMetricsStore } from '../../store/metrics'
 import { useSettingsStore } from '../../store/settings'
+import { useSessionsStore } from '../../store/sessions'
+import { useChatStore } from '../../store/chat'
+import { useModelsStore } from '../../store/models'
 import { formatBytes } from '../../lib/ollama'
 
 export function StatusBar() {
   const { status, lastHeartbeat, heartbeats, uptimeStart } = useConnectionStore()
   const { metrics, ollamaModels, activeModel } = useMetricsStore()
   const { showGpu, showRam, showHeartbeat, showModelName, toggleMonitor, monitorVisible } = useSettingsStore()
+  const sessions = useSessionsStore(s => s.sessions)
+  const { conversations, activeConvId } = useChatStore()
+  const providers = useModelsStore(s => s.providers)
   const [hbPulse, setHbPulse] = useState(false)
   const [uptime, setUptime] = useState('')
   const prevHb = useRef<number | null>(null)
@@ -36,6 +43,27 @@ export function StatusBar() {
   }, [uptimeStart])
 
   const hbAgo = lastHeartbeat ? Math.round((Date.now() - lastHeartbeat) / 1000) : null
+
+  // Most accurate model: last assistant message's model field → session config → Ollama metrics
+  const activeConv = conversations.find(c => c.id === activeConvId)
+  const lastAssistantModel = activeConv?.messages.findLast(m => m.role === 'assistant' && m.model)?.model
+  const activeConvSession = activeConv?.sessionKey ? sessions.find(s => s.key === activeConv.sessionKey) : undefined
+  const sessionModel = activeConvSession?.model
+    ? (activeConvSession.modelProvider ? `${activeConvSession.modelProvider}/${activeConvSession.model}` : activeConvSession.model)
+    : undefined
+
+  // If the message model has no provider prefix, find which provider owns it
+  function resolveModel(raw: string): string {
+    if (raw.includes('/')) return raw
+    for (const [pid, p] of Object.entries(providers)) {
+      if (p.models.some(m => m.id === raw)) return `${pid}/${raw}`
+    }
+    return raw
+  }
+
+  const displayModel = lastAssistantModel
+    ? resolveModel(lastAssistantModel)
+    : (sessionModel ?? activeModel ?? ollamaModels[0]?.name ?? '—')
   const hbLate = hbAgo !== null && hbAgo > 40
   const gpu = metrics?.gpu?.[0]
 
@@ -92,10 +120,10 @@ export function StatusBar() {
       {/* Model */}
       {showModelName && (
         <>
-          <div className="flex items-center gap-1">
-            <span className="opacity-50">model</span>
+          <div className="flex items-center gap-1.5">
+            <ModelIcon model={displayModel} size={11} />
             <span style={{ color: 'var(--text-primary)' }}>
-              {activeModel ?? ollamaModels[0]?.name ?? '—'}
+              {displayModel}
             </span>
           </div>
           <Divider />

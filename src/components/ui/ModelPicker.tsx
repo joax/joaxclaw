@@ -11,7 +11,7 @@ interface Props {
 }
 
 export function ModelPicker({ value, onChange, placeholder, inputStyle }: Props) {
-  const { providers, agentDefaultModelIds, loading, load } = useModelsStore()
+  const { providers, loading, load } = useModelsStore()
   const { ollamaModels } = useMetricsStore()
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState(value)
@@ -22,13 +22,7 @@ export function ModelPicker({ value, onChange, placeholder, inputStyle }: Props)
 
   const loadedSet = new Set(ollamaModels.filter(m => m.loaded).map(m => `ollama/${m.name}`))
 
-  const providerModelIds = new Set(
-    Object.entries(providers).flatMap(([pid, p]) => p.models.map(m => `${pid}/${m.id}`))
-  )
-
-  const pluginOnlyIds = agentDefaultModelIds.filter(id => !providerModelIds.has(id))
-
-  const providerGroups = Object.entries(providers)
+  const groups = Object.entries(providers)
     .map(([pid, p]) => ({
       pid,
       models: p.models.map(m => ({
@@ -39,25 +33,6 @@ export function ModelPicker({ value, onChange, placeholder, inputStyle }: Props)
       }))
     }))
     .filter(g => g.models.length > 0)
-
-  const pluginGroups = Object.entries(
-    pluginOnlyIds.reduce<Record<string, string[]>>((acc, fullId) => {
-      const slash = fullId.indexOf('/')
-      const pid = slash >= 0 ? fullId.slice(0, slash) : 'other'
-      ;(acc[pid] ??= []).push(fullId)
-      return acc
-    }, {})
-  ).map(([pid, ids]) => ({
-    pid,
-    models: ids.map(fullId => ({
-      fullId,
-      displayId: fullId.slice(pid.length + 1),
-      name: undefined,
-      loaded: false
-    }))
-  }))
-
-  const groups = [...providerGroups, ...pluginGroups]
 
   const q = search.toLowerCase()
   const filteredGroups = groups

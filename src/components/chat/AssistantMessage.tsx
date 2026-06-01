@@ -9,10 +9,37 @@ import { WorkspaceImage, VideoPlayer } from './WorkspaceMedia'
 
 const STALE_THRESHOLD_MS = 15_000
 
+// Extract <think>…</think> blocks that some models embed directly in content
+function extractThinkTags(content: string): { thinking: string; text: string } {
+  const parts: string[] = []
+  let cleaned = content.replace(/<think>([\s\S]*?)<\/think>/g, (_, inner: string) => {
+    parts.push(inner.trim())
+    return ''
+  })
+  // Handle unclosed <think> tag — strip it and treat any following text as reasoning
+  const openIdx = cleaned.lastIndexOf('<think>')
+  if (openIdx !== -1) {
+    const inner = cleaned.slice(openIdx + 7).trim()
+    if (inner) parts.push(inner)
+    cleaned = cleaned.slice(0, openIdx)
+  }
+  // Strip trailing partial <think> prefix (e.g. "<", "<t", "<th", "<thi", "<thin", "<think")
+  // that arrives when a stream cuts off mid-tag
+  cleaned = cleaned.replace(/<(?:t(?:h(?:i(?:n(?:k>?)?)?)?)?)?$/, '')
+  return { thinking: parts.join('\n\n'), text: cleaned.trim() }
+}
+
+// Strip gateway protocol wrapper tags (<final>…</final>) from content
+function stripProtocolTags(text: string): string {
+  return text.replace(/<\/?final>/gi, '').trim()
+}
+
 interface Props { message: ChatMessage; showTools?: boolean; showReasoning?: boolean }
 
 export function AssistantMessage({ message, showTools = true, showReasoning = true }: Props) {
-  const hasReasoning = !!(message.reasoning)
+  const { thinking: inlineThinking, text: cleanContent } = extractThinkTags(stripProtocolTags(message.content))
+  const allReasoning = [message.reasoning, inlineThinking].filter(Boolean).join('\n\n')
+  const hasReasoning = !!allReasoning
   const hasTools = !!(message.toolCalls?.length)
 
   // Stale streaming detection: if streaming but no content updates for STALE_THRESHOLD_MS, show waiting indicator
@@ -67,8 +94,8 @@ export function AssistantMessage({ message, showTools = true, showReasoning = tr
         {/* Reasoning block */}
         {hasReasoning && showReasoning && (
           <ReasoningBlock
-            text={message.reasoning!}
-            streaming={message.reasoningStreaming ?? false}
+            text={allReasoning}
+            streaming={(message.reasoningStreaming) || (!!inlineThinking && (message.streaming ?? false))}
           />
         )}
 
@@ -88,8 +115,7 @@ export function AssistantMessage({ message, showTools = true, showReasoning = tr
         )}
 
         {/* Message content */}
-        {(message.content || message.streaming || message.attachments?.length ||
-          (!message.streaming && !hasTools && !hasReasoning && !message.contextOverflow)) && (
+        {(cleanContent || message.streaming || message.attachments?.length) && (
           <div
             className="px-4 py-3 text-sm"
             style={{
@@ -100,12 +126,10 @@ export function AssistantMessage({ message, showTools = true, showReasoning = tr
               lineHeight: 1.7
             }}
           >
-            {message.content ? (
-              <MarkdownContent text={message.content} streaming={message.streaming} />
-            ) : message.streaming ? (
-              <span className="streaming-cursor" style={{ color: 'var(--text-secondary)' }} />
+            {cleanContent ? (
+              <MarkdownContent text={cleanContent} streaming={message.streaming} />
             ) : (
-              <span style={{ color: 'var(--text-secondary)', fontStyle: 'italic', fontSize: 12 }}>No response</span>
+              <span className="streaming-cursor" style={{ color: 'var(--text-secondary)' }} />
             )}
             {message.attachments?.filter(a => a.type === 'image').map((a, i) => (
               <WorkspaceImage key={i} src={a.url ?? `data:${a.mediaType ?? 'image/png'};base64,${a.data}`} alt={a.name} />

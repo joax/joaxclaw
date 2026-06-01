@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { RefreshCw, Play, Trash2, ChevronDown, Clock, CheckCircle2, XCircle, SkipForward, Loader2, ToggleLeft, ToggleRight, AlertCircle, Pencil } from 'lucide-react'
+import { ModelIcon } from '../ui/ModelIcon'
 import { useCronsStore } from '../../store/crons'
 import type { CronJob, CronRunEntry, CronSchedule } from '../../lib/types'
 import { Btn } from '../ui/Btn'
@@ -18,10 +19,114 @@ function formatEveryMs(ms: number): string {
   return d === Math.floor(d) ? `${d}d` : `${d.toFixed(1)}d`
 }
 
+const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+
+function describeCronExpr(expr: string): string {
+  const parts = expr.trim().split(/\s+/)
+  if (parts.length !== 5) return expr
+  const [min, hour, dom, month, dow] = parts
+
+  const isAll = (v: string) => v === '*'
+  const isNum = (v: string) => /^\d+$/.test(v)
+  const num = (v: string) => parseInt(v, 10)
+  const hhmm = (h: string, m: string) => {
+    const hh = num(h), mm = num(m)
+    if (hh === 0 && mm === 0) return 'midnight'
+    if (hh === 12 && mm === 0) return 'noon'
+    return `${hh.toString().padStart(2, '0')}:${mm.toString().padStart(2, '0')}`
+  }
+
+  // Every minute
+  if (expr === '* * * * *') return 'Every minute'
+
+  // Every N minutes: */N * * * *
+  if (/^\*\/\d+$/.test(min) && isAll(hour) && isAll(dom) && isAll(month) && isAll(dow)) {
+    const n = num(min.slice(2))
+    return n === 1 ? 'Every minute' : `Every ${n} min`
+  }
+
+  // N times per hour: */N * * * * with N dividing 60
+  // Hourly variants: fixed minute, * hour
+  if (isNum(min) && isAll(hour) && isAll(dom) && isAll(month) && isAll(dow)) {
+    const m = num(min)
+    return m === 0 ? 'Hourly' : `Hourly at :${m.toString().padStart(2, '0')}`
+  }
+
+  // Every N hours: min */N * * *
+  if (/^\*\/\d+$/.test(hour) && isAll(dom) && isAll(month) && isAll(dow)) {
+    const n = num(hour.slice(2))
+    const label = isNum(min) && num(min) === 0 ? `Every ${n}h` : `Every ${n}h at :${isNum(min) ? num(min).toString().padStart(2, '0') : '??'}`
+    return label
+  }
+
+  // Daily: min hour * * *
+  if (isNum(min) && isNum(hour) && isAll(dom) && isAll(month) && isAll(dow)) {
+    return `Daily at ${hhmm(hour, min)}`
+  }
+
+  // Weekdays: min hour * * 1-5
+  if (isNum(min) && isNum(hour) && isAll(dom) && isAll(month) && dow === '1-5') {
+    return `Weekdays at ${hhmm(hour, min)}`
+  }
+
+  // Weekends: min hour * * 6,0 or 0,6
+  if (isNum(min) && isNum(hour) && isAll(dom) && isAll(month) && (dow === '6,0' || dow === '0,6')) {
+    return `Weekends at ${hhmm(hour, min)}`
+  }
+
+  // Multiple specific hours: min H,H,H * * *
+  if (isNum(min) && hour.includes(',') && isAll(dom) && isAll(month) && isAll(dow)) {
+    const hours = hour.split(',').map(Number)
+    if (hours.every(h => !isNaN(h))) {
+      const sorted = [...hours].sort((a, b) => a - b)
+      // Check if evenly spaced including midnight wrap-around → "Every Nh"
+      const gap = sorted[1] - sorted[0]
+      const evenly = sorted.every((h, i) => i === 0 || h - sorted[i - 1] === gap)
+      const wrap = 24 - sorted[sorted.length - 1] + sorted[0]
+      if (evenly && wrap === gap && num(min) === 0) return `Every ${gap}h`
+      // Otherwise list the hours
+      const m = num(min)
+      const labels = sorted.map(h => `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`)
+      return labels.join(', ')
+    }
+  }
+
+  // Weekly on a specific day: min hour * * dow
+  if (isNum(min) && isNum(hour) && isAll(dom) && isAll(month) && isNum(dow)) {
+    const d = num(dow)
+    if (d >= 0 && d <= 6) return `Weekly · ${DAYS[d]} at ${hhmm(hour, min)}`
+  }
+
+  // Multiple days of the week: min hour * * D,D,D
+  if (isNum(min) && isNum(hour) && isAll(dom) && isAll(month) && dow.includes(',')) {
+    const days = dow.split(',').map(Number)
+    if (days.every(d => !isNaN(d) && d >= 0 && d <= 6)) {
+      const dayNames = days.sort((a, b) => a - b).map(d => DAYS[d]).join(', ')
+      return `${dayNames} at ${hhmm(hour, min)}`
+    }
+  }
+
+  // Monthly on a specific day: min hour dom * *
+  if (isNum(min) && isNum(hour) && isNum(dom) && isAll(month) && isAll(dow)) {
+    const d = num(dom)
+    const suffix = d === 1 ? 'st' : d === 2 ? 'nd' : d === 3 ? 'rd' : 'th'
+    return `Monthly · ${d}${suffix} at ${hhmm(hour, min)}`
+  }
+
+  // Yearly: min hour dom month *
+  if (isNum(min) && isNum(hour) && isNum(dom) && isNum(month) && isAll(dow)) {
+    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+    const mo = months[num(month) - 1] ?? month
+    return `Yearly · ${mo} ${num(dom)} at ${hhmm(hour, min)}`
+  }
+
+  return expr
+}
+
 function formatSchedule(s: CronSchedule): string {
-  if (s.kind === 'at') return `Once at ${s.at ? new Date(s.at).toLocaleString() : '?'}`
+  if (s.kind === 'at') return `Once · ${s.at ? new Date(s.at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '?'}`
   if (s.kind === 'every') return `Every ${formatEveryMs(s.everyMs ?? 0)}`
-  if (s.kind === 'cron') return s.expr ?? '?'
+  if (s.kind === 'cron') return describeCronExpr(s.expr ?? '')
   return '?'
 }
 
@@ -79,26 +184,46 @@ function StatusIcon({ status, size = 13 }: { status: RunStatus; size?: number })
 
 // ── Job list item ─────────────────────────────────────────────────────────────
 
+function jobModel(job: CronJob): string | undefined {
+  if (job.payload?.kind === 'agentTurn' && job.payload.model) {
+    const m = job.payload.model
+    const slash = m.lastIndexOf('/')
+    return slash >= 0 ? m.slice(slash + 1) : m
+  }
+  return undefined
+}
+
 function JobRow({ job, active, onClick }: { job: CronJob; active: boolean; onClick: () => void }) {
   const isRunning = Boolean(job.state.runningAtMs)
   const lastStatus = isRunning ? 'running' : job.state.lastRunStatus as RunStatus
+  const model = jobModel(job)
+  const modelFull = job.payload?.kind === 'agentTurn' ? (job.payload.model ?? '') : ''
+
+  // Time hint: running > last run > next run
+  const timeLabel = isRunning
+    ? 'running…'
+    : job.state.lastRunAtMs
+      ? formatAgo(job.state.lastRunAtMs)
+      : job.state.nextRunAtMs
+        ? formatIn(job.state.nextRunAtMs)
+        : null
 
   return (
     <div
       onClick={onClick}
-      className="flex flex-col px-3 py-2.5 cursor-pointer"
+      className="flex flex-col px-3 py-2 cursor-pointer"
       style={{
-        background: active
-          ? 'color-mix(in srgb, var(--accent) 12%, var(--bg-elevated))'
-          : 'transparent',
+        background: active ? 'color-mix(in srgb, var(--accent) 12%, var(--bg-elevated))' : 'transparent',
         borderRadius: 'var(--radius)',
-        borderLeft: active ? '2px solid var(--accent)' : '2px solid transparent',
-        marginBottom: 1
+        borderLeft: `2px solid ${active ? 'var(--accent)' : 'transparent'}`,
+        marginBottom: 1,
+        gap: 3,
       }}
       onMouseEnter={e => { if (!active) (e.currentTarget as HTMLDivElement).style.background = 'var(--bg-elevated)' }}
       onMouseLeave={e => { if (!active) (e.currentTarget as HTMLDivElement).style.background = 'transparent' }}
     >
-      <div className="flex items-center gap-2">
+      {/* ── Row 1: status · name · badges ── */}
+      <div className="flex items-center gap-2 min-w-0">
         <StatusIcon status={lastStatus} size={12} />
         <span
           className="flex-1 text-sm font-medium truncate"
@@ -107,21 +232,30 @@ function JobRow({ job, active, onClick }: { job: CronJob; active: boolean; onCli
           {job.name}
         </span>
         {!job.enabled && (
-          <span
-            className="text-xs px-1.5 rounded"
-            style={{ background: 'var(--bg-elevated)', color: 'var(--text-secondary)', border: '1px solid var(--border)', fontSize: 10 }}
-          >
+          <span style={{ fontSize: 10, padding: '1px 5px', borderRadius: 4, background: 'var(--bg-elevated)', color: 'var(--text-secondary)', border: '1px solid var(--border)', flexShrink: 0 }}>
             off
           </span>
         )}
       </div>
-      <div className="flex items-center gap-2 mt-0.5 ml-5">
-        <span className="text-xs truncate" style={{ color: 'var(--text-secondary)' }}>
+
+      {/* ── Row 2: model ── */}
+      {model && (
+        <div className="flex items-center gap-1.5 ml-5">
+          <ModelIcon model={modelFull} size={9} />
+          <span className="text-xs font-mono truncate" style={{ color: 'var(--text-secondary)', opacity: 0.6 }}>
+            {modelFull || model}
+          </span>
+        </div>
+      )}
+
+      {/* ── Row 3: schedule · time ── */}
+      <div className="flex items-center gap-1.5 min-w-0 ml-5">
+        <span className="text-xs shrink-0" style={{ color: 'var(--text-secondary)', opacity: 0.6 }}>
           {formatSchedule(job.schedule)}
         </span>
-        {job.state.lastRunAtMs && (
-          <span className="text-xs shrink-0" style={{ color: statusColor(lastStatus) }}>
-            {isRunning ? 'running…' : formatAgo(job.state.lastRunAtMs)}
+        {timeLabel && (
+          <span className="text-xs shrink-0 ml-auto" style={{ color: statusColor(lastStatus) }}>
+            {timeLabel}
           </span>
         )}
       </div>

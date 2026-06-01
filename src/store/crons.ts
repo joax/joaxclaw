@@ -193,14 +193,14 @@ export const useCronsStore = create<CronsState>((set, get) => ({
   async toggle(id, enabled) {
     set(s => ({ jobs: s.jobs.map(j => j.id === id ? { ...j, enabled } : j) }))
     try {
-      await gatewayClient.request('cron.update', { id, patch: { enabled } })
+      await gatewayClient.request('cron.update', { jobId: id, patch: { enabled } })
     } catch {
       set(s => ({ jobs: s.jobs.map(j => j.id === id ? { ...j, enabled: !enabled } : j) }))
     }
   },
 
   async update(id, patch) {
-    const updated = await gatewayClient.request<CronJob>('cron.update', { id, patch })
+    const updated = await gatewayClient.request<CronJob>('cron.update', { jobId: id, patch })
     set(s => ({ jobs: s.jobs.map(j => j.id === id ? updated : j) }))
     return updated
   },
