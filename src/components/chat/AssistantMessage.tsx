@@ -29,9 +29,15 @@ function extractThinkTags(content: string): { thinking: string; text: string } {
   return { thinking: parts.join('\n\n'), text: cleaned.trim() }
 }
 
-// Strip gateway protocol wrapper tags (<final>…</final>) from content
+// Strip gateway protocol wrapper tags from content.
+// Handles: <final>, </final>, variants with attributes (<final_answer>),
+// and bare prefixes that arrive mid-stream without a closing > (<finalHere…).
 function stripProtocolTags(text: string): string {
-  return text.replace(/<\/?final>/gi, '').trim()
+  return text
+    .replace(/<\/final[^>]*>/gi, '')   // closing </final> or </final_answer>
+    .replace(/<final[^>]*>/gi, '')     // opening <final> or <final_answer attr="">
+    .replace(/^<final\S*/i, '')        // bare <final… with no > (split across stream deltas)
+    .trim()
 }
 
 // ── Gateway XML action tags ───────────────────────────────────────────────────

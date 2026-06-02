@@ -25,9 +25,12 @@ contextBridge.exposeInMainWorld('api', {
 
   // Local file access
   file: {
-    read: (filePath: string) => ipcRenderer.invoke('file:read', filePath),
-    find: (filename: string) => ipcRenderer.invoke('file:find', filename),
-    readBinary: (filePath: string) => ipcRenderer.invoke('file:readBinary', filePath)
+    read:    (filePath: string)                   => ipcRenderer.invoke('file:read', filePath),
+    write:   (filePath: string, text: string)     => ipcRenderer.invoke('file:write', filePath, text),
+    delete:  (filePath: string)                   => ipcRenderer.invoke('file:delete', filePath),
+    find:    (filename: string)                   => ipcRenderer.invoke('file:find', filename),
+    listdir: (dirPath: string, ext?: string)      => ipcRenderer.invoke('file:listdir', dirPath, ext),
+    readBinary: (filePath: string)                => ipcRenderer.invoke('file:readBinary', filePath)
   },
 
   // Plugin metadata (from openclaw plugins list --json)
