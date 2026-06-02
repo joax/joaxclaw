@@ -1,6 +1,6 @@
 import { app, BrowserWindow, ipcMain, shell, Tray, Menu, nativeImage, session } from 'electron'
-import { join } from 'path'
-import { readFile, writeFile, mkdir } from 'fs/promises'
+import { join, dirname } from 'path'
+import { readFile, writeFile, mkdir, readdir, unlink } from 'fs/promises'
 import { existsSync } from 'fs'
 import { homedir } from 'os'
 import { exec } from 'child_process'
@@ -172,7 +172,7 @@ ipcMain.handle('config:write', async (_event, text: string) => {
   }
 })
 
-// ── IPC: Local file read (for skill MD files) ────────────────────────────────
+// ── IPC: Local file read/write ───────────────────────────────────────────────
 ipcMain.handle('file:read', async (_event, filePath: string) => {
   try {
     const text = await readFile(filePath, 'utf8')
@@ -217,6 +217,41 @@ ipcMain.handle('file:find', async (_event, filename: string) => {
   )
   if (result2.ok && result2.stdout) return { ok: true, path: result2.stdout }
   return { ok: false }
+})
+
+// ── IPC: List files in a directory ───────────────────────────────────────────
+ipcMain.handle('file:listdir', async (_event, dirPath: string, ext?: string) => {
+  try {
+    await mkdir(dirPath, { recursive: true })
+    const entries = await readdir(dirPath, { withFileTypes: true })
+    const files = entries
+      .filter(e => e.isFile() && (!ext || e.name.endsWith(ext)))
+      .map(e => ({ name: e.name, path: `${dirPath}/${e.name}` }))
+    return { ok: true, files }
+  } catch (e: unknown) {
+    return { ok: false, error: String(e), files: [] }
+  }
+})
+
+// ── IPC: Delete a file ───────────────────────────────────────────────────────
+ipcMain.handle('file:delete', async (_event, filePath: string) => {
+  try {
+    await unlink(filePath)
+    return { ok: true }
+  } catch (e: unknown) {
+    return { ok: false, error: String(e) }
+  }
+})
+
+// ── IPC: Write a file ─────────────────────────────────────────────────────────
+ipcMain.handle('file:write', async (_event, filePath: string, text: string) => {
+  try {
+    await mkdir(dirname(filePath), { recursive: true })
+    await writeFile(filePath, text, 'utf8')
+    return { ok: true }
+  } catch (e: unknown) {
+    return { ok: false, error: String(e) }
+  }
 })
 
 // ── IPC: Gateway shell commands ───────────────────────────────────────────────
@@ -412,6 +447,27 @@ ipcMain.handle('localstore:write', async (_event, data: unknown) => {
 })
 
 // ── IPC: System metrics ───────────────────────────────────────────────────────
+
+async function getGpuFromNvidiaSmi(): Promise<{ model: string; utilizationGpu: number; memUsed: number; memTotal: number; temperatureGpu: number } | null> {
+  try {
+    const r = await runCmd(
+      'nvidia-smi --query-gpu=name,utilization.gpu,memory.used,memory.total,temperature.gpu --format=csv,noheader,nounits'
+    )
+    if (!r.ok || !r.stdout) return null
+    const parts = r.stdout.split(',').map(s => s.trim())
+    if (parts.length < 5) return null
+    return {
+      model:          parts[0],
+      utilizationGpu: parseInt(parts[1]) || 0,
+      memUsed:        parseInt(parts[2]) || 0,   // MB
+      memTotal:       parseInt(parts[3]) || 0,   // MB
+      temperatureGpu: parseInt(parts[4]) || 0,
+    }
+  } catch {
+    return null
+  }
+}
+
 ipcMain.handle('metrics:get', async () => {
   try {
     const [cpu, mem, graphics] = await Promise.all([
@@ -420,20 +476,32 @@ ipcMain.handle('metrics:get', async () => {
       si.graphics()
     ])
 
-    const gpuControllers = graphics.controllers.map((c) => ({
-      model: c.model,
+    let gpuControllers = graphics.controllers.map((c) => ({
+      model:          c.model,
       utilizationGpu: c.utilizationGpu ?? 0,
-      memUsed: c.memUsed ?? 0,
-      memTotal: c.memTotal ?? 0,
-      temperatureGpu: c.temperatureGpu ?? 0
+      memUsed:        c.memUsed        ?? 0,
+      memTotal:       c.memTotal       ?? 0,
+      temperatureGpu: c.temperatureGpu ?? 0,
     }))
+
+    // On Linux, si.graphics() often returns empty or zero utilization/memTotal
+    // for NVIDIA GPUs — fall back to nvidia-smi when the data looks incomplete.
+    const firstGpu = gpuControllers[0]
+    if (!firstGpu || (firstGpu.utilizationGpu === 0 && firstGpu.memTotal === 0)) {
+      const nv = await getGpuFromNvidiaSmi()
+      if (nv) {
+        gpuControllers = firstGpu
+          ? [{ ...firstGpu, ...nv }]
+          : [nv]
+      }
+    }
 
     return {
       ok: true,
       cpu: Math.round(cpu.currentLoad),
       ramUsed: mem.active,
       ramTotal: mem.total,
-      gpu: gpuControllers
+      gpu: gpuControllers,
     }
   } catch (e: unknown) {
     return { ok: false, error: String(e), cpu: 0, ramUsed: 0, ramTotal: 0, gpu: [] }

@@ -45,18 +45,19 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
     gatewayClient.request('sessions.subscribe', {}).catch(() => {})
 
     gatewayClient.on((frame) => {
-      // sessions.changed: update the session's fields (including hasActiveRun)
+      // sessions.changed: update if known, add if new (e.g. created by an agent skill)
       if (frame.event === 'sessions.changed') {
         const p = frame.payload as Partial<Session> & { sessionKey?: string }
         const key = p.sessionKey ?? (p as Session).key
         if (!key) return
-        set(s => ({
-          sessions: s.sessions.map(sess =>
-            sess.key === key
-              ? { ...sess, ...p, key: sess.key }
-              : sess
-          )
-        }))
+        set(s => {
+          const exists = s.sessions.some(sess => sess.key === key)
+          if (exists) {
+            return { sessions: s.sessions.map(sess => sess.key === key ? { ...sess, ...p, key } : sess) }
+          }
+          // Session created externally — add it so it appears in the UI
+          return { sessions: [{ ...p, key } as Session, ...s.sessions] }
+        })
         return
       }
 
@@ -73,11 +74,14 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
             )
           }))
         } else if (state === 'delta' || state === 'thinking_delta') {
-          set(s => ({
-            sessions: s.sessions.map(sess =>
-              sess.key === sessionKey ? { ...sess, hasActiveRun: true } : sess
-            )
-          }))
+          set(s => {
+            const exists = s.sessions.some(sess => sess.key === sessionKey)
+            if (exists) {
+              return { sessions: s.sessions.map(sess => sess.key === sessionKey ? { ...sess, hasActiveRun: true } : sess) }
+            }
+            // Active run on an unknown session — add it
+            return { sessions: [{ key: sessionKey, hasActiveRun: true } as Session, ...s.sessions] }
+          })
         }
       }
     })

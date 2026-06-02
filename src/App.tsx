@@ -9,7 +9,9 @@ import { GatewayView } from './components/gateway/GatewayView'
 import { SettingsView } from './components/settings/SettingsView'
 import { ExtensionsView } from './components/extensions/ExtensionsView'
 import { CronsView } from './components/crons/CronsView'
+import { ProcessesView } from './components/processes/ProcessesView'
 import { ObsidianView } from './components/obsidian/ObsidianView'
+import { DashboardView } from './components/dashboard/DashboardView'
 import { ModelsView } from './components/models/ModelsView'
 import { SystemMonitorHUD } from './components/monitor/SystemMonitorHUD'
 import { ConnectScreen } from './components/layout/ConnectScreen'
@@ -18,10 +20,10 @@ import { useMetricsStore } from './store/metrics'
 import { useSettingsStore } from './store/settings'
 import { useExtensionsStore } from './store/extensions'
 
-export type NavSection = 'chat' | 'agents' | 'extensions' | 'sessions' | 'crons' | 'obsidian' | 'models' | 'gateway' | 'settings'
+export type NavSection = 'dashboard' | 'chat' | 'agents' | 'processes' | 'extensions' | 'sessions' | 'crons' | 'obsidian' | 'models' | 'gateway' | 'settings'
 
 export default function App() {
-  const [section, setSection] = useState<NavSection>('chat')
+  const [section, setSection] = useState<NavSection>('dashboard')
   const { status } = useConnectionStore()
   const { start: startMetrics, stop: stopMetrics } = useMetricsStore()
   const { monitorVisible } = useSettingsStore()
@@ -43,7 +45,7 @@ export default function App() {
   }, [status])
 
   const notConnected = status !== 'connected'
-  const ALL_GATEWAY_SECTIONS: NavSection[] = ['chat', 'agents', 'extensions', 'sessions', 'crons', 'obsidian', 'models', 'gateway']
+  const ALL_GATEWAY_SECTIONS: NavSection[] = ['dashboard', 'chat', 'agents', 'processes', 'extensions', 'sessions', 'crons', 'obsidian', 'models', 'gateway']
   const disabledSections: NavSection[] = notConnected
     ? ALL_GATEWAY_SECTIONS
     : obsidianEnabled ? [] : ['obsidian']
@@ -57,13 +59,15 @@ export default function App() {
         <NavRail section={section} onNavigate={setSection} disabledSections={disabledSections} />
         <main className="flex-1 min-w-0 flex flex-col relative" style={{ background: 'var(--bg-primary)' }}>
           {showConnect ? (
-            <ConnectScreen onConnect={() => setSection('chat')} />
+            <ConnectScreen onConnect={() => setSection('dashboard')} />
           ) : (
             <>
+              {section === 'dashboard' && <DashboardView onNavigate={setSection} />}
               {section === 'chat' && <ChatView />}
               {section === 'agents' && <AgentsView onOpenChat={() => setSection('chat')} />}
               {section === 'extensions' && <ExtensionsView />}
               {section === 'sessions' && <SessionsView onOpenChat={() => setSection('chat')} />}
+              {section === 'processes' && <ProcessesView />}
               {section === 'crons' && <CronsView onOpenChat={() => setSection('chat')} />}
               {section === 'obsidian' && <ObsidianView onNavigateExtensions={() => setSection('extensions')} />}
               {section === 'models' && <ModelsView />}
