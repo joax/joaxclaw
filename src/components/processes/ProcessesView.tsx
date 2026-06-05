@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Play, Plus, RefreshCw, GitBranch, Users, ArrowRight, FileText, Loader2, CheckCircle2, XCircle, Clock, X, Trash2, ChevronDown } from 'lucide-react'
-import { useProcessesStore, processesDir } from '../../store/processes'
+import { useProcessesStore, processesDir, type ProcessRun } from '../../store/processes'
 import { useAgentsStore } from '../../store/agents'
 import { ModelIcon } from '../ui/ModelIcon'
 import { Btn } from '../ui/Btn'
@@ -36,7 +36,7 @@ function fmtDuration(ms: number): string {
 function ProcessItem({ def, active, run, onClick, onDelete }: {
   def: ProcessDef
   active: boolean
-  run?: { status: string; stepsDone: number; currentAgent?: string }
+  run?: ProcessRun
   onClick: () => void
   onDelete: () => Promise<boolean>
 }) {
@@ -104,6 +104,17 @@ function ProcessItem({ def, active, run, onClick, onDelete }: {
           </span>
         )}
       </div>
+      {run?.status === 'running' && (() => {
+        const graphSteps = def.graph?.nodes.filter(n => n.type !== 'start' && n.type !== 'end').length ?? 0
+        const total   = run.progress?.total   ?? graphSteps
+        const current = run.progress?.current ?? run.stepsDone
+        if (!total) return null
+        return (
+          <div style={{ marginLeft: 5, marginTop: 4, height: 2, borderRadius: 1, background: 'var(--bg-elevated)', overflow: 'hidden' }}>
+            <div style={{ height: '100%', width: `${Math.min(100, (current / total) * 100)}%`, background: 'var(--accent)', borderRadius: 1, transition: 'width 0.4s ease' }} />
+          </div>
+        )
+      })()}
     </div>
   )
 }

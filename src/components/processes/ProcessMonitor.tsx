@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Square, CheckCircle2, XCircle, Loader2, Clock, Activity, Terminal, Users, Heart } from 'lucide-react'
 import type { ProcessDef, GraphNode } from '../../lib/processParser'
-import type { ProcessRun } from '../../store/processes'
+import type { ProcessRun, RunProgress } from '../../store/processes'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const fileApi = () => (window as any)?.api?.file as {
@@ -78,6 +78,12 @@ export function ProcessMonitor({ def, run, onStop }: Props) {
   const elapsed = run ? (run.finishedAt ?? Date.now()) - run.startedAt : 0
   const isRunning = run?.status === 'running'
 
+  // Unified progress: explicit run.progress takes precedence over inferred stepsDone
+  const prog: RunProgress | undefined = run?.progress ?? (steps.length > 0
+    ? { current: run?.stepsDone ?? 0, total: steps.length }
+    : undefined)
+  const progPct = prog ? Math.min(100, prog.total > 0 ? (prog.current / prog.total) * 100 : 0) : 0
+
   // Status colours
   const statusColor = run?.status === 'done' ? 'var(--success)'
     : run?.status === 'error' ? 'var(--danger)'
@@ -109,30 +115,52 @@ export function ProcessMonitor({ def, run, onStop }: Props) {
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, overflow: 'hidden' }}>
 
       {/* Status banner */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 16px', borderBottom: '1px solid var(--border)', background: `color-mix(in srgb, ${statusColor} 6%, var(--bg-surface))`, flexShrink: 0 }}>
-        <StatusIcon size={14} style={{ color: statusColor, flexShrink: 0 }} className={isRunning ? 'animate-spin' : ''} />
-        <span style={{ fontSize: 13, fontWeight: 600, color: statusColor }}>
-          {run.status === 'running' ? 'Running' : run.status === 'done' ? 'Completed' : run.status === 'error' ? 'Failed' : 'Stopped'}
-        </span>
-        <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
-          {isRunning ? `${fmtDuration(elapsed)} elapsed` : `in ${fmtDuration(elapsed)}`}
-        </span>
-        {run.currentAgent && isRunning && (
-          <span style={{ fontSize: 11, fontFamily: 'monospace', color: 'var(--accent)', marginLeft: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 200 }}>
-            › {run.currentAgent}
+      <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--border)', background: `color-mix(in srgb, ${statusColor} 6%, var(--bg-surface))`, flexShrink: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <StatusIcon size={14} style={{ color: statusColor, flexShrink: 0 }} className={isRunning ? 'animate-spin' : ''} />
+          <span style={{ fontSize: 13, fontWeight: 600, color: statusColor }}>
+            {run.status === 'running' ? 'Running' : run.status === 'done' ? 'Completed' : run.status === 'error' ? 'Failed' : 'Stopped'}
           </span>
-        )}
-        {run.error && (
-          <span style={{ fontSize: 11, color: 'var(--danger)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {run.error}
+          <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+            {isRunning ? `${fmtDuration(elapsed)} elapsed` : `in ${fmtDuration(elapsed)}`}
           </span>
-        )}
-        {isRunning && (
-          <button
-            onClick={handleStop} disabled={stopping}
-            style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 5, padding: '4px 10px', fontSize: 11, borderRadius: 'var(--radius)', border: '1px solid var(--danger)', background: 'color-mix(in srgb, var(--danger) 10%, transparent)', color: 'var(--danger)', cursor: stopping ? 'default' : 'pointer', opacity: stopping ? 0.6 : 1, flexShrink: 0 }}>
-            <Square size={11} /> {stopping ? 'Stopping…' : 'Stop'}
-          </button>
+          {run.currentAgent && isRunning && (
+            <span style={{ fontSize: 11, fontFamily: 'monospace', color: 'var(--accent)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 160 }}>
+              › {run.currentAgent}
+            </span>
+          )}
+          {run.error && (
+            <span style={{ fontSize: 11, color: 'var(--danger)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {run.error}
+            </span>
+          )}
+          <div style={{ flex: 1 }} />
+          {isRunning && (
+            <button
+              onClick={handleStop} disabled={stopping}
+              style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '4px 10px', fontSize: 11, borderRadius: 'var(--radius)', border: '1px solid var(--danger)', background: 'color-mix(in srgb, var(--danger) 10%, transparent)', color: 'var(--danger)', cursor: stopping ? 'default' : 'pointer', opacity: stopping ? 0.6 : 1, flexShrink: 0 }}>
+              <Square size={11} /> {stopping ? 'Stopping…' : 'Stop'}
+            </button>
+          )}
+        </div>
+
+        {/* Progress bar — shown when running and progress info is available */}
+        {prog && (
+          <div style={{ marginTop: 10 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: prog.label ? 4 : 0 }}>
+              <div style={{ flex: 1, height: 4, borderRadius: 2, background: 'color-mix(in srgb, var(--bg-elevated) 80%, transparent)', overflow: 'hidden' }}>
+                <div style={{ height: '100%', width: `${progPct}%`, background: isRunning ? 'var(--accent)' : statusColor, borderRadius: 2, transition: 'width 0.4s ease' }} />
+              </div>
+              <span style={{ fontSize: 10, color: 'var(--text-secondary)', flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>
+                {prog.current}/{prog.total}
+              </span>
+            </div>
+            {prog.label && (
+              <p style={{ fontSize: 11, color: 'var(--text-secondary)', margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', opacity: 0.8 }}>
+                {prog.label}
+              </p>
+            )}
+          </div>
         )}
       </div>
 

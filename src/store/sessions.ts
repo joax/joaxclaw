@@ -68,19 +68,32 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
         if (!sessionKey || !state) return
 
         if (state === 'final' || state === 'aborted' || state === 'error') {
+          // Also pick up token/cost data the gateway may include in the final event
+          const full = frame.payload as Record<string, unknown>
+          const tokenPatch: Partial<Session> = {}
+          if (typeof full.inputTokens  === 'number') tokenPatch.inputTokens  = full.inputTokens
+          if (typeof full.outputTokens === 'number') tokenPatch.outputTokens = full.outputTokens
+          if (typeof full.totalTokens  === 'number') tokenPatch.totalTokens  = full.totalTokens
+          if (typeof full.estimatedCostUsd === 'number') tokenPatch.estimatedCostUsd = full.estimatedCostUsd
           set(s => ({
             sessions: s.sessions.map(sess =>
-              sess.key === sessionKey ? { ...sess, hasActiveRun: false } : sess
+              sess.key === sessionKey ? { ...sess, ...tokenPatch, hasActiveRun: false } : sess
             )
           }))
         } else if (state === 'delta' || state === 'thinking_delta') {
+          // Pick up any running token counts the gateway may include mid-stream
+          const full = frame.payload as Record<string, unknown>
+          const mid: Partial<Session> = { hasActiveRun: true }
+          if (typeof full.inputTokens  === 'number') mid.inputTokens  = full.inputTokens
+          if (typeof full.outputTokens === 'number') mid.outputTokens = full.outputTokens
+          if (typeof full.totalTokens  === 'number') mid.totalTokens  = full.totalTokens
+          if (typeof full.estimatedCostUsd === 'number') mid.estimatedCostUsd = full.estimatedCostUsd
           set(s => {
             const exists = s.sessions.some(sess => sess.key === sessionKey)
             if (exists) {
-              return { sessions: s.sessions.map(sess => sess.key === sessionKey ? { ...sess, hasActiveRun: true } : sess) }
+              return { sessions: s.sessions.map(sess => sess.key === sessionKey ? { ...sess, ...mid } : sess) }
             }
-            // Active run on an unknown session — add it
-            return { sessions: [{ key: sessionKey, hasActiveRun: true } as Session, ...s.sessions] }
+            return { sessions: [{ key: sessionKey, ...mid } as Session, ...s.sessions] }
           })
         }
       }

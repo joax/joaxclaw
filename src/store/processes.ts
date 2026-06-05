@@ -31,6 +31,12 @@ export interface RunLogEntry {
   text: string
 }
 
+export interface RunProgress {
+  current: number   // steps completed
+  total: number     // total steps in process
+  label?: string    // human-readable label for the current step
+}
+
 export interface ProcessRun {
   processId: string
   sessionKey?: string
@@ -39,6 +45,7 @@ export interface ProcessRun {
   status: RunStatus
   currentAgent?: string
   stepsDone: number
+  progress?: RunProgress  // explicit progress reported by the agent via [PROGRESS:N/T:label]
   error?: string
   log: RunLogEntry[]
   outputBuffer: string
@@ -151,10 +158,33 @@ export const useProcessesStore = create<ProcessesState>((set, get) => ({
       const state = String(p.state ?? '')
 
       if (state === 'delta' && p.deltaText) {
+        const raw = String(p.deltaText)
+        // Parse [PROGRESS:N/T:label] markers emitted by the controller agent
+        const PROG_RE = /\[PROGRESS:(\d+)\/(\d+)(?::([^\]]*))?\]/g
+        const cleaned = raw.replace(PROG_RE, '')
+        let progress: RunProgress | undefined
+        let m: RegExpExecArray | null
+        const scanRe = /\[PROGRESS:(\d+)\/(\d+)(?::([^\]]*))?\]/g
+        while ((m = scanRe.exec(raw)) !== null) {
+          progress = { current: parseInt(m[1]), total: parseInt(m[2]), label: m[3]?.trim() || undefined }
+        }
         set(s => {
           const run = s.runs[processId]
           if (!run) return s
-          return { runs: { ...s.runs, [processId]: { ...run, outputBuffer: run.outputBuffer + String(p.deltaText) } } }
+          const newLog = progress?.label && progress.label !== run.progress?.label
+            ? [...run.log, { ts: now, text: `→ ${progress.label}` }]
+            : run.log
+          return {
+            runs: {
+              ...s.runs,
+              [processId]: {
+                ...run,
+                outputBuffer: run.outputBuffer + cleaned,
+                ...(progress && { progress, stepsDone: progress.current }),
+                log: newLog,
+              },
+            },
+          }
         })
         return
       }
