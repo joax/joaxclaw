@@ -314,30 +314,38 @@ function ActiveSection({ onNavigate }: { onNavigate: (s: NavSection) => void }) 
       </div>
 
       {runningProcs.map(({ run, def }) => {
-        const name     = def?.name ?? run.processId
-        const steps    = def?.graph?.nodes.filter(n => n.type !== 'start' && n.type !== 'end').length ?? 0
-        const elapsed  = Math.floor((Date.now() - run.startedAt) / 1000)
-        const elapsedStr = elapsed < 60 ? `${elapsed}s` : `${Math.floor(elapsed / 60)}m ${elapsed % 60}s`
+        const name        = def?.name ?? run.processId
+        const graphSteps  = def?.graph?.nodes.filter(n => n.type !== 'start' && n.type !== 'end').length ?? 0
+        const elapsed     = Math.floor((Date.now() - run.startedAt) / 1000)
+        const elapsedStr  = elapsed < 60 ? `${elapsed}s` : `${Math.floor(elapsed / 60)}m ${elapsed % 60}s`
+        const progCurrent = run.progress?.current ?? run.stepsDone
+        const progTotal   = run.progress?.total   ?? graphSteps
+        const progLabel   = run.progress?.label
+        const hasProgress = progTotal > 0
+        const progPct     = hasProgress ? Math.min(100, (progCurrent / progTotal) * 100) : 0
+
         return (
           <button key={run.processId} onClick={() => onNavigate('processes')}
             style={{ width: '100%', display: 'block', padding: '10px 12px', marginBottom: 6, borderRadius: 'var(--radius)', border: '1px solid color-mix(in srgb, var(--accent) 25%, var(--border))', background: 'color-mix(in srgb, var(--accent) 5%, var(--bg-surface))', cursor: 'pointer', textAlign: 'left' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 5 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: hasProgress ? 6 : 0 }}>
               <Loader2 size={11} style={{ color: 'var(--accent)', flexShrink: 0 }} className="animate-spin" />
               <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
               <span style={{ fontSize: 10, color: 'var(--text-secondary)', flexShrink: 0 }}>{elapsedStr}</span>
             </div>
-            {steps > 0 && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 5 }}>
-                <div style={{ flex: 1, height: 3, borderRadius: 2, background: 'var(--bg-elevated)', overflow: 'hidden' }}>
-                  <div style={{ height: '100%', width: `${Math.min(100, (run.stepsDone / steps) * 100)}%`, background: 'var(--accent)', borderRadius: 2 }} />
+            {hasProgress && (
+              <div style={{ marginBottom: progLabel ? 4 : 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <div style={{ flex: 1, height: 3, borderRadius: 2, background: 'var(--bg-elevated)', overflow: 'hidden' }}>
+                    <div style={{ height: '100%', width: `${progPct}%`, background: 'var(--accent)', borderRadius: 2, transition: 'width 0.4s ease' }} />
+                  </div>
+                  <span style={{ fontSize: 9, color: 'var(--text-secondary)', flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>{progCurrent}/{progTotal}</span>
                 </div>
-                <span style={{ fontSize: 9, color: 'var(--text-secondary)', flexShrink: 0 }}>{run.stepsDone}/{steps}</span>
+                {progLabel && (
+                  <p style={{ fontSize: 10, color: 'var(--text-secondary)', opacity: 0.7, margin: '3px 0 0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {progLabel}
+                  </p>
+                )}
               </div>
-            )}
-            {run.outputBuffer && (
-              <p style={{ fontSize: 10, color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', margin: 0, fontFamily: 'monospace', opacity: 0.7 }}>
-                {run.outputBuffer.slice(-120)}
-              </p>
             )}
           </button>
         )
@@ -372,7 +380,12 @@ function CronsSection({ onNavigate }: { onNavigate: (s: NavSection) => void }) {
 
   const visible = jobs
     .filter(j => j.enabled)
-    .sort((a, b) => (a.state?.nextRunAtMs ?? Infinity) - (b.state?.nextRunAtMs ?? Infinity))
+    .sort((a, b) => {
+      const aRunning = runningNow.has(a.id) || Boolean(a.state?.runningAtMs)
+      const bRunning = runningNow.has(b.id) || Boolean(b.state?.runningAtMs)
+      if (aRunning !== bRunning) return aRunning ? -1 : 1
+      return (a.state?.nextRunAtMs ?? Infinity) - (b.state?.nextRunAtMs ?? Infinity)
+    })
     .slice(0, 4)
 
   if (visible.length === 0) return null
@@ -391,7 +404,7 @@ function CronsSection({ onNavigate }: { onNavigate: (s: NavSection) => void }) {
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
         {visible.map(job => {
-          const isRunning  = runningNow.has(job.id)
+          const isRunning  = runningNow.has(job.id) || Boolean(job.state?.runningAtMs)
           const nextMs     = job.state?.nextRunAtMs
           const lastMs     = job.state?.lastRunAtMs
           const lastStatus = job.state?.lastRunStatus
@@ -437,9 +450,10 @@ function ResourcesSection() {
   const ramPct   = metrics.ramTotal > 0 ? (metrics.ramUsed / metrics.ramTotal) * 100 : 0
   const loaded   = ollamaModels.filter(m => m.loaded)
 
-  // VRAM: total loaded from Ollama + capacity from systeminformation (may be absent)
-  const vramUsedBytes  = loaded.reduce((sum, m) => sum + (m.vramUsed ?? 0), 0)
-  const vramTotalBytes = gpu?.memTotal ? gpu.memTotal * 1024 * 1024 : 0   // memTotal is in MB
+  // VRAM: prefer size_vram from Ollama /api/ps; fall back to model file size (size ≈ VRAM for quantized models)
+  const modelVram = (m: typeof loaded[0]) => (m.vramUsed && m.vramUsed > 0) ? m.vramUsed : m.size
+  const vramUsedBytes  = loaded.reduce((sum, m) => sum + modelVram(m), 0)
+  const vramTotalBytes = gpu?.memTotal ? gpu.memTotal * 1024 * 1024 : 0   // memTotal is in MiB
   const vramUsedG      = (vramUsedBytes / (1024 ** 3)).toFixed(1)
   const vramPct        = vramTotalBytes > 0 ? (vramUsedBytes / vramTotalBytes) * 100 : 0
   const hasVram        = vramUsedBytes > 0 || vramTotalBytes > 0
@@ -488,8 +502,8 @@ function ResourcesSection() {
         {loaded.length > 0 && (
           <div style={{ marginTop: 2, display: 'flex', flexDirection: 'column', gap: 4 }}>
             {loaded.map(m => {
-              const vram    = m.vramUsed ?? 0
-              const vramG   = (vram / (1024 ** 3)).toFixed(1)
+              const vram     = modelVram(m)
+              const vramG    = (vram / (1024 ** 3)).toFixed(1)
               const modelPct = vramTotalBytes && vram ? Math.min(100, (vram / vramTotalBytes) * 100) : 0
               return (
                 <div key={m.name} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>

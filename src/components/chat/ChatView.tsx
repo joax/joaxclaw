@@ -285,9 +285,17 @@ function ContextBar({ sessionKey }: { sessionKey: string }) {
   })()
 
   const contextWindow = modelDef?.contextWindow ?? session?.contextTokens
-  const tokens  = session?.totalTokens
-  const fillPct = tokens != null && contextWindow
-    ? Math.min((tokens / contextWindow) * 100, 100)
+
+  // inputTokens = tokens in the model's last input (the context it actually saw).
+  // totalTokens = inputTokens + outputTokens for the last run.
+  // We prefer inputTokens for the fill bar because it matches what the model itself
+  // would report when asked "how many tokens are in my context".
+  const inp = session?.inputTokens
+  const out = session?.outputTokens
+  const contextSize = inp ?? session?.totalTokens   // input-only is more accurate
+
+  const fillPct = contextSize != null && contextWindow
+    ? Math.min((contextSize / contextWindow) * 100, 100)
     : null
 
   const fillColor = fillPct == null ? 'var(--accent)'
@@ -299,33 +307,36 @@ function ContextBar({ sessionKey }: { sessionKey: string }) {
   const costUsd = (() => {
     if (session?.estimatedCostUsd != null && session.estimatedCostUsd > 0) return session.estimatedCostUsd
     if (!modelDef?.cost) return null
-    const inp = session?.inputTokens ?? 0
-    const out = session?.outputTokens ?? 0
-    if (!inp && !out) return null
-    return inp * modelDef.cost.input + out * modelDef.cost.output
+    const i = inp ?? 0
+    const o = out ?? 0
+    if (!i && !o) return null
+    return i * modelDef.cost.input + o * modelDef.cost.output
   })()
 
   if (!session) return null
 
   return (
     <div
-      className="flex items-center gap-4 px-4 py-2 text-xs shrink-0"
+      className="flex items-center gap-4 px-4 py-2 text-xs shrink-0 flex-wrap"
       style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-elevated)' }}
     >
-      {/* Token count + fill bar */}
-      <div className="flex items-center gap-1.5">
-        <span style={{ color: 'var(--text-secondary)' }}>Context</span>
-        <span className="font-mono font-semibold" style={{ color: 'var(--text-primary)' }}>
-          {tokens != null ? tokens.toLocaleString() : '—'}
-        </span>
-        {contextWindow && (
-          <span style={{ color: 'var(--text-secondary)' }}>/ {contextWindow.toLocaleString()}</span>
-        )}
-        <span style={{ color: 'var(--text-secondary)' }}>tokens</span>
-      </div>
+      {/* Context size — what the model actually received as input */}
+      {contextSize != null && (
+        <div className="flex items-center gap-1.5">
+          <span style={{ color: 'var(--text-secondary)' }}>Context</span>
+          <span className="font-mono font-semibold" style={{ color: 'var(--text-primary)' }}>
+            {contextSize.toLocaleString()}
+          </span>
+          {contextWindow && (
+            <span style={{ color: 'var(--text-secondary)' }}>/ {contextWindow.toLocaleString()}</span>
+          )}
+          <span style={{ color: 'var(--text-secondary)' }}>tokens</span>
+        </div>
+      )}
 
+      {/* Context window fill bar */}
       {fillPct != null && (
-        <div className="flex items-center gap-1.5" style={{ minWidth: 100 }}>
+        <div className="flex items-center gap-1.5" style={{ minWidth: 80 }}>
           <div style={{ flex: 1, height: 4, background: 'var(--bg-primary)', borderRadius: 2 }}>
             <div style={{ width: `${fillPct}%`, height: '100%', background: fillColor, borderRadius: 2, transition: 'width 0.4s' }} />
           </div>
@@ -333,6 +344,13 @@ function ContextBar({ sessionKey }: { sessionKey: string }) {
             {fillPct.toFixed(0)}%
           </span>
         </div>
+      )}
+
+      {/* Output tokens — size of the last response */}
+      {out != null && (
+        <span className="font-mono" title="Output tokens (last response)" style={{ color: 'var(--text-secondary)' }}>
+          +{out.toLocaleString()} out
+        </span>
       )}
 
       {/* Cost estimate */}

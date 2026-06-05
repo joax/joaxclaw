@@ -67,6 +67,23 @@ function attachChatStream(convId: string, sessionKey: string, update: UpdateFn):
     }
 
     if (frame.event === 'agent') {
+      // Runtime error surfaced through the agent event (e.g. incomplete turn, embedded agent crash)
+      if (p.stream === 'error' || (p as Record<string, unknown>).state === 'error') {
+        const raw = p as Record<string, unknown>
+        const errText = (raw.errorMessage as string | undefined)
+          ?? (raw.message as string | undefined)
+          ?? 'Agent runtime error'
+        update(m => ({
+          ...m,
+          content: m.content ? `${m.content}\n\n⚠ ${errText}` : `⚠ ${errText}`,
+          streaming: false,
+          reasoningStreaming: false,
+          waitingForSession: undefined,
+        }))
+        activeStreams.delete(convId)
+        unsub()
+        return
+      }
       // Thinking stream: real-time reasoning text
       if (p.stream === 'thinking' && p.data?.delta) {
         update(m => ({ ...m, reasoning: (m.reasoning ?? '') + p.data!.delta!, reasoningStreaming: true, waitingForSession: undefined }))
@@ -138,15 +155,27 @@ function attachChatStream(convId: string, sessionKey: string, update: UpdateFn):
       }))
       activeStreams.delete(convId)
       unsub()
-    } else if (p.state === 'error') {
-      update(m => ({ ...m, content: m.content || `Error: ${p.errorMessage ?? 'unknown'}`, streaming: false }))
+    } else if (p.state === 'error' || p.state === 'incomplete') {
+      // Resolve error text from errorMessage, or fall back to p.message text (gateway may use either)
+      const errText = (p.errorMessage ?? extractText(p.message))
+        || (p.state === 'incomplete' ? 'Incomplete turn — the agent stopped without producing a response' : 'Unknown error')
+      update(m => ({
+        ...m,
+        // Always surface the error. If there was partial content, append so nothing is lost.
+        content: m.content ? `${m.content}\n\n⚠ ${errText}` : `⚠ ${errText}`,
+        streaming: false,
+        reasoningStreaming: false,
+        waitingForSession: undefined,
+      }))
       activeStreams.delete(convId)
       unsub()
     } else if (p.state === 'aborted') {
+      const abortMsg = p.errorMessage
       update(m => ({
         ...m,
         streaming: false,
-        ...(p.errorMessage && !m.content ? { content: `Aborted: ${p.errorMessage}` } : {})
+        reasoningStreaming: false,
+        ...(abortMsg && !m.content ? { content: `Aborted: ${abortMsg}` } : {})
       }))
       activeStreams.delete(convId)
       unsub()
@@ -411,26 +440,26 @@ export const useChatStore = create<ChatState>((set, get) => ({
       )
     }))
 
-    try {
-      // Try the most likely gateway compact endpoints in order
-      let ok = false
-      for (const method of ['sessions.compact', 'chat.compact']) {
-        try {
-          await gatewayClient.request(method, { sessionKey: conv.sessionKey })
-          ok = true
-          break
-        } catch {
-          // try next
-        }
-      }
-      if (ok) {
+    // Each entry is [method, params] — tried in order until one succeeds.
+    // sessions.* methods use { key }, chat.* methods use { sessionKey }.
+    const attempts: [string, Record<string, unknown>][] = [
+      ['chat.compact',     { sessionKey: conv.sessionKey }],
+      ['sessions.compact', { key: conv.sessionKey }],
+      ['sessions.steer',   { key: conv.sessionKey, action: 'compact' }],
+      ['chat.compact',     { key: conv.sessionKey }],
+    ]
+
+    let lastError = ''
+    for (const [method, params] of attempts) {
+      try {
+        await gatewayClient.request(method, params)
         finish('✓ Context compacted.')
-      } else {
-        finish('⚠ Compact not supported by this gateway version.')
+        return
+      } catch (e) {
+        lastError = String(e)
       }
-    } catch (e) {
-      finish(`⚠ Compact failed: ${String(e)}`)
     }
+    finish(`⚠ Compact failed: ${lastError}`)
   },
 
   async sendMessage(convId, text, attachments) {

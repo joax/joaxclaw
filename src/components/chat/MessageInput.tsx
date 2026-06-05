@@ -89,6 +89,11 @@ export function MessageInput({ convId }: Props) {
 
   const isBlocked = isStreaming && !isStalled
 
+  // Focus when the conversation opens or switches
+  useEffect(() => {
+    textareaRef.current?.focus()
+  }, [convId])
+
   const prevBlocked = useRef(isBlocked)
   useEffect(() => {
     if (prevBlocked.current && !isBlocked) textareaRef.current?.focus()

@@ -154,6 +154,7 @@ export function SessionsView({ onOpenChat }: Props) {
                 <Th onClick={() => handleSort('key')} sortKey="key" active={sort} dir={sortDir}>Session key</Th>
                 <Th onClick={() => handleSort('status')} sortKey="status" active={sort} dir={sortDir}>Status</Th>
                 <Th onClick={() => handleSort('model')} sortKey="model" active={sort} dir={sortDir}>Model</Th>
+                <Th>Usage</Th>
                 <Th onClick={() => handleSort('updatedAt')} sortKey="updatedAt" active={sort} dir={sortDir}>Updated</Th>
                 <th className="px-3 py-2.5 text-left text-xs font-medium" style={{ color: 'var(--text-secondary)' }}></th>
               </tr>
@@ -206,6 +207,9 @@ export function SessionsView({ onOpenChat }: Props) {
                     <td className="px-3 py-2.5">
                       <ModelCell session={s} running={isRunning(s)} />
                     </td>
+                    <td className="px-3 py-2.5">
+                      <UsageCell session={s} />
+                    </td>
                     <td className="px-3 py-2.5 text-xs" style={{ color: 'var(--text-secondary)' }}>
                       {formatTs(s.updatedAt ?? s.startedAt)}
                     </td>
@@ -252,7 +256,7 @@ export function SessionsView({ onOpenChat }: Props) {
               })}
               {filtered.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="px-4 py-8 text-center text-sm" style={{ color: 'var(--text-secondary)' }}>
+                  <td colSpan={8} className="px-4 py-8 text-center text-sm" style={{ color: 'var(--text-secondary)' }}>
                     No sessions match your filters
                   </td>
                 </tr>
@@ -266,8 +270,39 @@ export function SessionsView({ onOpenChat }: Props) {
 }
 
 function fmtTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
   if (n >= 1000) return `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k`
   return String(n)
+}
+
+function fmtCost(usd: number): string {
+  if (usd < 0.0001) return '<$0.0001'
+  if (usd < 0.01)   return `$${usd.toFixed(4)}`
+  return `$${usd.toFixed(3)}`
+}
+
+function UsageCell({ session }: { session: Session }) {
+  const inp  = session.inputTokens
+  const out  = session.outputTokens
+  const cost = session.estimatedCostUsd
+  if (inp == null && out == null && (cost == null || cost === 0)) {
+    return <span style={{ color: 'var(--text-secondary)', opacity: 0.3, fontSize: 11 }}>—</span>
+  }
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+      {(inp != null || out != null) && (
+        <div style={{ display: 'flex', gap: 6, fontFamily: 'monospace', fontSize: 10, color: 'var(--text-secondary)' }}>
+          {inp != null && <span title="Input tokens">↑{fmtTokens(inp)}</span>}
+          {out != null && <span title="Output tokens">↓{fmtTokens(out)}</span>}
+        </div>
+      )}
+      {cost != null && cost > 0 && (
+        <span style={{ fontFamily: 'monospace', fontSize: 11, color: cost > 0.1 ? 'var(--warning)' : 'var(--text-secondary)' }}>
+          {fmtCost(cost)}
+        </span>
+      )}
+    </div>
+  )
 }
 
 function ModelCell({ session, running }: { session: Session; running: boolean }) {

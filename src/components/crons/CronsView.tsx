@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { RefreshCw, Play, Trash2, ChevronDown, Clock, CheckCircle2, XCircle, SkipForward, Loader2, ToggleLeft, ToggleRight, AlertCircle, Pencil, MessageSquare } from 'lucide-react'
+import { RefreshCw, Play, Trash2, ChevronDown, Clock, CheckCircle2, XCircle, SkipForward, Loader2, ToggleLeft, ToggleRight, AlertCircle, Pencil, MessageSquare, Server, Terminal, HardDrive, Zap } from 'lucide-react'
 import { ModelIcon } from '../ui/ModelIcon'
 import { useCronsStore } from '../../store/crons'
 import { useChatStore } from '../../store/chat'
@@ -564,6 +564,312 @@ function InfoChip({ label, value, mono }: { label: string; value: string; mono?:
   )
 }
 
+// ── Ollama isolation panel ────────────────────────────────────────────────────
+
+function OllamaServerBox({ port, label, role, up }: { port: number; label: string; role: string; up: boolean }) {
+  const color = up ? 'var(--success)' : 'var(--warning)'
+  return (
+    <div
+      className="flex flex-col items-center gap-1 px-2 py-2 rounded flex-1"
+      style={{
+        border: `1px solid ${up ? 'color-mix(in srgb, var(--success) 30%, transparent)' : 'color-mix(in srgb, var(--warning) 35%, transparent)'}`,
+        background: up ? 'color-mix(in srgb, var(--success) 5%, var(--bg-elevated))' : 'color-mix(in srgb, var(--warning) 5%, var(--bg-elevated))',
+      }}
+    >
+      <Server size={14} style={{ color, opacity: up ? 1 : 0.65 }} />
+      <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1.2 }}>{label}</span>
+      <code style={{ fontSize: 8, color, fontFamily: 'monospace' }}>:{port}</code>
+      <span style={{ fontSize: 8, color: 'var(--text-secondary)', textAlign: 'center', lineHeight: 1.3 }}>{role}</span>
+      <span style={{ fontSize: 8, color, fontWeight: 600 }}>{up ? '● running' : '○ offline'}</span>
+    </div>
+  )
+}
+
+function StatusLine({ label, up, badge }: { label: string; up: boolean; badge?: string }) {
+  return (
+    <div className="flex items-center gap-1.5">
+      {up
+        ? <CheckCircle2 size={10} style={{ color: 'var(--success)', flexShrink: 0 }} />
+        : <XCircle size={10} style={{ color: 'var(--warning)', flexShrink: 0 }} />
+      }
+      <span style={{ fontSize: 10, color: 'var(--text-secondary)', flex: 1 }}>{label}</span>
+      {badge && (
+        <span style={{ fontSize: 9, fontFamily: 'monospace', color: up ? 'var(--success)' : 'var(--warning)', fontWeight: 600 }}>
+          {badge}
+        </span>
+      )}
+    </div>
+  )
+}
+
+function SetupStep({ n, text, code }: { n: number; text: string; code?: string }) {
+  return (
+    <div className="flex gap-2">
+      <span
+        style={{
+          fontSize: 8, minWidth: 15, height: 15, borderRadius: '50%',
+          background: 'var(--accent)', color: 'white',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          fontWeight: 700, flexShrink: 0, marginTop: 1,
+        }}
+      >
+        {n}
+      </span>
+      <div className="flex flex-col gap-1 min-w-0">
+        <span style={{ fontSize: 10, color: 'var(--text-secondary)', lineHeight: 1.4 }}>{text}</span>
+        {code && (
+          <div
+            className="flex items-center gap-1.5 px-2 py-1 rounded"
+            style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)' }}
+          >
+            <Terminal size={9} style={{ color: 'var(--text-secondary)', flexShrink: 0 }} />
+            <code style={{ fontSize: 9, color: 'var(--text-primary)', fontFamily: 'monospace', wordBreak: 'break-all' }}>
+              {code}
+            </code>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function OllamaIsolationPanel({ jobs }: { jobs: CronJob[] }) {
+  const [mainUp, setMainUp] = useState<boolean | null>(null)
+  const [cronUp, setCronUp] = useState<boolean | null>(null)
+  const [open, setOpen] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    const check = async () => {
+      const [main, cron] = await Promise.all([
+        fetch('http://localhost:11434/api/tags').then(() => true).catch(() => false),
+        fetch('http://localhost:11435/api/tags').then(() => true).catch(() => false),
+      ])
+      if (cancelled) return
+      setMainUp(main)
+      setCronUp(cron)
+      // Auto-expand on first result if there is an issue
+      setOpen(prev => {
+        if (prev) return prev
+        const hasContention = jobs.some(j => (j.payload?.kind === 'agentTurn' ? j.payload.model ?? '' : '').startsWith('ollama/'))
+        return !cron || hasContention
+      })
+    }
+    check()
+    const id = setInterval(check, 6000)
+    return () => { cancelled = true; clearInterval(id) }
+  }, [])
+
+  if (!mainUp) return null
+
+  const getModel = (j: CronJob) => j.payload?.kind === 'agentTurn' ? (j.payload.model ?? '') : ''
+  const ollamaJobs = jobs.filter(j => getModel(j).startsWith('ollama'))
+  const contentingJobs = ollamaJobs.filter(j => getModel(j).startsWith('ollama/'))
+  const isolatedJobs = ollamaJobs.filter(j => getModel(j).startsWith('ollama-cron/'))
+  const fullyIsolated = cronUp && contentingJobs.length === 0 && isolatedJobs.length > 0
+  const hasIssue = contentingJobs.length > 0 || !cronUp
+
+  const borderColor = hasIssue
+    ? 'color-mix(in srgb, var(--warning) 50%, transparent)'
+    : 'color-mix(in srgb, var(--success) 30%, transparent)'
+  const headerBg = hasIssue
+    ? 'color-mix(in srgb, var(--warning) 8%, var(--bg-elevated))'
+    : 'color-mix(in srgb, var(--success) 6%, var(--bg-elevated))'
+
+  return (
+    <div
+      className="mx-2 mb-2 rounded"
+      style={{ border: `1px solid ${borderColor}`, overflow: 'hidden', flexShrink: 0 }}
+    >
+      {/* ── Collapsed header ── */}
+      <button
+        onClick={() => setOpen(v => !v)}
+        className="flex items-center gap-2 w-full px-3 py-2"
+        style={{ background: headerBg, cursor: 'pointer', border: 'none', textAlign: 'left' }}
+      >
+        <Server size={11} style={{ color: hasIssue ? 'var(--warning)' : 'var(--success)', flexShrink: 0 }} />
+        <span className="flex-1 text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
+          Ollama Isolation
+        </span>
+        {fullyIsolated && (
+          <span style={{
+            fontSize: 9, color: 'var(--success)', padding: '1px 5px', borderRadius: 3,
+            background: 'color-mix(in srgb, var(--success) 12%, transparent)', flexShrink: 0,
+          }}>
+            ✓ active
+          </span>
+        )}
+        {hasIssue && (
+          <span style={{
+            fontSize: 9, color: 'var(--warning)', padding: '1px 5px', borderRadius: 3,
+            background: 'color-mix(in srgb, var(--warning) 12%, transparent)', flexShrink: 0,
+          }}>
+            ⚠ needs setup
+          </span>
+        )}
+        <ChevronDown
+          size={11}
+          style={{ transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s', color: 'var(--text-secondary)', flexShrink: 0 }}
+        />
+      </button>
+
+      {/* ── Expanded body ── */}
+      {open && (
+        <div
+          className="flex flex-col gap-3 px-3 pt-3 pb-3"
+          style={{ background: 'var(--bg-surface)', borderTop: '1px solid var(--border)' }}
+        >
+
+          {/* ── Problem diagram (only when contention exists) ── */}
+          {contentingJobs.length > 0 && (
+            <div className="flex flex-col gap-2 px-2.5 py-2 rounded" style={{
+              background: 'color-mix(in srgb, var(--danger) 5%, var(--bg-elevated))',
+              border: '1px solid color-mix(in srgb, var(--danger) 25%, transparent)',
+            }}>
+              <div className="flex items-center gap-1.5">
+                <Zap size={10} style={{ color: 'var(--danger)' }} />
+                <span style={{ fontSize: 9, fontWeight: 700, color: 'var(--danger)', textTransform: 'uppercase', letterSpacing: 0.6 }}>
+                  Without isolation
+                </span>
+              </div>
+              {/* Diagram: two sources → one Ollama → conflict */}
+              <div className="flex items-center gap-1.5">
+                {/* Sources */}
+                <div className="flex flex-col gap-1" style={{ flexShrink: 0 }}>
+                  <div className="flex items-center gap-1 px-1.5 py-0.5 rounded" style={{ background: 'color-mix(in srgb, var(--accent) 12%, transparent)', border: '1px solid color-mix(in srgb, var(--accent) 25%, transparent)' }}>
+                    <MessageSquare size={8} style={{ color: 'var(--accent)' }} />
+                    <span style={{ fontSize: 8, color: 'var(--accent)' }}>Chat</span>
+                  </div>
+                  <div className="flex items-center gap-1 px-1.5 py-0.5 rounded" style={{ background: 'color-mix(in srgb, var(--warning) 12%, transparent)', border: '1px solid color-mix(in srgb, var(--warning) 25%, transparent)' }}>
+                    <Clock size={8} style={{ color: 'var(--warning)' }} />
+                    <span style={{ fontSize: 8, color: 'var(--warning)' }}>CRON</span>
+                  </div>
+                </div>
+                {/* Merge arrows */}
+                <div className="flex flex-col items-end" style={{ color: 'var(--border)', fontSize: 9, lineHeight: 1.8, flexShrink: 0 }}>
+                  <span>─┐</span>
+                  <span>─┘</span>
+                </div>
+                <span style={{ fontSize: 9, color: 'var(--border)', flexShrink: 0 }}>▶</span>
+                {/* Single Ollama */}
+                <div className="flex flex-col items-center gap-0.5 px-2 py-1 rounded flex-1" style={{ border: '1px solid var(--border)', background: 'var(--bg-elevated)' }}>
+                  <Server size={12} style={{ color: 'var(--text-secondary)' }} />
+                  <code style={{ fontSize: 8, color: 'var(--text-secondary)', fontFamily: 'monospace' }}>:11434</code>
+                </div>
+                {/* Conflict symbol */}
+                <div className="flex flex-col items-center gap-0.5" style={{ flexShrink: 0 }}>
+                  <Zap size={14} style={{ color: 'var(--danger)' }} />
+                  <span style={{ fontSize: 7, color: 'var(--danger)', fontWeight: 700, textAlign: 'center' }}>session<br />cancelled</span>
+                </div>
+              </div>
+              <p style={{ fontSize: 9, color: 'var(--danger)', margin: 0, lineHeight: 1.4 }}>
+                Last request wins — CRON jobs interrupt active chat sessions.
+              </p>
+            </div>
+          )}
+
+          {/* ── Solution diagram ── */}
+          <div className="flex flex-col gap-2 px-2.5 py-2 rounded" style={{
+            background: fullyIsolated
+              ? 'color-mix(in srgb, var(--success) 5%, var(--bg-elevated))'
+              : 'var(--bg-elevated)',
+            border: `1px solid ${fullyIsolated ? 'color-mix(in srgb, var(--success) 25%, transparent)' : 'var(--border)'}`,
+          }}>
+            <div className="flex items-center gap-1.5">
+              <Server size={10} style={{ color: fullyIsolated ? 'var(--success)' : 'var(--text-secondary)' }} />
+              <span style={{ fontSize: 9, fontWeight: 700, color: fullyIsolated ? 'var(--success)' : 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: 0.6 }}>
+                With isolation
+              </span>
+            </div>
+
+            {/* Source row */}
+            <div className="flex justify-between px-2">
+              <div className="flex items-center gap-1 px-1.5 py-0.5 rounded" style={{ background: 'color-mix(in srgb, var(--accent) 12%, transparent)', border: '1px solid color-mix(in srgb, var(--accent) 25%, transparent)' }}>
+                <MessageSquare size={8} style={{ color: 'var(--accent)' }} />
+                <span style={{ fontSize: 8, color: 'var(--accent)' }}>Chat & Agents</span>
+              </div>
+              <div className="flex items-center gap-1 px-1.5 py-0.5 rounded" style={{ background: 'color-mix(in srgb, var(--warning) 12%, transparent)', border: '1px solid color-mix(in srgb, var(--warning) 25%, transparent)' }}>
+                <Clock size={8} style={{ color: 'var(--warning)' }} />
+                <span style={{ fontSize: 8, color: 'var(--warning)' }}>CRON Jobs</span>
+              </div>
+            </div>
+
+            {/* Arrow row */}
+            <div className="flex justify-between px-6">
+              <span style={{ fontSize: 10, color: 'var(--accent)', lineHeight: 1 }}>↓</span>
+              <span style={{ fontSize: 10, color: 'var(--warning)', lineHeight: 1 }}>↓</span>
+            </div>
+
+            {/* Instance boxes */}
+            <div className="flex items-stretch gap-1.5">
+              <OllamaServerBox port={11434} label="Main" role="Interactive" up={true} />
+              <div className="flex flex-col items-center justify-center gap-1" style={{ flexShrink: 0 }}>
+                <div style={{ flex: 1, width: 1, borderLeft: '1px dashed var(--border)' }} />
+                <span style={{ fontSize: 9, color: 'var(--text-secondary)', fontWeight: 700, padding: '1px 2px' }}>≠</span>
+                <div style={{ flex: 1, width: 1, borderLeft: '1px dashed var(--border)' }} />
+              </div>
+              <OllamaServerBox port={11435} label="CRON" role="Background" up={cronUp === true} />
+            </div>
+
+            {/* Shared disk footer */}
+            <div className="flex items-center justify-center gap-1.5 pt-1.5" style={{ borderTop: '1px dashed var(--border)' }}>
+              <HardDrive size={9} style={{ color: 'var(--text-secondary)', opacity: 0.6 }} />
+              <span style={{ fontSize: 8, color: 'var(--text-secondary)', opacity: 0.7 }}>
+                Shared model files on disk · separate GPU queues
+              </span>
+            </div>
+          </div>
+
+          {/* ── Live status ── */}
+          <div
+            className="flex flex-col gap-1.5 px-2.5 py-2 rounded"
+            style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)' }}
+          >
+            <StatusLine label=":11434 Main Ollama" up={true} />
+            <StatusLine label=":11435 CRON Ollama" up={cronUp === true} />
+            {ollamaJobs.length > 0 && (
+              <StatusLine
+                label="Jobs isolated"
+                up={contentingJobs.length === 0}
+                badge={`${isolatedJobs.length}/${ollamaJobs.length}`}
+              />
+            )}
+          </div>
+
+          {/* ── Setup steps (only when needed) ── */}
+          {!fullyIsolated && (
+            <div className="flex flex-col gap-2 pt-1" style={{ borderTop: '1px solid var(--border)' }}>
+              <span style={{ fontSize: 9, fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: 0.8 }}>
+                Setup
+              </span>
+              {!cronUp && (
+                <>
+                  <SetupStep
+                    n={1}
+                    text="Start the isolated CRON Ollama service"
+                    code="systemctl --user start ollama-cron"
+                  />
+                  <SetupStep
+                    n={2}
+                    text="Enable it on boot"
+                    code="systemctl --user enable ollama-cron"
+                  />
+                </>
+              )}
+              {contentingJobs.length > 0 && (
+                <SetupStep
+                  n={cronUp ? 1 : 3}
+                  text={`${contentingJobs.length} job${contentingJobs.length > 1 ? 's use' : ' uses'} ollama/ — change prefix to ollama-cron/ to isolate`}
+                />
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Main view ─────────────────────────────────────────────────────────────────
 
 export function CronsView({ onOpenChat }: { onOpenChat?: () => void }) {
@@ -651,6 +957,9 @@ export function CronsView({ onOpenChat }: { onOpenChat?: () => void }) {
             />
           ))}
         </div>
+
+        {/* Ollama isolation help */}
+        <OllamaIsolationPanel jobs={jobs} />
       </div>
 
       {/* Detail panel */}
