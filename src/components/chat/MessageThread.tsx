@@ -7,8 +7,17 @@ interface Props { conv: Conversation; showTools: boolean; showReasoning: boolean
 
 export function MessageThread({ conv, showTools, showReasoning }: Props) {
   const bottomRef = useRef<HTMLDivElement>(null)
+  const mountedRef = useRef(false)
 
+  // On first mount: jump instantly to bottom (no animation)
   useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'instant' })
+    mountedRef.current = true
+  }, [])
+
+  // After mount: smooth-scroll only when new content arrives
+  useEffect(() => {
+    if (!mountedRef.current) return
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [conv.messages.length, conv.messages[conv.messages.length - 1]?.content])
 
