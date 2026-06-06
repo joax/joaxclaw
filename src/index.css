@@ -164,3 +164,9 @@ code {
   border-radius: 2px;
   transition: width 0.5s ease;
 }
+
+/* Feedback bar — revealed on message hover */
+.animate-fade-in:hover .feedback-bar,
+.animate-fade-in .feedback-bar:focus-within {
+  opacity: 1 !important;
+}

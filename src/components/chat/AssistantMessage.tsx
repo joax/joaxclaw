@@ -1,11 +1,12 @@
 import { useState, useEffect, useRef } from 'react'
-import { ChevronDown, ChevronRight, BrainCircuit, CheckCircle2, XCircle, Loader2, Clock, Hourglass, Terminal, PenLine, FileText, Search, Globe, Plug, Bot, Wrench, FolderSearch, AlertTriangle, Zap } from 'lucide-react'
+import { ChevronDown, ChevronRight, BrainCircuit, CheckCircle2, XCircle, Loader2, Clock, Hourglass, Terminal, PenLine, FileText, Search, Globe, Plug, Bot, Wrench, FolderSearch, AlertTriangle, Zap, ThumbsUp, ThumbsDown } from 'lucide-react'
 import type { ChatMessage, ContextOverflowInfo, ToolCall } from '../../lib/types'
 import { useExtensionsStore } from '../../store/extensions'
 import { formatTimestamp } from '../../lib/dateUtils'
 import { MarkdownContent } from './MarkdownContent'
 import { AudioPlayer } from './AudioPlayer'
 import { WorkspaceImage, VideoPlayer } from './WorkspaceMedia'
+import { useFeedbackStore } from '../../store/feedback'
 
 const STALE_THRESHOLD_MS = 15_000
 
@@ -248,6 +249,80 @@ function GatewayActionBlock({ actions }: { actions: GatewayAction[] }) {
   )
 }
 
+// ── Message feedback (thumbs up / down) ──────────────────────────────────────
+
+function MessageFeedback({ message }: { message: ChatMessage }) {
+  const { load, submit, getRating } = useFeedbackStore()
+  const [saving, setSaving] = useState(false)
+
+  // Load JSONL ratings from disk once per app session (idempotent)
+  useEffect(() => { load() }, [])
+
+  const rating = getRating(message.id)
+
+  const handleSubmit = async (r: 'up' | 'down') => {
+    if (rating || saving) return
+    setSaving(true)
+    await submit({
+      ts: new Date().toISOString(),
+      rating: r,
+      sessionId: message.sessionId,
+      messageId: message.id,
+      model: message.model,
+      preview: message.content.slice(0, 200).replace(/\n+/g, ' '),
+    }).catch(() => {})
+    setSaving(false)
+  }
+
+  const dim = 'var(--text-secondary)'
+  const base: React.CSSProperties = {
+    background: 'none', border: 'none', cursor: 'pointer',
+    padding: '3px 5px', borderRadius: 'var(--radius)',
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    transition: 'background 0.12s',
+  }
+
+  if (rating) {
+    return (
+      <div className="flex items-center gap-1 mt-1.5 opacity-50">
+        {rating === 'up'
+          ? <ThumbsUp size={11} style={{ color: 'var(--success)' }} />
+          : <ThumbsDown size={11} style={{ color: 'var(--warning)' }} />
+        }
+        <span style={{ fontSize: 10, color: dim }}>Thanks for the feedback</span>
+      </div>
+    )
+  }
+
+  return (
+    <div
+      className="flex items-center gap-0.5 mt-1.5 feedback-bar"
+      style={{ opacity: 0, transition: 'opacity 0.15s' }}
+    >
+      <button
+        title="Good response"
+        style={{ ...base, color: dim }}
+        disabled={saving}
+        onClick={() => handleSubmit('up')}
+        onMouseEnter={e => (e.currentTarget.style.background = 'color-mix(in srgb, var(--success) 12%, transparent)')}
+        onMouseLeave={e => (e.currentTarget.style.background = 'none')}
+      >
+        <ThumbsUp size={12} />
+      </button>
+      <button
+        title="Bad response"
+        style={{ ...base, color: dim }}
+        disabled={saving}
+        onClick={() => handleSubmit('down')}
+        onMouseEnter={e => (e.currentTarget.style.background = 'color-mix(in srgb, var(--warning) 12%, transparent)')}
+        onMouseLeave={e => (e.currentTarget.style.background = 'none')}
+      >
+        <ThumbsDown size={12} />
+      </button>
+    </div>
+  )
+}
+
 interface Props { message: ChatMessage; showTools?: boolean; showReasoning?: boolean }
 
 export function AssistantMessage({ message, showTools = true, showReasoning = true }: Props) {
@@ -362,6 +437,11 @@ export function AssistantMessage({ message, showTools = true, showReasoning = tr
               <AudioPlayer key={i} attachment={a} />
             ))}
           </div>
+        )}
+
+        {/* Feedback row — hidden until parent is hovered */}
+        {!message.streaming && cleanContent && (
+          <MessageFeedback message={message} />
         )}
       </div>
     </div>
