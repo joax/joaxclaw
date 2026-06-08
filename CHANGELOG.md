@@ -7,6 +7,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-06-08
+
+### Added
+- macOS universal DMG build (Intel + Apple Silicon) via GitHub Actions
+- Unsigned — see README for first-launch instructions
+
+### Changed
+- GitHub Actions workflow now builds Linux DEB and macOS DMG in parallel
+
 ## [0.1.0] - 2026-06-08
 
 First public release.

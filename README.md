@@ -26,15 +26,26 @@ Desktop client for [Openclaw](https://openclaw.dev) — a self-hosted AI agent g
 
 ## Installation
 
+### Linux
+
 Download the latest `.deb` from the [Releases](../../releases) page and install:
 
 ```bash
 sudo dpkg -i joaxclaw_*.deb
-# fix any missing dependencies
-sudo apt-get install -f
+sudo apt-get install -f   # fix any missing dependencies
 ```
 
 Launch **JoaxClaw** from your application menu or run `joaxclaw` in a terminal.
+
+### macOS
+
+Download the latest `.dmg` from the [Releases](../../releases) page.
+
+> **Note:** The macOS build is currently unsigned. On first launch macOS will block it.
+> Open **System Settings → Privacy & Security** and click **Open Anyway**, or run:
+> ```bash
+> sudo xattr -rd com.apple.quarantine /Applications/JoaxClaw.app
+> ```
 
 ## Configuration
 
