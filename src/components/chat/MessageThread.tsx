@@ -15,11 +15,17 @@ export function MessageThread({ conv, showTools, showReasoning }: Props) {
     mountedRef.current = true
   }, [])
 
-  // After mount: smooth-scroll only when new content arrives
+  // After mount: smooth-scroll whenever the last message grows in any way
+  // (content text, tool calls added/updated, reasoning, streaming state)
+  const last = conv.messages[conv.messages.length - 1]
+  const lastMsgKey = last
+    ? `${last.id}:${last.content?.length ?? 0}:${last.reasoning?.length ?? 0}:${last.toolCalls?.length ?? 0}:${last.streaming}`
+    : ''
+
   useEffect(() => {
     if (!mountedRef.current) return
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [conv.messages.length, conv.messages[conv.messages.length - 1]?.content])
+  }, [conv.messages.length, lastMsgKey])
 
   return (
     <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4" style={{ scrollBehavior: 'smooth', userSelect: 'text' }}>

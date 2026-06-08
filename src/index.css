@@ -42,7 +42,11 @@ html, body, #root {
 ::-webkit-scrollbar-thumb:hover { background: var(--text-secondary); }
 
 /* Selection */
-::selection { background: var(--accent); color: var(--accent-fg); opacity: 0.3; }
+::selection { background: color-mix(in srgb, var(--accent) 40%, transparent); color: var(--text-primary); }
+
+/* Inside accent-coloured user bubbles the global selection is invisible —
+   use a white highlight instead so it's legible on any accent colour */
+.user-bubble ::selection { background: rgba(255, 255, 255, 0.35); color: inherit; }
 
 /* Focus ring */
 :focus-visible {

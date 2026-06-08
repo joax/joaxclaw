@@ -549,7 +549,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
       await gatewayClient.request('chat.send', {
         sessionKey,
         message: text,
-        ...(attachments?.length ? { attachments } : {}),
+        ...(attachments?.length ? {
+          attachments: attachments.map(a => ({
+            type: a.type,
+            content: a.data,
+            mimeType: a.mediaType,
+            fileName: a.name,
+          }))
+        } : {}),
         idempotencyKey: nanoid(16)
       })
     } catch (err) {

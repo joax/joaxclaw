@@ -55,7 +55,7 @@ export function UserMessage({ message }: Props) {
         )}
         {(!isMediaOnly || audioAttachments.length > 0) && (
           <div
-            className="px-4 py-3 text-sm"
+            className="px-4 py-3 text-sm user-bubble"
             style={{
               background: 'var(--accent)',
               color: 'var(--accent-fg)',
