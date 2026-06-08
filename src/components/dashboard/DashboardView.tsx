@@ -124,12 +124,23 @@ function HealthStrip({ onNavigate }: { onNavigate: (s: NavSection) => void }) {
 function AgentPicker({ value, onChange }: { value: string; onChange: (id: string) => void }) {
   const { agents } = useAgentsStore()
   const [open, setOpen] = useState(false)
+  const [dropPos, setDropPos] = useState({ top: 0, left: 0 })
+  const btnRef = useRef<HTMLButtonElement>(null)
   const selected = agents.find(a => a.id === value)
 
+  const handleToggle = () => {
+    if (!open && btnRef.current) {
+      const rect = btnRef.current.getBoundingClientRect()
+      setDropPos({ top: rect.bottom + 6, left: rect.left })
+    }
+    setOpen(v => !v)
+  }
+
   return (
-    <div style={{ position: 'relative' }}>
+    <div>
       <button
-        onClick={() => setOpen(v => !v)}
+        ref={btnRef}
+        onClick={handleToggle}
         style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'none', border: 'none', cursor: 'pointer', padding: '0 4px', color: 'var(--text-secondary)', fontSize: 12 }}
       >
         <span style={{ fontSize: 15 }}>{selected?.identity?.emoji ?? '🤖'}</span>
@@ -142,7 +153,7 @@ function AgentPicker({ value, onChange }: { value: string; onChange: (id: string
       {open && (
         <>
           <div className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
-          <div style={{ position: 'absolute', top: '100%', left: 0, zIndex: 40, minWidth: 220, background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', marginTop: 6, boxShadow: '0 8px 24px rgba(0,0,0,0.3)', overflow: 'hidden' }}>
+          <div style={{ position: 'fixed', top: dropPos.top, left: dropPos.left, zIndex: 40, minWidth: 220, background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', boxShadow: '0 8px 24px rgba(0,0,0,0.3)', overflow: 'hidden' }}>
             {agents.length === 0 && (
               <div style={{ padding: '12px 14px', fontSize: 12, color: 'var(--text-secondary)' }}>No agents configured</div>
             )}
