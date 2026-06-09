@@ -97,7 +97,28 @@ async function apiFetch(config: ObsidianConfig, path: string, extra: Record<stri
   return fetch(base + path, { headers })
 }
 
-// Recursively list all files in the vault.
+// Read Obsidian's excluded file patterns from .obsidian/app.json (best-effort).
+// Obsidian stores these under Settings → Files & Links → Excluded files.
+async function fetchVaultExcludePatterns(config: ObsidianConfig): Promise<string[]> {
+  try {
+    const res = await apiFetch(config, '/vault/.obsidian/app.json')
+    if (!res.ok) return []
+    const json = await res.json() as Record<string, unknown>
+    const raw = json['userIgnoreFilters']
+    if (Array.isArray(raw)) return raw.filter((s): s is string => typeof s === 'string' && s.length > 0)
+  } catch { /* best-effort */ }
+  return []
+}
+
+// Returns true if the vault-relative path matches any of Obsidian's exclusion patterns.
+// Obsidian matches with simple path.includes(filter), case-insensitive.
+function isVaultExcluded(path: string, patterns: string[]): boolean {
+  if (patterns.length === 0) return false
+  const lower = path.toLowerCase()
+  return patterns.some(p => lower.includes(p.toLowerCase()))
+}
+
+// Recursively list all markdown files in the vault.
 // GET /vault/{dir}/ returns immediate children: plain names for files, names ending
 // with "/" for subdirectories. We recurse into every subdirectory.
 async function listAllFiles(
@@ -121,6 +142,7 @@ async function listAllFiles(
     const subdirFetches: Promise<string[]>[] = []
 
     for (const entry of entries) {
+      if (entry.startsWith('.')) continue  // skip hidden dirs (.trash, .obsidian, etc.)
       if (entry.endsWith('/')) {
         subdirFetches.push(listAllFiles(config, dirPath + entry, depth + 1))
       } else {
@@ -241,11 +263,22 @@ export const useObsidianStore = create<ObsidianState>((set, get) => ({
       const checkRes = await apiFetch(config, '/vault/')
       if (!checkRes.ok) throw new Error(`Cannot list vault: HTTP ${checkRes.status}`)
 
-      // Recursively enumerate all files in the vault (progress 0→15%)
+      // Recursively enumerate all files and read Obsidian's excluded-path patterns (progress 0→15%)
       set({ graphProgress: 0.02 })
-      const allFiles = await listAllFiles(config)
+      const [allFiles, excludePatterns] = await Promise.all([
+        listAllFiles(config),
+        fetchVaultExcludePatterns(config),
+      ])
       set({ graphProgress: 0.15 })
-      const mdFiles = allFiles.filter(f => f.endsWith('.md'))
+
+      const mdFiles = allFiles.filter(f => {
+        if (!f.endsWith('.md')) return false
+        // Skip Excalidraw drawings stored as .excalidraw.md — they are not prose notes
+        if (f.endsWith('.excalidraw.md')) return false
+        // Apply Obsidian's "Excluded files" patterns (Settings → Files & Links)
+        if (isVaultExcluded(f, excludePatterns)) return false
+        return true
+      })
 
       set({ vaultInfo: { totalFiles: allFiles.length, mdFiles: mdFiles.length } })
 

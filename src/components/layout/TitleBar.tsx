@@ -1,4 +1,5 @@
 import { Minus, Square, X } from 'lucide-react'
+import logoUrl from '../../assets/logo-dark.png'
 
 declare global {
   interface Window {
@@ -25,8 +26,9 @@ export function TitleBar() {
       } as React.CSSProperties}
     >
       <div className="flex items-center gap-2" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
+        <img src={logoUrl} alt="JoaxClaw" style={{ height: 20, width: 'auto' }} />
         <span className="text-sm font-semibold tracking-tight" style={{ color: 'var(--text-primary)' }}>
-          🦞 JoaxClaw
+          JoaxClaw
         </span>
       </div>
 

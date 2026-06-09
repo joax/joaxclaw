@@ -13,7 +13,7 @@ let isQuitting = false
 
 function getTrayIcon(): Electron.NativeImage {
   // resources/ sits two levels above out/main/ in both dev and prod
-  const iconPath = join(__dirname, '../../resources/tray-icon.png')
+  const iconPath = join(__dirname, '../../resources/icons/joaxclaw-logo-dark.png')
   const icon = nativeImage.createFromPath(iconPath)
   if (icon.isEmpty()) {
     // Fallback: 1×1 transparent PNG so the tray doesn't crash
@@ -21,7 +21,7 @@ function getTrayIcon(): Electron.NativeImage {
       'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
     )
   }
-  return icon
+  return icon.resize({ width: 22, height: 22 })
 }
 
 function createTray(): void {

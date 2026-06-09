@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import logoUrl from '../../assets/logo-dark.png'
 import { Wifi, Trash2, ChevronDown, ChevronRight, AlertCircle, CheckCircle2, Zap } from 'lucide-react'
 import { useConnectionStore } from '../../store/connection'
 import { gatewayClient, type ConnLog } from '../../lib/gateway'
@@ -99,7 +100,7 @@ export function ConnectScreen({ onConnect }: Props) {
           }}
         >
           <div className="text-center mb-8">
-            <div className="text-4xl mb-3">🦞</div>
+            <img src={logoUrl} alt="JoaxClaw" style={{ height: 56, width: 'auto', margin: '0 auto 12px' }} />
             <h1 className="text-xl font-bold mb-1" style={{ color: 'var(--text-primary)' }}>JoaxClaw</h1>
             <p className="text-sm mb-3" style={{ color: 'var(--text-secondary)' }}>Connect to your Openclaw Gateway</p>
             <Btn

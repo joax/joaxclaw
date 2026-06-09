@@ -68,6 +68,8 @@ export function SessionsView({ onOpenChat }: Props) {
   const [search, setSearch] = useState('')
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
   const [editingKey, setEditingKey] = useState<string | null>(null)
+  const [openingKey, setOpeningKey] = useState<string | null>(null)
+  const [openError, setOpenError] = useState<string | null>(null)
 
   useEffect(() => { fetch() }, [])
 
@@ -89,8 +91,20 @@ export function SessionsView({ onOpenChat }: Props) {
     })
 
   const handleOpenInChat = async (s: Session) => {
-    await loadSessionMessages(s.key, sessionAgentId(s.key), sessionLabel(s, customLabels))
-    onOpenChat()
+    setOpeningKey(s.key)
+    setOpenError(null)
+    try {
+      const convId = await loadSessionMessages(s.key, sessionAgentId(s.key), sessionLabel(s, customLabels))
+      if (convId) {
+        onOpenChat()
+      } else {
+        setOpenError(`Could not load session — it may have expired or been deleted.`)
+      }
+    } catch {
+      setOpenError(`Failed to open session.`)
+    } finally {
+      setOpeningKey(null)
+    }
   }
 
   return (
@@ -110,6 +124,12 @@ export function SessionsView({ onOpenChat }: Props) {
       {error && (
         <div className="mb-4 px-3 py-2 rounded text-sm" style={{ background: 'color-mix(in srgb, var(--danger) 10%, transparent)', border: '1px solid var(--danger)', color: 'var(--danger)' }}>
           {error}
+        </div>
+      )}
+      {openError && (
+        <div className="mb-4 px-3 py-2 rounded text-sm flex items-center justify-between" style={{ background: 'color-mix(in srgb, var(--danger) 10%, transparent)', border: '1px solid var(--danger)', color: 'var(--danger)' }}>
+          <span>{openError}</span>
+          <button onClick={() => setOpenError(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'inherit', fontSize: 16, lineHeight: 1, padding: '0 2px' }}>×</button>
         </div>
       )}
 
@@ -222,7 +242,7 @@ export function SessionsView({ onOpenChat }: Props) {
                           </>
                         ) : (
                           <>
-                            <Btn size="sm" variant="outline" icon={<MessageSquare size={11} />} onClick={() => handleOpenInChat(s)}>
+                            <Btn size="sm" variant="outline" icon={<MessageSquare size={11} />} loading={openingKey === s.key} onClick={() => handleOpenInChat(s)}>
                               Open
                             </Btn>
                             {(isRunning(s) || aborting.has(s.key)) && (

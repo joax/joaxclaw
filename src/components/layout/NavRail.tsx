@@ -1,4 +1,4 @@
-import { MessageSquare, Bot, ClipboardList, Settings, Palette, HelpCircle, Puzzle, Timer, Brain, Cpu, GitBranch, LayoutDashboard } from 'lucide-react'
+import { MessageSquare, Bot, ClipboardList, Settings, Palette, HelpCircle, Puzzle, Timer, Brain, Cpu, GitBranch, LayoutDashboard, UsersRound } from 'lucide-react'
 import type { NavSection } from '../../App'
 
 interface NavItem { id: NavSection; icon: React.ReactNode; label: string; disabled?: boolean }
@@ -11,11 +11,12 @@ const GROUP_1: NavItem[] = [
 ]
 
 const GROUP_2: NavItem[] = [
-  { id: 'agents',     icon: <Bot size={20} />,        label: 'Agents' },
-  { id: 'processes',  icon: <GitBranch size={20} />,  label: 'Processes' },
-  { id: 'extensions', icon: <Puzzle size={20} />,     label: 'Plugins' },
-  { id: 'crons',      icon: <Timer size={20} />,      label: 'Crons' },
-  { id: 'models',     icon: <Cpu size={20} />,        label: 'Models' },
+  { id: 'agents',     icon: <Bot size={20} />,          label: 'Agents' },
+  { id: 'processes',  icon: <GitBranch size={20} />,    label: 'Processes' },
+  { id: 'teams',      icon: <UsersRound size={20} />,   label: 'Teams' },
+  { id: 'extensions', icon: <Puzzle size={20} />,       label: 'Plugins' },
+  { id: 'crons',      icon: <Timer size={20} />,        label: 'Crons' },
+  { id: 'models',     icon: <Cpu size={20} />,          label: 'Models' },
 ]
 
 const GROUP_3: NavItem[] = [
