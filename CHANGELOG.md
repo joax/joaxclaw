@@ -7,6 +7,34 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-06-09
+
+### Added
+- **Teams** — new Teams tab for composing and running multi-agent team workflows
+- `TeamBlueprint` (`.team.json`) as the durable source of truth for team definitions; compiled `.md` is a derived artifact
+- Native conditional branching in the blueprint (`routes`, `TeamRoute`, `TeamBranch`) with a visual route editor in the Build tab
+- Skip-style branch routing — a route can jump over intermediate members; validation uses forward reachability (BFS) instead of raw edge counts
+- Decision nodes in compiled graphs reuse the `handoff` type with multiple conditional outgoing edges — no new runtime node types needed
+- Revision history for teams — every blueprint save and graph-tab save appends a snapshot (capped at 20); visible in the History tab
+- Graph-tab saves are durable: appends revision, persists blueprint + revision file atomically, shows an error banner on failure
+- Launch validation (`validateTeamForLaunch`) checks controller, members, route references, graph reachability, and smoke-tests the runtime compile path
+- Export / import teams as `.team.json` bundles; import preserves compiled graph snapshot when present
+- Dashboard Teams section — shows running/recent team runs with live status
+- Chat input draft persistence — unsent text and attachments are saved per conversation and restored on return
+- New app icons across all platforms (Linux, macOS, Windows, iOS, Android); tray icon updated
+- `src/lib/TEAMS.md` — architecture reference for the team/process-builder source-of-truth boundary
+- Process-builder skill updated to distinguish team-compiled process files from standalone process files
+
+### Changed
+- NavRail now includes a dedicated Teams entry (`UsersRound` icon)
+- `saveCompiledDef` appends a revision snapshot and persists both blueprint and revision file before updating in-memory state
+- Graph-tab save failure is now visible (error banner) rather than silent
+- Revision list uses stable index keys to avoid duplicates when graph edits share a blueprint version number
+
+### Fixed
+- `computeRevisionSummary` now detects graph-edit and blueprint-regeneration transitions
+- Process-builder skill validation checklist clarified: incoming-edge rule applies to standalone processes only; team branching graphs with skip routes are exempt
+
 ## [0.2.0] - 2026-06-08
 
 ### Added
