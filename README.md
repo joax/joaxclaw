@@ -11,7 +11,8 @@ Desktop client for [Openclaw](https://openclaw.dev) — a self-hosted AI agent g
 - **Agents** — manage and monitor all configured agents with model assignments and session counts
 - **Sessions** — browse, search, and replay past agent sessions
 - **CRON Jobs** — view scheduled jobs, run history, and Ollama isolation setup guide
-- **Processes** — visual process graph builder and execution monitor
+- **Teams** — compose multi-agent workflows with conditional branching and skip-style routing; `TeamBlueprint` (`.team.json`) is the durable source of truth — not the compiled graph
+- **Processes** — visual process graph builder and execution monitor for standalone (non-team) workflows
 - **Models** — configure providers (Ollama, OpenAI, Google, etc.), view per-model usage and costs
 - **Gateway Config** — live Ollama model status, JSON editor, and gateway controls
 - **Obsidian Integration** — vault browser, graph view, and memory panel
@@ -79,6 +80,8 @@ npm run package:linux
 ```
 
 **Stack**: Electron 33 · React 18 · TypeScript · Vite · Tailwind CSS · Zustand
+
+**Teams architecture** (blueprint/compiled boundary, branching, skip routing, validation invariants): [`src/lib/TEAMS.md`](src/lib/TEAMS.md)
 
 ## Releasing
 

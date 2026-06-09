@@ -2,16 +2,9 @@ import { useState, useRef, useEffect } from 'react'
 import { Send, Square, RotateCcw, Paperclip, X, Image, Mic, MicOff, AudioWaveform } from 'lucide-react'
 import { useChatStore } from '../../store/chat'
 import { useSettingsStore } from '../../store/settings'
+import { useDraftsStore } from '../../store/drafts'
+import type { PendingAttachment } from '../../store/drafts'
 import type { MediaAttachment } from '../../lib/types'
-
-interface PendingAttachment {
-  id: string
-  name: string
-  mediaType: string
-  dataUrl: string
-  base64: string
-  type: 'image' | 'video' | 'audio'
-}
 
 function mimeToMediaType(mime: string): 'image' | 'video' | 'audio' {
   if (mime.startsWith('image/')) return 'image'
@@ -50,13 +43,27 @@ function formatRecTime(ms: number): string {
   return `${Math.floor(s / 60).toString().padStart(2, '0')}:${(s % 60).toString().padStart(2, '0')}`
 }
 
+// Stable empty draft — module-level so Object.is returns true on every render
+// when there is no draft for a conversation, preventing infinite Zustand loops.
+const EMPTY_DRAFT = { text: '', attachments: [] as PendingAttachment[] }
+
 interface Props { convId: string }
 
 export function MessageInput({ convId }: Props) {
-  const [text, setText] = useState('')
+  const { setText: storSetText, setAttachments: storeSetAtts, clear: storeClear, get: storeGet } = useDraftsStore()
+  const draft = useDraftsStore(s => s.drafts[convId] ?? EMPTY_DRAFT)
+  const text = draft.text
+  const pendingAttachments = draft.attachments
+
+  const setText = (t: string) => storSetText(convId, t)
+  const setPendingAttachments = (fn: PendingAttachment[] | ((prev: PendingAttachment[]) => PendingAttachment[])) => {
+    const current = storeGet(convId).attachments
+    const next = typeof fn === 'function' ? fn(current) : fn
+    storeSetAtts(convId, next)
+  }
+
   const [sending, setSending] = useState(false)
   const [isStalled, setIsStalled] = useState(false)
-  const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([])
   const [isDragOver, setIsDragOver] = useState(false)
   const [recording, setRecording] = useState(false)
   const [recordingMs, setRecordingMs] = useState(0)
@@ -89,9 +96,14 @@ export function MessageInput({ convId }: Props) {
 
   const isBlocked = isStreaming && !isStalled
 
-  // Focus when the conversation opens or switches
+  // Focus and restore textarea height when the conversation opens or switches
   useEffect(() => {
-    textareaRef.current?.focus()
+    const el = textareaRef.current
+    if (!el) return
+    el.focus()
+    // Re-measure height for any restored draft text
+    el.style.height = 'auto'
+    el.style.height = Math.min(el.scrollHeight, 160) + 'px'
   }, [convId])
 
   const prevBlocked = useRef(isBlocked)
@@ -151,7 +163,7 @@ export function MessageInput({ convId }: Props) {
     if (msg.startsWith('/') && !overrideText) {
       const cmd = msg.slice(1).trim().toLowerCase()
       if (cmd === 'compact') {
-        setText('')
+        storeClear(convId)
         if (textareaRef.current) textareaRef.current.style.height = 'auto'
         await compact(convId)
         return
@@ -159,12 +171,11 @@ export function MessageInput({ convId }: Props) {
       // Unknown slash command — let it through as a regular message
     }
 
-    setText('')
-    if (textareaRef.current) textareaRef.current.style.height = 'auto'
     const atts: MediaAttachment[] = pendingAttachments.map(a => ({
       type: a.type, data: a.base64, mediaType: a.mediaType, name: a.name,
     }))
-    setPendingAttachments([])
+    storeClear(convId)
+    if (textareaRef.current) textareaRef.current.style.height = 'auto'
     setSending(true)
     try {
       if (isStreaming) await abortStream(convId)

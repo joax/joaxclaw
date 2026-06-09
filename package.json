@@ -13,7 +13,9 @@
     "preview": "unset ELECTRON_RUN_AS_NODE && electron-vite preview",
     "start": "unset ELECTRON_RUN_AS_NODE && electron-vite dev",
     "package:linux": "npm run build && electron-builder --linux deb --x64",
-    "package:mac": "npm run build && electron-builder --mac dmg --universal"
+    "package:mac": "npm run build && electron-builder --mac dmg --universal",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "build": {
     "appId": "com.joax.joaxclaw",
@@ -30,27 +32,49 @@
     ],
     "mac": {
       "target": [
-        { "target": "dmg", "arch": ["universal"] }
+        {
+          "target": "dmg",
+          "arch": [
+            "universal"
+          ]
+        }
       ],
       "category": "public.app-category.productivity",
-      "icon": "resources/icon.png",
+      "icon": "resources/icons/macos/joaxclaw-1024.png",
       "identity": null
     },
     "dmg": {
       "title": "JoaxClaw ${version}",
       "contents": [
-        { "x": 130, "y": 220 },
-        { "x": 410, "y": 220, "type": "link", "path": "/Applications" }
+        {
+          "x": 130,
+          "y": 220
+        },
+        {
+          "x": 410,
+          "y": 220,
+          "type": "link",
+          "path": "/Applications"
+        }
       ]
     },
     "linux": {
       "target": [
-        { "target": "deb", "arch": ["x64"] }
+        {
+          "target": "deb",
+          "arch": [
+            "x64"
+          ]
+        }
       ],
       "category": "Utility",
-      "icon": "resources/tray-icon.png",
+      "icon": "resources/icons/linux/joaxclaw-512.png",
       "maintainer": "Joaquin Ayuso <joaxap@gmail.com>",
       "description": "Electron UI for Openclaw Gateway"
+    },
+    "win": {
+      "target": "nsis",
+      "icon": "resources/icons/windows/icon.ico"
     },
     "deb": {
       "depends": [
@@ -71,6 +95,7 @@
     "@electron-toolkit/tsconfig": "^2.0.0",
     "@monaco-editor/react": "^4.7.0",
     "@types/ws": "^8.18.1",
+    "d3-force": "^3.0.0",
     "monaco-editor": "^0.52.2",
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
@@ -79,6 +104,7 @@
     "zustand": "^5.0.3"
   },
   "devDependencies": {
+    "@types/d3-force": "^3.0.10",
     "@types/node": "^22.10.7",
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
@@ -94,6 +120,7 @@
     "react-dom": "^18.3.1",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.7.3",
-    "vite": "^6.0.11"
+    "vite": "^6.0.11",
+    "vitest": "^4.1.8"
   }
 }

@@ -1,13 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
 import {
   Send, ChevronDown, Loader2, CheckCircle2, XCircle,
-  ArrowRight, Activity, Timer, Cpu, Clock, Zap,
+  ArrowRight, Activity, Timer, Cpu, Clock, Zap, UsersRound,
 } from 'lucide-react'
 import { useConnectionStore } from '../../store/connection'
 import { useChatStore } from '../../store/chat'
 import { useAgentsStore } from '../../store/agents'
 import { useSessionsStore } from '../../store/sessions'
 import { useProcessesStore } from '../../store/processes'
+import { useTeamsStore } from '../../store/teams'
+import logoUrl from '../../assets/logo-dark.png'
 import { useCronsStore } from '../../store/crons'
 import { useMetricsStore } from '../../store/metrics'
 import { formatRelativeDate } from '../../lib/dateUtils'
@@ -533,12 +535,108 @@ function ResourcesSection() {
   )
 }
 
+// ── Right panel: Teams ────────────────────────────────────────────────────────
+
+function TeamsSection({ onNavigate }: { onNavigate: (s: NavSection) => void }) {
+  const { blueprints } = useTeamsStore()
+  const { runs } = useProcessesStore()
+  const [, tick] = useState(0)
+
+  useEffect(() => {
+    const id = setInterval(() => tick(t => t + 1), 1000)
+    return () => clearInterval(id)
+  }, [])
+
+  if (blueprints.length === 0) return null
+
+  const entries = [...blueprints]
+    .map(bp => ({ bp, run: runs[bp.id] }))
+    .sort((a, b) => {
+      const aRunning = a.run?.status === 'running'
+      const bRunning = b.run?.status === 'running'
+      if (aRunning !== bRunning) return aRunning ? -1 : 1
+      const aActive = a.run && a.run.status !== 'idle'
+      const bActive = b.run && b.run.status !== 'idle'
+      if (aActive !== bActive) return aActive ? -1 : 1
+      const aTime = a.run?.finishedAt ?? a.run?.startedAt ?? 0
+      const bTime = b.run?.finishedAt ?? b.run?.startedAt ?? 0
+      return bTime - aTime
+    })
+    .slice(0, 5)
+
+  const sectionLabel: React.CSSProperties = { fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text-secondary)' }
+
+  return (
+    <div style={{ marginBottom: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <UsersRound size={11} style={{ color: 'var(--text-secondary)' }} />
+          <span style={sectionLabel}>Teams</span>
+        </div>
+        <button onClick={() => onNavigate('teams')} style={{ fontSize: 10, color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>See all →</button>
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+        {entries.map(({ bp, run }) => {
+          const status    = run?.status ?? 'idle'
+          const isRunning = status === 'running'
+          const elapsed   = isRunning && run?.startedAt ? Math.floor((Date.now() - run.startedAt) / 1000) : 0
+          const elapsedStr = elapsed < 60 ? `${elapsed}s` : `${Math.floor(elapsed / 60)}m ${elapsed % 60}s`
+
+          return (
+            <button key={bp.id} onClick={() => onNavigate('teams')}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 8, padding: '5px 8px',
+                borderRadius: 'var(--radius)', width: '100%', textAlign: 'left', cursor: 'pointer',
+                border: isRunning ? '1px solid color-mix(in srgb, var(--accent) 25%, var(--border))' : '1px solid transparent',
+                background: isRunning ? 'color-mix(in srgb, var(--accent) 5%, var(--bg-surface))' : 'none',
+              }}
+              onMouseEnter={e => { if (!isRunning) (e.currentTarget as HTMLElement).style.background = 'var(--bg-elevated)' }}
+              onMouseLeave={e => { if (!isRunning) (e.currentTarget as HTMLElement).style.background = 'none' }}
+            >
+              {isRunning
+                ? <Loader2 size={11} style={{ color: 'var(--accent)', flexShrink: 0 }} className="animate-spin" />
+                : status === 'done'
+                ? <CheckCircle2 size={11} style={{ color: 'var(--success)', flexShrink: 0 }} />
+                : status === 'error'
+                ? <XCircle size={11} style={{ color: 'var(--danger)', flexShrink: 0 }} />
+                : <Clock size={11} style={{ color: 'var(--text-secondary)', opacity: 0.35, flexShrink: 0 }} />
+              }
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <span style={{ fontSize: 11, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block' }}>
+                  {bp.name}
+                </span>
+                {isRunning && run?.currentAgent && (
+                  <span style={{ fontSize: 10, color: 'var(--text-secondary)', opacity: 0.7, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block' }}>
+                    {run.currentAgent}
+                  </span>
+                )}
+              </div>
+              <span style={{ fontSize: 10, color: 'var(--text-secondary)', flexShrink: 0, opacity: 0.65 }}>
+                {isRunning
+                  ? elapsedStr
+                  : status === 'done' && run?.finishedAt
+                  ? fmtLastRun(run.finishedAt)
+                  : status === 'error' && run?.finishedAt
+                  ? fmtLastRun(run.finishedAt)
+                  : `${bp.members.length} agent${bp.members.length !== 1 ? 's' : ''}`
+                }
+              </span>
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 // ── Right panel ───────────────────────────────────────────────────────────────
 
 function RightPanel({ onNavigate }: { onNavigate: (s: NavSection) => void }) {
   return (
     <div style={{ width: 300, flexShrink: 0, borderLeft: '1px solid var(--border)', overflowY: 'auto', padding: '20px 16px', background: 'var(--bg-surface)', display: 'flex', flexDirection: 'column', gap: 0 }}>
       <ActiveSection onNavigate={onNavigate} />
+      <TeamsSection onNavigate={onNavigate} />
       <CronsSection onNavigate={onNavigate} />
       <ResourcesSection />
     </div>
@@ -553,9 +651,16 @@ function LeftPanel({ onSendMessage, onOpenConversation, onNavigate }: {
   onNavigate: (s: NavSection) => void
 }) {
   return (
-    <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '48px 32px 32px' }}>
+    <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '40px 32px 32px' }}>
       <div style={{ width: '100%', maxWidth: 600 }}>
-        <p style={{ fontSize: 22, fontWeight: 300, color: 'var(--text-secondary)', marginBottom: 24, letterSpacing: '-0.01em' }}>
+        {/* Brand header */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 6 }}>
+          <img src={logoUrl} alt="JoaxClaw" style={{ height: 44, width: 'auto', flexShrink: 0 }} />
+          <span style={{ fontSize: 26, fontWeight: 600, color: 'var(--text-primary)', letterSpacing: '-0.02em', lineHeight: 1 }}>
+            JoaxClaw
+          </span>
+        </div>
+        <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 28, paddingLeft: 2 }}>
           {greeting()}
         </p>
         <ChatInputCard onSend={onSendMessage} />
@@ -579,12 +684,14 @@ export function DashboardView({ onNavigate }: Props) {
   const { fetch: fetchSessions }        = useSessionsStore()
   const { fetch: fetchCrons }           = useCronsStore()
   const { load: loadProcesses }         = useProcessesStore()
+  const { load: loadTeams }             = useTeamsStore()
 
   useEffect(() => {
     fetchAgents()
     fetchSessions()
     fetchCrons()
     loadProcesses()
+    loadTeams()
   }, [])
 
   const handleSendMessage = async (agentId: string, text: string) => {

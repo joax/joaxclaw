@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import { Clock } from 'lucide-react'
 import type { Conversation } from '../../lib/types'
 import { UserMessage } from './UserMessage'
 import { AssistantMessage } from './AssistantMessage'
@@ -26,6 +27,16 @@ export function MessageThread({ conv, showTools, showReasoning }: Props) {
     if (!mountedRef.current) return
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [conv.messages.length, lastMsgKey])
+
+  if (conv.messages.length === 0) {
+    return (
+      <div className="flex-1 flex flex-col items-center justify-center gap-3" style={{ color: 'var(--text-secondary)' }}>
+        <Clock size={32} style={{ opacity: 0.3 }} />
+        <p className="text-sm">No messages in this session</p>
+        <p className="text-xs" style={{ opacity: 0.6 }}>{conv.sessionKey}</p>
+      </div>
+    )
+  }
 
   return (
     <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4" style={{ scrollBehavior: 'smooth', userSelect: 'text' }}>
