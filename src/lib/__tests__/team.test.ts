@@ -13,6 +13,7 @@ import {
   serializeBundle,
   parseBundle,
   blueprintPath,
+  blueprintFilename,
   compiledMdPath,
   revisionsPath,
   appendRevision,
@@ -692,5 +693,413 @@ describe('branching — skip-style routing', () => {
     expect(result.valid).toBe(false)
     // Either end is unreachable or a node is unreachable — the validator catches it
     expect(result.errors.some(e => /reachable|outgoing edge/i.test(e))).toBe(true)
+  })
+})
+
+// ── blueprintFilename ─────────────────────────────────────────────────────────
+
+describe('blueprintFilename', () => {
+  it('produces the correct .team.json filename', () => {
+    expect(blueprintFilename('my-team')).toBe('my-team.team.json')
+    expect(blueprintFilename('researcher-pipeline')).toBe('researcher-pipeline.team.json')
+  })
+})
+
+// ── parseBlueprint — forward-compat defaults ──────────────────────────────────
+
+describe('parseBlueprint — forward-compat defaults', () => {
+  it('fills in schemaVersion, members, createdAt, updatedAt, version, controllerAgentId when missing', () => {
+    // A "bare minimum" blueprint JSON — only id and name required.
+    const minimal = JSON.stringify({ id: 'x', name: 'X' })
+    const bp = parseBlueprint(minimal)
+    expect(bp).not.toBeNull()
+    expect(bp!.schemaVersion).toBe(TEAM_SCHEMA_VERSION)
+    expect(bp!.members).toEqual([])
+    expect(bp!.version).toBe(1)
+    expect(bp!.controllerAgentId).toBe('')
+    expect(bp!.createdAt).toBeGreaterThan(0)
+    expect(bp!.updatedAt).toBeGreaterThan(0)
+  })
+
+  it('does not overwrite present optional fields', () => {
+    const bp = parseBlueprint(JSON.stringify({
+      id: 'x', name: 'X',
+      schemaVersion: 1, members: [], version: 7,
+      controllerAgentId: 'ctrl', createdAt: 100, updatedAt: 200,
+    }))
+    expect(bp!.version).toBe(7)
+    expect(bp!.controllerAgentId).toBe('ctrl')
+  })
+})
+
+// ── parseRevisions — optional-chain edge case ─────────────────────────────────
+
+describe('parseRevisions — edge cases', () => {
+  it('filters out entries whose blueprint field is absent', () => {
+    const result = parseRevisions('[{"savedAt":1}]')
+    expect(result).toHaveLength(0)
+  })
+
+  it('filters out entries where savedAt is not a number', () => {
+    const result = parseRevisions('[{"blueprint":{"id":"x"},"savedAt":"string"}]')
+    expect(result).toHaveLength(0)
+  })
+
+  it('keeps entries that pass all filter checks', () => {
+    const raw = JSON.stringify([{
+      blueprint: { id: 'x', name: 'X', members: [], version: 1,
+                   controllerAgentId: '', schemaVersion: 1, createdAt: 0, updatedAt: 0 },
+      savedAt: 1234,
+    }])
+    const result = parseRevisions(raw)
+    expect(result).toHaveLength(1)
+    expect(result[0].blueprint.id).toBe('x')
+  })
+})
+
+describe('validateBundle — empty string fields', () => {
+  it('reports error for an empty-string id (triggers !bp.id branch)', () => {
+    const errors = validateBundle({
+      schemaVersion: TEAM_SCHEMA_VERSION,
+      blueprint: { id: '', name: 'X', members: [], version: 1 },
+      exportedAt: Date.now(),
+    })
+    expect(errors.some(e => /id/i.test(e))).toBe(true)
+  })
+
+  it('reports error for an empty-string name', () => {
+    const errors = validateBundle({
+      schemaVersion: TEAM_SCHEMA_VERSION,
+      blueprint: { id: 'x', name: '', members: [], version: 1 },
+      exportedAt: Date.now(),
+    })
+    expect(errors.some(e => /name/i.test(e))).toBe(true)
+  })
+
+  it('reports error when members is not an array', () => {
+    const errors = validateBundle({
+      schemaVersion: TEAM_SCHEMA_VERSION,
+      blueprint: { id: 'x', name: 'X', members: 'not-array', version: 1 },
+      exportedAt: Date.now(),
+    })
+    expect(errors.some(e => /members/i.test(e))).toBe(true)
+  })
+
+  it('reports error when version is not a number', () => {
+    const errors = validateBundle({
+      schemaVersion: TEAM_SCHEMA_VERSION,
+      blueprint: { id: 'x', name: 'X', members: [], version: 'string' },
+      exportedAt: Date.now(),
+    })
+    expect(errors.some(e => /version/i.test(e))).toBe(true)
+  })
+})
+
+// ── Compiler — additional branch coverage ─────────────────────────────────────
+
+describe('compiler — soul field and tags', () => {
+  it('linear compiler preserves soul field on agent nodes', () => {
+    const bp = makeBp({
+      members: [
+        { agentId: 'a', role: 'A', task: 'do A', soul: 'You are a specialist.' },
+        { agentId: 'b', role: 'B', task: 'do B' },
+      ],
+    })
+    const def = buildTeamProcessDef(bp, '/tmp/soul-test.md')
+    const aNode = def.graph!.nodes.find(n => n.agentId === 'a')
+    expect(aNode?.soul).toBe('You are a specialist.')
+    const bNode = def.graph!.nodes.find(n => n.agentId === 'b')
+    expect(bNode?.soul).toBeUndefined()
+  })
+
+  it('branching compiler preserves soul field on agent nodes', () => {
+    const bp = makeBp({
+      members: [
+        { agentId: 'researcher', role: 'Researcher', task: 'research', soul: 'Expert researcher.' },
+        { agentId: 'analyst',    role: 'Analyst',    task: 'analyse' },
+        { agentId: 'writer',     role: 'Writer',     task: 'write' },
+      ],
+      routes: [{ afterMemberId: 'researcher', branches: [
+        { condition: 'needs analysis', nextMemberId: 'analyst' },
+        { condition: 'otherwise',      nextMemberId: 'writer'  },
+      ]}],
+    })
+    const def = buildTeamProcessDef(bp, '/tmp/soul-branch.md')
+    const rNode = def.graph!.nodes.find(n => n.agentId === 'researcher')
+    expect(rNode?.soul).toBe('Expert researcher.')
+  })
+
+  it('compiler uses fallback tags ["team"] when blueprint has no tags', () => {
+    // makeBp() does not set tags → the compiler falls back to ['team']
+    const bp = makeBp()
+    expect(bp.tags).toBeUndefined()
+    const def = buildTeamProcessDef(bp, '/tmp/tags-test.md')
+    expect(def.tags).toEqual(['team'])
+  })
+
+  it('compiler uses explicit tags when blueprint provides them', () => {
+    const bp = makeBp({ tags: ['research', 'finance'] })
+    const def = buildTeamProcessDef(bp, '/tmp/tags-test.md')
+    expect(def.tags).toEqual(['research', 'finance'])
+  })
+
+  it('buildBody omits Output Contract section when outputContract is absent', () => {
+    const bp = makeBp({
+      outputContract: undefined,
+      routes: [{ afterMemberId: 'researcher', branches: [
+        { condition: 'done', nextMemberId: BRANCH_END },
+      ]}],
+    })
+    // With routes but no outputContract — exercises both the routes and no-outputContract paths
+    const def = buildTeamProcessDef(bp, '/tmp/nobody.md')
+    expect(def.body).not.toContain('Output Contract')
+    expect(def.body).toContain('Conditional Routing')
+  })
+
+  it('buildBody includes BRANCH_END as "end" in the routing section', () => {
+    const bp = makeBp({
+      routes: [{ afterMemberId: 'researcher', branches: [
+        { condition: 'done', nextMemberId: BRANCH_END },
+        { condition: 'otherwise', nextMemberId: 'analyst' },
+      ]}],
+    })
+    const def = buildTeamProcessDef(bp, '/tmp/end-route.md')
+    expect(def.body).toContain('done → end')
+    expect(def.body).toContain('otherwise → analyst')
+  })
+
+  it('safety edge: last member with a route but no BRANCH_END gets an implicit end edge', () => {
+    // b is last; its route points back to a (no BRANCH_END) — compiler adds decision-1 → end
+    const bp = makeBp({
+      members: [
+        { agentId: 'a', role: 'A', task: 'do A' },
+        { agentId: 'b', role: 'B', task: 'do B' },
+      ],
+      routes: [{ afterMemberId: 'b', branches: [
+        { condition: 'retry', nextMemberId: 'a' },
+      ]}],
+    })
+    const def = buildTeamProcessDef(bp, '/tmp/safety.md')
+    const safetyEdge = def.graph!.edges.find(e => e.from === 'decision-1' && e.to === 'end')
+    expect(safetyEdge).toBeDefined()
+  })
+
+  it('extractMembersFromDef falls back to node.id when agentId is absent', () => {
+    const bp = makeBp({ members: [{ agentId: 'solo', role: 'Solo', task: 'Do everything' }] })
+    const def = buildTeamProcessDef(bp, '/tmp/solo.md')
+    // Remove agentId from the agent node to exercise the `n.agentId ?? n.id` fallback
+    const nodesCopy = def.graph!.nodes.map(n =>
+      n.type === 'agent' ? { ...n, agentId: undefined } : n
+    )
+    const defWithoutAgentId = { ...def, graph: { ...def.graph!, nodes: nodesCopy } }
+    const members = extractMembersFromDef(defWithoutAgentId)
+    expect(members).toHaveLength(1)
+    // Falls back to node.id ('agent-0') since agentId is undefined
+    expect(members[0].agentId).toBe('agent-0')
+  })
+
+  it('branch edges with empty condition use undefined (not empty string) in the graph', () => {
+    // The `branch.condition || undefined` expression: empty string → undefined → no condition prop
+    const bp = makeBp({
+      members: [
+        { agentId: 'a', role: 'A', task: 'do A' },
+        { agentId: 'b', role: 'B', task: 'do B' },
+      ],
+      routes: [{ afterMemberId: 'a', branches: [
+        { condition: '',    nextMemberId: 'b' },      // empty → undefined on non-BRANCH_END edge
+        { condition: 'done', nextMemberId: BRANCH_END }, // non-empty → preserved on BRANCH_END edge
+      ]}],
+    })
+    const def = buildTeamProcessDef(bp, '/tmp/cond-test.md')
+    const emptyCondEdge = def.graph!.edges.find(e => e.from === 'decision-0' && e.to === 'agent-1')
+    expect(emptyCondEdge?.condition).toBeUndefined()
+    const doneEdge = def.graph!.edges.find(e => e.from === 'decision-0' && e.to === 'end')
+    expect(doneEdge?.condition).toBe('done')
+  })
+
+  it('empty condition on BRANCH_END edge also uses undefined', () => {
+    // Exercises `branch.condition || undefined` on the BRANCH_END → end path
+    const bp = makeBp({
+      members: [
+        { agentId: 'a', role: 'A', task: 'do A' },
+        { agentId: 'b', role: 'B', task: 'do B' },
+      ],
+      routes: [{ afterMemberId: 'a', branches: [
+        { condition: '', nextMemberId: BRANCH_END },  // empty condition + BRANCH_END
+      ]}],
+    })
+    const def = buildTeamProcessDef(bp, '/tmp/empty-branch-end.md')
+    const endEdge = def.graph!.edges.find(e => e.from === 'decision-0' && e.to === 'end')
+    expect(endEdge).toBeDefined()
+    expect(endEdge?.condition).toBeUndefined()
+  })
+
+  it('duplicate agentIds in branching team: second occurrence is skipped in index', () => {
+    // Exercises the if@L124.b1 false branch (agentId already in memberIdxByAgentId)
+    const bp = makeBp({
+      members: [
+        { agentId: 'dup', role: 'First',  task: 'do A' },
+        { agentId: 'dup', role: 'Second', task: 'do B' }, // same agentId — hits the false branch
+      ],
+      routes: [{ afterMemberId: 'dup', branches: [{ condition: '', nextMemberId: BRANCH_END }] }],
+    })
+    const def = buildTeamProcessDef(bp, '/tmp/dup.md')
+    expect(def).toBeDefined()
+    expect(def.graph!.nodes.some(n => n.id === 'decision-0')).toBe(true)
+  })
+
+  it('branch target not found in member index: description uses fallback role, edge is omitted', () => {
+    // Pass 1 (routingCondition description): `memberIdxByAgentId.get(id) ?? 0` uses index 0 as
+    //   fallback role when the target agentId is unknown — exercises the ?? 0 branch.
+    // Pass 2 (edge wiring): `if (targetIdx !== undefined)` skips adding the edge entirely.
+    const bp = makeBp({
+      members: [
+        { agentId: 'a', role: 'A', task: 'do A' },
+        { agentId: 'b', role: 'B', task: 'do B' },
+      ],
+      routes: [{ afterMemberId: 'a', branches: [
+        { condition: 'fallback path', nextMemberId: 'nonexistent' },
+      ]}],
+    })
+    const def = buildTeamProcessDef(bp, '/tmp/fallback.md')
+    expect(def).toBeDefined()
+    // The routingCondition description uses the fallback role at index 0 ('A')
+    const decNode = def.graph!.nodes.find(n => n.id === 'decision-0')
+    expect(decNode?.routingCondition).toContain('A')
+    // No edge is created for the unknown target (targetIdx === undefined → skipped)
+    const unknownEdge = def.graph!.edges.find(e => e.from === 'decision-0')
+    expect(unknownEdge).toBeUndefined()
+  })
+
+  it('branching compiler with empty members produces minimal graph', () => {
+    // Exercises `members[0]?.agentId ?? ""` → the ?. short-circuits on undefined → fallback ''
+    // Also exercises `buildBody` with routes but empty members list
+    const bp: TeamBlueprint = {
+      ...newBlueprint('empty-team', 'Empty'),
+      controllerAgentId: 'ctrl',
+      members: [],
+      routes: [{ afterMemberId: 'ghost', branches: [{ condition: '', nextMemberId: BRANCH_END }] }],
+    }
+    const def = buildTeamProcessDef(bp, '/tmp/empty.md')
+    expect(def.workflow.startAgent).toBe('')   // members[0]?.agentId ?? '' fallback
+    expect(def.graph!.nodes.some(n => n.type === 'start')).toBe(true)
+    expect(def.graph!.nodes.some(n => n.type === 'end')).toBe(true)
+  })
+
+  it('buildBody: empty branch condition renders as "otherwise"', () => {
+    // Exercises `b.condition || 'otherwise'` false branch in buildBody
+    const bp = makeBp({
+      routes: [{ afterMemberId: 'researcher', branches: [
+        { condition: '',        nextMemberId: 'analyst' },   // empty → 'otherwise'
+        { condition: 'if yes',  nextMemberId: 'writer'  },   // non-empty → preserved
+      ]}],
+    })
+    const def = buildTeamProcessDef(bp, '/tmp/otherwise.md')
+    expect(def.body).toContain('otherwise → analyst')
+    expect(def.body).toContain('if yes → writer')
+  })
+
+  it('branchDesc uses member role in routingCondition for non-BRANCH_END branch', () => {
+    // Exercises the non-BRANCH_END path in branchDesc:
+    // `members[memberIdxByAgentId.get(b.nextMemberId) ?? 0]?.role ?? b.nextMemberId`
+    // When the target member exists and has a role, the role string is used.
+    const bp = makeBp({
+      members: [
+        { agentId: 'researcher', role: 'Researcher', task: 'research' },
+        { agentId: 'analyst',    role: 'Analyst',    task: 'analyse'  },
+        { agentId: 'writer',     role: 'Writer',     task: 'write'    },
+      ],
+      routes: [{ afterMemberId: 'researcher', branches: [
+        { condition: 'complex case', nextMemberId: 'analyst' },
+        { condition: 'otherwise',    nextMemberId: 'writer'  },
+      ]}],
+    })
+    const def = buildTeamProcessDef(bp, '/tmp/role-desc.md')
+    const decNode = def.graph!.nodes.find(n => n.id === 'decision-0')
+    expect(decNode?.routingCondition).toContain('Analyst')
+    expect(decNode?.routingCondition).toContain('Writer')
+  })
+
+  it('decision routingCondition uses "end" label for BRANCH_END branch', () => {
+    const bp = makeBp({
+      members: [
+        { agentId: 'researcher', role: 'Researcher', task: 'research' },
+        { agentId: 'analyst',    role: 'Analyst',    task: 'analyse'  },
+        { agentId: 'writer',     role: 'Writer',     task: 'write'    },
+      ],
+      routes: [{ afterMemberId: 'researcher', branches: [
+        { condition: 'if concise enough', nextMemberId: BRANCH_END },
+        { condition: 'otherwise',          nextMemberId: 'analyst' },
+      ]}],
+    })
+    const def = buildTeamProcessDef(bp, '/tmp/dec-end.md')
+    const decNode = def.graph!.nodes.find(n => n.id === 'decision-0')
+    expect(decNode?.routingCondition).toContain('end')
+    expect(decNode?.routingCondition).toContain('Analyst')
+  })
+})
+
+// ── validateTeamForLaunch — additional branch coverage ───────────────────────
+
+describe('validateTeamForLaunch — additional error cases', () => {
+  it('fails when some members have no agent selected', () => {
+    const bp = makeBp({ members: [{ agentId: '', role: 'R', task: 'T' }] })
+    const result = validateTeamForLaunch(bp, undefined)
+    expect(result.valid).toBe(false)
+    expect(result.errors.some(e => /agent selected/i.test(e))).toBe(true)
+  })
+
+  it('fails when a route has an empty branches array', () => {
+    const bp = makeBp({
+      routes: [{ afterMemberId: 'researcher', branches: [] }],
+    })
+    const def = buildTeamProcessDef(bp, '/tmp/empty-branches.md')
+    const result = validateTeamForLaunch(bp, def)
+    expect(result.valid).toBe(false)
+    expect(result.errors.some(e => /no branches/i.test(e))).toBe(true)
+  })
+
+  it('fails when def has no graph', () => {
+    const bp = makeBp()
+    const def = { ...buildTeamProcessDef(bp, '/tmp/t.md'), graph: undefined }
+    const result = validateTeamForLaunch(bp, def)
+    expect(result.valid).toBe(false)
+    expect(result.errors.some(e => /missing a graph/i.test(e))).toBe(true)
+  })
+
+  it('fails when graph has no start node', () => {
+    const bp = makeBp()
+    const def = buildTeamProcessDef(bp, '/tmp/t.md')
+    const noStart = {
+      ...def,
+      graph: { nodes: def.graph!.nodes.filter(n => n.type !== 'start'), edges: def.graph!.edges },
+    }
+    const result = validateTeamForLaunch(bp, noStart)
+    expect(result.valid).toBe(false)
+    expect(result.errors.some(e => /missing a start node/i.test(e))).toBe(true)
+  })
+
+  it('fails when graph has no end node', () => {
+    const bp = makeBp()
+    const def = buildTeamProcessDef(bp, '/tmp/t.md')
+    const noEnd = {
+      ...def,
+      graph: { nodes: def.graph!.nodes.filter(n => n.type !== 'end'), edges: def.graph!.edges },
+    }
+    const result = validateTeamForLaunch(bp, noEnd)
+    expect(result.valid).toBe(false)
+    expect(result.errors.some(e => /missing.*end node|end.*not reachable/i.test(e))).toBe(true)
+  })
+
+  it('fails when graph has no agent nodes', () => {
+    const bp = makeBp()
+    const def = buildTeamProcessDef(bp, '/tmp/t.md')
+    const noAgents = {
+      ...def,
+      graph: { nodes: def.graph!.nodes.filter(n => n.type !== 'agent'), edges: def.graph!.edges },
+    }
+    const result = validateTeamForLaunch(bp, noAgents)
+    expect(result.valid).toBe(false)
+    expect(result.errors.some(e => /no agent nodes/i.test(e))).toBe(true)
   })
 })
