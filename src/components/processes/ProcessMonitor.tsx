@@ -103,7 +103,7 @@ export function ProcessMonitor({ def, run, onStop }: Props) {
 
   if (!run) {
     return (
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 10, color: 'var(--text-secondary)' }}>
+      <div style={{ flex: 1, height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 10, color: 'var(--text-secondary)' }}>
         <Activity size={32} style={{ opacity: 0.2 }} />
         <p style={{ fontSize: 13 }}>Not yet run</p>
         <p style={{ fontSize: 11, opacity: 0.6 }}>Select a controller agent and press Run to start.</p>

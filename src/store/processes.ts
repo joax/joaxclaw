@@ -54,6 +54,13 @@ export interface ProcessRun {
 // ── Module-level session routing ──────────────────────────────────────────────
 // Maps sessionKey → processId so the event handler can route gateway frames.
 const _runSessions = new Map<string, string>()
+// Sub-session tracking: processId → Set of sub-session keys that haven't fired 'final' yet
+const _pendingSubSessions = new Map<string, Set<string>>()
+// Processes whose controller session has fired 'final' but still have pending sub-sessions
+const _controllerDone = new Set<string>()
+// Maps toolCallId → processId for in-flight sessions_spawn calls.
+// data.name is only present on phase:'start', not phase:'result', so we match by id.
+const _spawnCallIds = new Map<string, string>()
 
 // ── Persist run state to disk ─────────────────────────────────────────────────
 
@@ -134,6 +141,8 @@ export const useProcessesStore = create<ProcessesState>((set, get) => ({
       if (frame.event !== 'chat' && frame.event !== 'agent') return
       const p = (frame.payload ?? {}) as Record<string, unknown>
       const sk = String(p.sessionKey ?? '')
+      // Temporary diagnostic: log every chat/agent event and whether it matches a tracked session
+      console.log('[processes] event:', frame.event, 'sk:', sk, 'tracked:', _runSessions.has(sk), 'runSessions keys:', [..._runSessions.keys()])
       const processId = _runSessions.get(sk)
       if (!processId) return
 
@@ -142,14 +151,37 @@ export const useProcessesStore = create<ProcessesState>((set, get) => ({
       // agent event: detect sessions_spawn tool calls to track active sub-agent
       if (frame.event === 'agent') {
         const data = p.data as Record<string, unknown> | undefined
-        if (p.stream === 'tool' && data?.phase === 'start' && data?.name === 'sessions_spawn') {
-          const args = data.args as Record<string, unknown> | undefined
-          const subName = String(args?.taskName ?? args?.agentId ?? 'sub-agent')
-          set(s => {
-            const run = s.runs[processId]
-            if (!run) return s
-            return { runs: { ...s.runs, [processId]: { ...run, currentAgent: subName } } }
-          })
+        if (p.stream === 'tool') {
+          const toolCallId = String(data?.toolCallId ?? '')
+
+          if (data?.phase === 'start' && data?.name === 'sessions_spawn') {
+            const args = data.args as Record<string, unknown> | undefined
+            const subName = String(args?.taskName ?? args?.agentId ?? 'sub-agent')
+            // Record the toolCallId so we can match the result event (name absent on result)
+            if (toolCallId) _spawnCallIds.set(toolCallId, processId)
+            set(s => {
+              const run = s.runs[processId]
+              if (!run) return s
+              return { runs: { ...s.runs, [processId]: { ...run, currentAgent: subName } } }
+            })
+          } else if (data?.phase === 'result') {
+            // Match by toolCallId — name field is not present on result events
+            const ownerProcessId = toolCallId ? _spawnCallIds.get(toolCallId) : undefined
+            if (ownerProcessId) {
+              _spawnCallIds.delete(toolCallId)
+              if (!data.isError) {
+                const r = typeof data.result === 'string'
+                  ? (() => { try { return JSON.parse(data.result as string) as Record<string, unknown> } catch { return {} as Record<string, unknown> } })()
+                  : (data.result ?? {}) as Record<string, unknown>
+                const subKey = String((r as Record<string, unknown>).key ?? (r as Record<string, unknown>).sessionKey ?? '')
+                if (subKey) {
+                  _runSessions.set(subKey, ownerProcessId)
+                  if (!_pendingSubSessions.has(ownerProcessId)) _pendingSubSessions.set(ownerProcessId, new Set())
+                  _pendingSubSessions.get(ownerProcessId)!.add(subKey)
+                }
+              }
+            }
+          }
         }
         return
       }
@@ -192,6 +224,8 @@ export const useProcessesStore = create<ProcessesState>((set, get) => ({
       if (state === 'waiting' || state === 'delegating') {
         const subKey = String(p.waitingSessionKey ?? p.subSessionKey ?? '')
         const entry: RunLogEntry = { ts: now, text: `Delegating to ${subKey || 'sub-agent'}` }
+        // When sub-sessions are tracked, stepsDone is driven by sub-session 'final' events instead
+        const trackingSubSessions = (_pendingSubSessions.get(processId)?.size ?? 0) > 0
         set(s => {
           const run = s.runs[processId]
           if (!run) return s
@@ -201,7 +235,7 @@ export const useProcessesStore = create<ProcessesState>((set, get) => ({
               [processId]: {
                 ...run,
                 currentAgent: subKey || run.currentAgent,
-                stepsDone: run.stepsDone + 1,
+                stepsDone: trackingSubSessions ? run.stepsDone : run.stepsDone + 1,
                 outputBuffer: '',
                 log: [...run.log, entry],
               },
@@ -213,6 +247,55 @@ export const useProcessesStore = create<ProcessesState>((set, get) => ({
 
       if (state === 'final') {
         _runSessions.delete(sk)
+        const pending = _pendingSubSessions.get(processId)
+        const isSubSession = pending?.has(sk)
+
+        if (isSubSession) {
+          // A worker sub-session completed — advance step count
+          pending!.delete(sk)
+          const atIdx = sk.indexOf('@')
+          const agentId = atIdx > 0 ? sk.slice(0, atIdx) : sk
+          const allDone = _controllerDone.has(processId) && pending!.size === 0
+          if (allDone) {
+            _pendingSubSessions.delete(processId)
+            _controllerDone.delete(processId)
+          }
+          set(s => {
+            const run = s.runs[processId]
+            if (!run) return s
+            const newLog = [...run.log, { ts: now, text: `✓ ${agentId} done` }]
+            if (allDone) {
+              const updated: ProcessRun = {
+                ...run, status: 'done', finishedAt: now, currentAgent: undefined,
+                stepsDone: run.stepsDone + 1,
+                log: [...newLog, { ts: now, text: 'Process completed' }],
+              }
+              persistRun(updated)
+              return { runs: { ...s.runs, [processId]: updated } }
+            }
+            return { runs: { ...s.runs, [processId]: { ...run, stepsDone: run.stepsDone + 1, log: newLog } } }
+          })
+          return
+        }
+
+        // Controller session final — check if workers are still running
+        if (pending && pending.size > 0) {
+          _controllerDone.add(processId)
+          set(s => {
+            const run = s.runs[processId]
+            if (!run) return s
+            return {
+              runs: {
+                ...s.runs,
+                [processId]: { ...run, log: [...run.log, { ts: now, text: 'Controller done — waiting for workers…' }] },
+              },
+            }
+          })
+          return
+        }
+
+        // No pending sub-sessions — mark done immediately
+        _pendingSubSessions.delete(processId)
         set(s => {
           const run = s.runs[processId]
           if (!run) return s
@@ -228,6 +311,10 @@ export const useProcessesStore = create<ProcessesState>((set, get) => ({
 
       if (state === 'error') {
         _runSessions.delete(sk)
+        _pendingSubSessions.get(processId)?.delete(sk)
+        _pendingSubSessions.delete(processId)
+        _controllerDone.delete(processId)
+        for (const [cid, pid] of _spawnCallIds) { if (pid === processId) _spawnCallIds.delete(cid) }
         set(s => {
           const run = s.runs[processId]
           if (!run) return s
@@ -244,6 +331,10 @@ export const useProcessesStore = create<ProcessesState>((set, get) => ({
 
       if (state === 'aborted') {
         _runSessions.delete(sk)
+        _pendingSubSessions.get(processId)?.delete(sk)
+        _pendingSubSessions.delete(processId)
+        _controllerDone.delete(processId)
+        for (const [cid, pid] of _spawnCallIds) { if (pid === processId) _spawnCallIds.delete(cid) }
         set(s => {
           const run = s.runs[processId]
           if (!run) return s
@@ -322,6 +413,16 @@ export const useProcessesStore = create<ProcessesState>((set, get) => ({
   },
 
   async stopRun(processId) {
+    // Abort any running sub-sessions first
+    const pending = _pendingSubSessions.get(processId)
+    if (pending) {
+      for (const subKey of pending) {
+        try { await gatewayClient.request('sessions.abort', { key: subKey }) } catch { /* ignore */ }
+      }
+      _pendingSubSessions.delete(processId)
+    }
+    _controllerDone.delete(processId)
+    for (const [cid, pid] of _spawnCallIds) { if (pid === processId) _spawnCallIds.delete(cid) }
     const run = get().runs[processId]
     if (!run?.sessionKey) return
     try {
@@ -368,7 +469,16 @@ export const useProcessesStore = create<ProcessesState>((set, get) => ({
         }
       }
 
-      set({ processes: defs, runs: restoredRuns, loading: false })
+      set(s => {
+        // Preserve any in-memory running processes — they are never persisted mid-run,
+        // so a full replace would erase active team (or process) runs when load() is
+        // called by another view (e.g. ProcessesView, DashboardView) while they are live.
+        const merged: Record<string, ProcessRun> = { ...restoredRuns }
+        for (const [id, run] of Object.entries(s.runs)) {
+          if (run.status === 'running') merged[id] = run
+        }
+        return { processes: defs, runs: merged, loading: false }
+      })
     } catch (e) {
       set({ loading: false, error: String(e) })
     }
