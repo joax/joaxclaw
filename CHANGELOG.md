@@ -7,6 +7,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-06-10
+
+### Added
+- ESLint v10 (flat config) with `@typescript-eslint` and `eslint-plugin-react-hooks`
+- `eslint.config.mjs` — TypeScript-aware rules; `react-hooks/rules-of-hooks` is an error, `exhaustive-deps` and unused vars are warnings
+- Pre-commit hooks via `simple-git-hooks`: runs `lint → type-check → tests` on every commit; reinstalls automatically after `npm install`
+- `lint` and `type-check` npm scripts
+- `@vitest/coverage-v8` for coverage reporting (`npm test -- --coverage`)
+- New test file `src/lib/__tests__/process.test.ts` — full coverage for `processParser`, `processCompiler`, and `processTemplate`
+- Expanded `src/lib/__tests__/team.test.ts` — additional branch coverage across blueprint, compiler, and validation
+- `coverage/` added to `.gitignore`
+
+### Changed
+- Test count: 59 → 138
+- Statement coverage: 81.98% → 97.22%
+- Branch coverage: 61.59% → 90.20%
+- Function coverage: 94.64% → 100%
+
 ## [0.3.0] - 2026-06-09
 
 ### Added
