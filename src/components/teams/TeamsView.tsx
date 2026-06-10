@@ -3,6 +3,7 @@ import {
   Plus, RefreshCw, UsersRound, Play, X, Trash2, ChevronDown,
   Upload, Download, GripVertical, Loader2, CheckCircle2, XCircle,
   Clock, ArrowRight, FileText, AlertTriangle, GitBranch,
+  Wrench, BarChart2, BookOpen, History,
 } from 'lucide-react'
 import { useTeamsStore, teamsDir } from '../../store/teams'
 import { useProcessesStore } from '../../store/processes'
@@ -744,6 +745,14 @@ function WorkflowPreview({ bp }: { bp: TeamBlueprint }) {
 
 type DetailTab = 'build' | 'graph' | 'monitor' | 'docs' | 'history'
 
+const TAB_META: Record<DetailTab, { icon: React.ReactNode; label: string; title?: string }> = {
+  build:   { icon: <Wrench size={12} />,    label: 'Build',   title: 'Edit Blueprint — canonical source of truth (.team.json)' },
+  graph:   { icon: <GitBranch size={12} />, label: 'Graph',   title: 'Edit compiled execution graph — changes diverge from Blueprint' },
+  monitor: { icon: <BarChart2 size={12} />, label: 'Monitor' },
+  docs:    { icon: <BookOpen size={12} />,  label: 'Docs' },
+  history: { icon: <History size={12} />,   label: 'History', title: 'View save history for this team' },
+}
+
 function TeamDetail({
   blueprint, compiledDef, onUpdated,
 }: {
@@ -757,18 +766,20 @@ function TeamDetail({
   const run = runs[blueprint.id]
   const teamRevisions = revisions[blueprint.id] ?? []
 
-  const [tab, setTab] = useState<DetailTab>('build')
+  // Initialise directly to 'monitor' if a run is already in progress — avoids a
+  // flash of the Build tab when navigating back while a team process is running.
+  const [tab, setTab] = useState<DetailTab>(() =>
+    useProcessesStore.getState().runs[blueprint.id]?.status === 'running' ? 'monitor' : 'build'
+  )
   const [isStarting, setIsStarting] = useState(false)
   const [graphSaveError, setGraphSaveError] = useState<string | null>(null)
   const importRef = useRef<HTMLInputElement>(null)
   const { importBundle } = useTeamsStore()
 
-  // Auto-switch to monitor when run starts
   useEffect(() => {
     if (run?.status === 'running') setTab('monitor')
   }, [run?.status])
 
-  // Lazy-load revision history when the History tab opens
   useEffect(() => {
     if (tab === 'history') loadRevisions(blueprint.id)
   }, [tab, blueprint.id])
@@ -805,195 +816,224 @@ function TeamDetail({
     onUpdated({ ...blueprint, graphCustomized: true, updatedAt: Date.now() })
   }
 
-  const TAB: React.CSSProperties = {
-    background: 'none', border: 'none', cursor: 'pointer',
-    padding: '6px 12px', fontSize: 12, fontWeight: 500, marginBottom: -1,
-  }
-
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
-      {/* Header */}
-      <div style={{ padding: '14px 20px 10px', borderBottom: '1px solid var(--border)', background: 'var(--bg-surface)', flexShrink: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <h2 style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-primary)', margin: 0 }}>{blueprint.name}</h2>
-              {/* Version + customized badge */}
-              <span style={{
-                fontSize: 10, padding: '2px 6px', borderRadius: 4,
-                background: 'color-mix(in srgb, var(--accent) 12%, var(--bg-elevated))',
-                border: '1px solid color-mix(in srgb, var(--accent) 30%, transparent)',
-                color: 'var(--accent)', fontWeight: 600, flexShrink: 0,
-              }}>v{blueprint.version}</span>
-              {blueprint.graphCustomized && (
-                <span style={{
-                  fontSize: 10, padding: '2px 6px', borderRadius: 4,
-                  background: 'color-mix(in srgb, var(--warning) 10%, var(--bg-elevated))',
-                  border: '1px solid color-mix(in srgb, var(--warning) 30%, transparent)',
-                  color: 'var(--warning)', flexShrink: 0,
-                }} title="Graph has been manually edited">graph edited</span>
-              )}
-            </div>
-            {blueprint.description && (
-              <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '2px 0 0' }}>{blueprint.description}</p>
-            )}
-          </div>
 
-          {/* Actions */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-            <input ref={importRef} type="file" accept=".team.json,.json,.md" style={{ display: 'none' }} onChange={handleImport} />
-            <Btn size="sm" variant="ghost" icon={<Upload size={11} />} onClick={() => importRef.current?.click()} title="Import team" />
-            <Btn size="sm" variant="ghost" icon={<Download size={11} />} onClick={() => exportBundle(blueprint.id)} title="Export team as .team.json" />
-            {isRunning ? (
-              <Btn size="sm" variant="outline" icon={<X size={12} />} onClick={handleStop} style={{ color: 'var(--danger)', borderColor: 'var(--danger)' }}>Stop</Btn>
-            ) : (
-              <Btn size="sm" loading={isStarting} icon={<Play size={12} />} onClick={handleRun}
-                disabled={!launchValidation.valid || isStarting}
-                title={launchValidation.valid ? undefined : launchValidation.errors[0]}>
-                Run
-              </Btn>
-            )}
-          </div>
-        </div>
+      {/* ── Compact header ───────────────────────────────────────────────────── */}
+      <div style={{
+        padding: '10px 16px 0',
+        background: 'var(--bg-surface)',
+        borderBottom: '1px solid var(--border)',
+        flexShrink: 0,
+      }}>
+        {/* Row 1: name + badges + actions */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+          {/* Name */}
+          <h2 style={{
+            fontSize: 14, fontWeight: 600, color: 'var(--text-primary)',
+            margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1,
+          }}>{blueprint.name}</h2>
 
-        {/* Meta line */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 6, fontSize: 11, color: 'var(--text-secondary)' }}>
-          <span>{blueprint.members.length} member{blueprint.members.length !== 1 ? 's' : ''}</span>
-          {controllerAgent && (
-            <span style={{ opacity: 0.6 }}>Controller: {controllerAgent.identity?.name ?? controllerAgent.id}</span>
+          {/* Version badge */}
+          <span style={{
+            fontSize: 10, padding: '1px 6px', borderRadius: 4, flexShrink: 0,
+            background: 'color-mix(in srgb, var(--accent) 12%, var(--bg-elevated))',
+            border: '1px solid color-mix(in srgb, var(--accent) 30%, transparent)',
+            color: 'var(--accent)', fontWeight: 600,
+          }}>v{blueprint.version}</span>
+
+          {/* graphCustomized badge */}
+          {blueprint.graphCustomized && (
+            <span style={{
+              fontSize: 10, padding: '1px 6px', borderRadius: 4, flexShrink: 0,
+              background: 'color-mix(in srgb, var(--warning) 10%, var(--bg-elevated))',
+              border: '1px solid color-mix(in srgb, var(--warning) 30%, transparent)',
+              color: 'var(--warning)',
+            }} title="Graph has been manually edited in the Graph tab">graph edited</span>
           )}
-          <span style={{ opacity: 0.4 }}>Updated {fmtDate(blueprint.updatedAt)}</span>
-          <span style={{ marginLeft: 'auto', fontFamily: 'monospace', opacity: 0.3, fontSize: 10 }}>
-            {blueprint.id}
+
+          {/* Meta chips */}
+          <span style={{
+            fontSize: 10, color: 'var(--text-secondary)', opacity: 0.55,
+            flexShrink: 0, whiteSpace: 'nowrap',
+          }}>
+            {blueprint.members.length} member{blueprint.members.length !== 1 ? 's' : ''}
+            {controllerAgent && ` · ${controllerAgent.identity?.name ?? controllerAgent.id}`}
           </span>
+
+          {/* Divider */}
+          <div style={{ width: 1, height: 14, background: 'var(--border)', flexShrink: 0 }} />
+
+          {/* Action buttons */}
+          <input ref={importRef} type="file" accept=".team.json,.json,.md" style={{ display: 'none' }} onChange={handleImport} />
+          <Btn size="sm" variant="ghost" icon={<Upload size={11} />} onClick={() => importRef.current?.click()} title="Import team" />
+          <Btn size="sm" variant="ghost" icon={<Download size={11} />} onClick={() => exportBundle(blueprint.id)} title="Export as .team.json" />
+          {isRunning ? (
+            <Btn size="sm" variant="outline" icon={<X size={12} />} onClick={handleStop}
+              style={{ color: 'var(--danger)', borderColor: 'var(--danger)' }}>Stop</Btn>
+          ) : (
+            <Btn size="sm" loading={isStarting} icon={<Play size={12} />} onClick={handleRun}
+              disabled={!launchValidation.valid || isStarting}
+              title={launchValidation.valid ? undefined : launchValidation.errors[0]}>
+              Run
+            </Btn>
+          )}
         </div>
 
-        {/* Workflow pills */}
-        {blueprint.members.length > 0 && (
-          <div style={{ marginTop: 8 }}>
-            <WorkflowPreview bp={blueprint} />
-          </div>
+        {/* Description (only if present) */}
+        {blueprint.description && (
+          <p style={{
+            fontSize: 11, color: 'var(--text-secondary)', margin: '0 0 6px',
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            opacity: 0.7,
+          }}>{blueprint.description}</p>
         )}
 
-        {/* Run status banner */}
+        {/* Run status — inline, only when active and not on monitor */}
         {run && run.status !== 'idle' && tab !== 'monitor' && (
           <div
+            onClick={() => setTab('monitor')}
             style={{
-              display: 'flex', alignItems: 'center', gap: 8, marginTop: 10,
-              padding: '6px 12px', borderRadius: 'var(--radius)', cursor: 'pointer', fontSize: 12,
-              background: `color-mix(in srgb, ${statusColor(run.status)} 8%, transparent)`,
+              display: 'inline-flex', alignItems: 'center', gap: 6,
+              margin: '2px 0 6px', padding: '3px 10px',
+              borderRadius: 20, cursor: 'pointer', fontSize: 11,
+              background: `color-mix(in srgb, ${statusColor(run.status)} 10%, var(--bg-elevated))`,
               border: `1px solid color-mix(in srgb, ${statusColor(run.status)} 25%, transparent)`,
               color: statusColor(run.status),
             }}
-            onClick={() => setTab('monitor')}
           >
             <StatusDot status={run.status} />
-            {run.status === 'running' && <>Running · {run.currentAgent ?? 'Starting…'} — <u>view monitor</u></>}
-            {run.status === 'done'    && <>Completed · {run.stepsDone} steps · {fmtDuration((run.finishedAt ?? Date.now()) - run.startedAt)} — <u>view monitor</u></>}
-            {run.status === 'error'   && <>Error: {run.error ?? 'unknown'} — <u>view monitor</u></>}
+            {run.status === 'running' && <>{run.currentAgent ?? 'Starting…'} — <u>view</u></>}
+            {run.status === 'done'    && <>Done · {run.stepsDone} steps · {fmtDuration((run.finishedAt ?? Date.now()) - run.startedAt)} — <u>view</u></>}
+            {run.status === 'error'   && <>Error: {run.error ?? 'unknown'} — <u>view</u></>}
           </div>
         )}
+
+        {/* Tab bar — flush with bottom border */}
+        <div style={{ display: 'flex', gap: 2, marginTop: 4 }}>
+          {(Object.entries(TAB_META) as [DetailTab, typeof TAB_META[DetailTab]][]).map(([t, meta]) => {
+            const active = tab === t
+            const hasRunDot = t === 'monitor' && run && run.status !== 'idle'
+            return (
+              <button
+                key={t}
+                title={meta.title}
+                onClick={() => setTab(t)}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 5,
+                  padding: '5px 10px 6px',
+                  background: active
+                    ? 'color-mix(in srgb, var(--accent) 10%, var(--bg-elevated))'
+                    : 'none',
+                  border: 'none',
+                  borderRadius: '6px 6px 0 0',
+                  borderBottom: `2px solid ${active ? 'var(--accent)' : 'transparent'}`,
+                  cursor: 'pointer',
+                  fontSize: 12, fontWeight: active ? 600 : 400,
+                  color: active ? 'var(--accent)' : 'var(--text-secondary)',
+                  marginBottom: -1,
+                  transition: 'color 0.12s, background 0.12s',
+                }}
+              >
+                <span style={{ opacity: active ? 1 : 0.6 }}>{meta.icon}</span>
+                {meta.label}
+                {/* Graph tab: show source/artifact context badge */}
+                {t === 'graph' && active && (
+                  <span style={{
+                    fontSize: 9, padding: '1px 4px', borderRadius: 3, marginLeft: 2,
+                    background: 'color-mix(in srgb, var(--warning) 15%, transparent)',
+                    color: 'var(--warning)', fontWeight: 600, letterSpacing: '0.03em',
+                  }}>compiled</span>
+                )}
+                {t === 'build' && active && (
+                  <span style={{
+                    fontSize: 9, padding: '1px 4px', borderRadius: 3, marginLeft: 2,
+                    background: 'color-mix(in srgb, var(--accent) 15%, transparent)',
+                    color: 'var(--accent)', fontWeight: 600, letterSpacing: '0.03em',
+                  }}>source</span>
+                )}
+                {/* Monitor dot */}
+                {hasRunDot && (
+                  <span style={{
+                    width: 6, height: 6, borderRadius: '50%',
+                    background: statusColor(run!.status), flexShrink: 0,
+                  }} />
+                )}
+              </button>
+            )
+          })}
+        </div>
       </div>
 
-      {/* Launch validation errors — shown above tabs when team can't run */}
+      {/* ── Validation error — compact inline bar ────────────────────────────── */}
       {!launchValidation.valid && !isRunning && (
         <div style={{
-          padding: '5px 20px', flexShrink: 0, fontSize: 11,
-          background: 'color-mix(in srgb, var(--warning) 7%, var(--bg-surface))',
-          borderBottom: '1px solid color-mix(in srgb, var(--warning) 20%, transparent)',
+          padding: '4px 16px', flexShrink: 0, fontSize: 11,
+          background: 'color-mix(in srgb, var(--warning) 6%, var(--bg-surface))',
+          borderBottom: '1px solid color-mix(in srgb, var(--warning) 18%, transparent)',
           color: 'var(--warning)', display: 'flex', alignItems: 'center', gap: 6,
         }}>
-          <AlertTriangle size={11} style={{ flexShrink: 0 }} />
+          <AlertTriangle size={10} style={{ flexShrink: 0 }} />
           <span>
-            <strong>Run disabled</strong> — {launchValidation.errors[0]}
+            <strong>Can't run</strong> — {launchValidation.errors[0]}
             {launchValidation.errors.length > 1 && ` (+${launchValidation.errors.length - 1} more)`}
           </span>
         </div>
       )}
 
-      {/* Tabs */}
-      <div style={{ display: 'flex', padding: '0 20px', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
-        {(['build', 'graph', 'monitor', 'docs', 'history'] as DetailTab[]).map(t => (
-          <button key={t}
-            title={
-              t === 'build'   ? 'Edit Blueprint — canonical source of truth (.team.json)' :
-              t === 'graph'   ? 'Edit compiled execution graph — changes diverge from Blueprint' :
-              t === 'history' ? 'View save history for this team' : undefined
-            }
-            style={{
-              ...TAB,
-              color: tab === t ? 'var(--accent)' : 'var(--text-secondary)',
-              borderBottom: `2px solid ${tab === t ? 'var(--accent)' : 'transparent'}`,
-              textTransform: 'capitalize',
-            }} onClick={() => setTab(t)}>
-            {t === 'graph'   && <GitBranch size={10} style={{ marginRight: 4, verticalAlign: 'middle' }} />}
-            {t}
-            {t === 'monitor' && run && run.status !== 'idle' && (
-              <span style={{ marginLeft: 4, display: 'inline-block', width: 6, height: 6, borderRadius: '50%', background: statusColor(run.status), verticalAlign: 'middle' }} />
-            )}
-          </button>
-        ))}
-      </div>
-
-      {/* Source / compiled artifact info banner — shown below tabs for build and graph */}
-      {(tab === 'build' || tab === 'graph') && (
+      {/* ── Graph tab: artifact warning (only when graph is customized) ───────── */}
+      {tab === 'graph' && blueprint.graphCustomized && (
         <div style={{
-          padding: '4px 20px', flexShrink: 0, fontSize: 11,
-          borderBottom: '1px solid var(--border)',
-          background: tab === 'graph'
-            ? 'color-mix(in srgb, var(--warning) 5%, var(--bg-surface))'
-            : 'color-mix(in srgb, var(--accent) 4%, var(--bg-surface))',
-          color: 'var(--text-secondary)',
-          display: 'flex', alignItems: 'center', gap: 6,
+          padding: '4px 16px', flexShrink: 0, fontSize: 11,
+          background: 'color-mix(in srgb, var(--warning) 5%, var(--bg-surface))',
+          borderBottom: '1px solid color-mix(in srgb, var(--warning) 15%, transparent)',
+          color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 6,
         }}>
-          {tab === 'build' ? (
-            <>
-              <FileText size={10} style={{ color: 'var(--accent)', flexShrink: 0 }} />
-              <span>
-                <strong style={{ color: 'var(--text-primary)' }}>Blueprint source</strong>
-                {' '}— edits here are saved as <code style={{ fontFamily: 'monospace', fontSize: 10 }}>.team.json</code> and recompile the execution graph.
-              </span>
-            </>
-          ) : (
-            <>
-              <GitBranch size={10} style={{ color: 'var(--warning)', flexShrink: 0 }} />
-              <span>
-                <strong style={{ color: 'var(--text-primary)' }}>Compiled execution artifact</strong>
-                {' '}— changes here diverge from the Blueprint source. To revert, save from the <strong>Build</strong> tab.
-              </span>
-            </>
-          )}
+          <AlertTriangle size={10} style={{ color: 'var(--warning)', flexShrink: 0 }} />
+          <span>Graph has been manually edited and diverges from the Blueprint. Save from <strong>Build</strong> to regenerate.</span>
         </div>
       )}
 
-      {/* Graph save error banner */}
+      {/* ── Graph save error ─────────────────────────────────────────────────── */}
       {tab === 'graph' && graphSaveError && (
         <div style={{
-          padding: '6px 20px', flexShrink: 0, fontSize: 11,
+          padding: '5px 16px', flexShrink: 0, fontSize: 11,
           background: 'color-mix(in srgb, var(--danger) 8%, var(--bg-surface))',
           borderBottom: '1px solid color-mix(in srgb, var(--danger) 20%, transparent)',
           color: 'var(--danger)', display: 'flex', alignItems: 'center', gap: 6,
         }}>
-          <AlertTriangle size={11} style={{ flexShrink: 0 }} />
-          <span>{graphSaveError}</span>
-          <button
-            onClick={() => setGraphSaveError(null)}
-            style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--danger)', opacity: 0.6, padding: 0 }}
-          ><X size={11} /></button>
+          <AlertTriangle size={10} style={{ flexShrink: 0 }} />
+          <span style={{ flex: 1 }}>{graphSaveError}</span>
+          <button onClick={() => setGraphSaveError(null)}
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--danger)', opacity: 0.6, padding: 0 }}>
+            <X size={11} />
+          </button>
         </div>
       )}
 
-      {/* Content */}
+      {/* ── Content ──────────────────────────────────────────────────────────── */}
       <div style={{ flex: 1, minHeight: 0, overflow: (tab === 'monitor' || tab === 'graph') ? 'hidden' : 'auto' }}>
         {tab === 'build' && (
-          <TeamBuilder
-            key={blueprint.id + '-' + blueprint.version}
-            initialBlueprint={blueprint}
-            teamId={blueprint.id}
-            teamsDirectory={teamsDir()}
-            graphCustomized={blueprint.graphCustomized}
-            onSaved={onUpdated}
-          />
+          <>
+            {/* Workflow preview — shown here in context, not in the header */}
+            {blueprint.members.length > 0 && (
+              <div style={{
+                padding: '10px 20px 8px',
+                borderBottom: '1px solid var(--border)',
+                background: 'var(--bg-surface)',
+              }}>
+                <WorkflowPreview bp={blueprint} />
+              </div>
+            )}
+            <TeamBuilder
+              key={blueprint.id + '-' + blueprint.version}
+              initialBlueprint={blueprint}
+              teamId={blueprint.id}
+              teamsDirectory={teamsDir()}
+              graphCustomized={blueprint.graphCustomized}
+              onSaved={onUpdated}
+            />
+          </>
         )}
 
         {tab === 'graph' && compiledDef ? (
@@ -1010,7 +1050,11 @@ function TeamDetail({
         )}
 
         {tab === 'monitor' && (
-          <ProcessMonitor def={compiledDef ?? { id: blueprint.id, name: blueprint.name, agents: [], workflow: { startAgent: '', transitions: [] }, path: '', body: '', raw: '' }} run={run} onStop={handleStop} />
+          <ProcessMonitor
+            def={compiledDef ?? { id: blueprint.id, name: blueprint.name, agents: [], workflow: { startAgent: '', transitions: [] }, path: '', body: '', raw: '' }}
+            run={run}
+            onStop={handleStop}
+          />
         )}
 
         {tab === 'docs' && (
@@ -1033,9 +1077,7 @@ function TeamDetail({
               <div>
                 <p style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', marginBottom: 6 }}>
                   Compiled Execution Artifact <span style={{ fontWeight: 400, textTransform: 'none', opacity: 0.6 }}>{blueprint.id}.md</span>
-                  {blueprint.graphCustomized && (
-                    <span style={{ marginLeft: 6, color: 'var(--warning)', fontWeight: 400 }}>⚠ diverges from source</span>
-                  )}
+                  {blueprint.graphCustomized && <span style={{ marginLeft: 6, color: 'var(--warning)', fontWeight: 400 }}>⚠ diverges from source</span>}
                 </p>
                 <pre style={{ fontSize: 11, fontFamily: 'monospace', color: 'var(--text-secondary)', background: 'var(--bg-elevated)', padding: 12, borderRadius: 'var(--radius)', overflowX: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
                   {serializeProcess(compiledDef)}
@@ -1123,7 +1165,11 @@ export function TeamsView() {
   }, [])
 
   useEffect(() => {
-    if (!selectedId && blueprints.length > 0) setSelectedId(blueprints[0].id)
+    if (!selectedId && blueprints.length > 0) {
+      // Prefer the team with an active run so the monitor is visible on return
+      const active = blueprints.find(b => runs[b.id]?.status === 'running')
+      setSelectedId(active?.id ?? blueprints[0].id)
+    }
   }, [blueprints.length])
 
   const filtered = blueprints.filter(bp =>
