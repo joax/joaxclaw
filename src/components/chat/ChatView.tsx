@@ -7,6 +7,7 @@ import { useSessionsStore } from '../../store/sessions'
 import { useModelsStore } from '../../store/models'
 import { MessageThread } from './MessageThread'
 import { MessageInput } from './MessageInput'
+import { ModelSelect, ThinkingSelect } from './ChatHeaderControls'
 import { Btn } from '../ui/Btn'
 import { formatRelativeDate } from '../../lib/dateUtils'
 import type { Session } from '../../lib/types'
@@ -17,7 +18,7 @@ function sessionAgentId(key: string): string {
 }
 
 export function ChatView() {
-  const { conversations, activeConvId, newConversation, selectConversation, deleteConversation, loadSessionMessages, watchSession } = useChatStore()
+  const { conversations, activeConvId, newConversation, selectConversation, deleteConversation, loadSessionMessages, watchSession, setModelOverride, setThinkingLevel } = useChatStore()
   const { agents, fetch: fetchAgents } = useAgentsStore()
   const { sessions, customLabels, fetch: fetchSessions } = useSessionsStore()
   const [search, setSearch] = useState('')
@@ -222,6 +223,20 @@ export function ChatView() {
               {activeConv.sessionKey?.includes(':heartbeat') && (
                 <Heart size={12} title="Heartbeat session" style={{ color: 'var(--accent)', opacity: 0.8 }} />
               )}
+
+              {/* Per-chat model + thinking overrides (independent of the agent's config) */}
+              <div className="flex items-center gap-1.5 ml-2">
+                <ModelSelect
+                  value={activeConv.modelOverride}
+                  agentDefault={agents.find(a => a.id === activeConv.agentId)?.model?.primary}
+                  onChange={model => setModelOverride(activeConv.id, model)}
+                />
+                <ThinkingSelect
+                  value={activeConv.thinkingLevel}
+                  onChange={level => setThinkingLevel(activeConv.id, level)}
+                />
+              </div>
+
               <div className="ml-auto flex items-center gap-1">
                 <ToggleBtn
                   active={showReasoning}

@@ -2,6 +2,11 @@ import { contextBridge, ipcRenderer } from 'electron'
 import { homedir } from 'os'
 
 contextBridge.exposeInMainWorld('api', {
+  // App info
+  app: {
+    version: () => ipcRenderer.invoke('app:version')
+  },
+
   // Window controls
   window: {
     minimize: () => ipcRenderer.invoke('window:minimize'),
@@ -59,6 +64,16 @@ contextBridge.exposeInMainWorld('api', {
   // System metrics
   metrics: {
     get: () => ipcRenderer.invoke('metrics:get')
+  },
+
+  // Ollama prompt-processing progress (parsed from Ollama logs in the main process)
+  ollama: {
+    watch: () => ipcRenderer.invoke('ollama:watch'),
+    onProgress: (cb: (p: { nTokens: number; progress: number; tps: number }) => void) => {
+      const listener = (_: Electron.IpcRendererEvent, p: { nTokens: number; progress: number; tps: number }) => cb(p)
+      ipcRenderer.on('ollama:progress', listener)
+      return () => ipcRenderer.removeListener('ollama:progress', listener)
+    }
   },
 
   // WebSocket proxy — connects from main process (no browser Origin header)

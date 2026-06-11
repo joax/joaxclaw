@@ -1,15 +1,26 @@
 import { app, BrowserWindow, ipcMain, shell, Tray, Menu, nativeImage, session } from 'electron'
 import { join, dirname } from 'path'
 import { readFile, writeFile, mkdir, readdir, unlink } from 'fs/promises'
-import { existsSync } from 'fs'
+import { existsSync, statSync, createReadStream, watch, type FSWatcher } from 'fs'
 import { homedir } from 'os'
-import { exec } from 'child_process'
+import { exec, spawn } from 'child_process'
 import si from 'systeminformation'
 import WebSocket from 'ws'
 
 let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null
 let isQuitting = false
+
+// Backstop: keep an unexpected async error (e.g. a stray socket 'error' during
+// teardown) from triggering Electron's fatal "JavaScript error in the main
+// process" dialog. Log it and forward to the renderer's connection log instead.
+process.on('uncaughtException', (err) => {
+  console.error('[main] uncaughtException:', err)
+  mainWindow?.webContents.send('ws:log', 'info', `Internal error: ${err?.message ?? String(err)}`)
+})
+process.on('unhandledRejection', (reason) => {
+  console.error('[main] unhandledRejection:', reason)
+})
 
 function getTrayIcon(): Electron.NativeImage {
   // resources/ sits two levels above out/main/ in both dev and prod
@@ -141,6 +152,9 @@ app.on('window-all-closed', () => { /* noop */ })
 app.on('before-quit', () => {
   isQuitting = true
 })
+
+// ── IPC: App info ─────────────────────────────────────────────────────────────
+ipcMain.handle('app:version', () => app.getVersion())
 
 // ── IPC: Window controls ──────────────────────────────────────────────────────
 ipcMain.handle('window:minimize', () => mainWindow?.minimize())
@@ -287,49 +301,80 @@ function sendToRenderer(channel: string, ...args: unknown[]) {
   mainWindow?.webContents.send(channel, ...args)
 }
 
-ipcMain.handle('ws:connect', (_event, url: string, token: string) => {
-  if (gws) {
-    gws.removeAllListeners()
-    gws.close()
-    gws = null
-  }
+// Tears down a socket safely. Calling close() on a still-CONNECTING socket throws
+// ("WebSocket was closed before the connection was established"), so we use
+// terminate() and swallow any late 'error' the dying socket emits — an unhandled
+// 'error' on a ws socket would otherwise crash the whole main process.
+function destroySocket(sock: WebSocket | null) {
+  if (!sock) return
+  sock.removeAllListeners()
+  sock.on('error', () => { /* swallow late errors during teardown */ })
+  try { sock.terminate() } catch { /* already closed / never connected */ }
+}
+
+ipcMain.handle('ws:connect', (_event, url: string, _token: string) => {
+  destroySocket(gws)
+  gws = null
 
   sendToRenderer('ws:log', 'info', `Connecting to ${url}…`)
   sendToRenderer('ws:status', 'connecting')
 
   // ws package connects without an Origin header — gateway grants full scopes
-  gws = new WebSocket(url)
+  let sock: WebSocket
+  try {
+    sock = new WebSocket(url)
+  } catch (e: unknown) {
+    // Malformed URL or synchronous construction failure — report, don't crash
+    const msg = e instanceof Error ? e.message : String(e)
+    sendToRenderer('ws:log', 'info', `Invalid gateway URL: ${msg}`)
+    sendToRenderer('ws:status', 'error', msg)
+    return { ok: false, error: msg }
+  }
+  gws = sock
 
-  gws.on('open', () => {
+  // Guard against an unreachable host that never refuses nor accepts (e.g. a down
+  // VPN peer): the TCP connect can hang for the full OS timeout with no 'error'.
+  // Fail fast with a clear message instead of an indefinite "Connecting…".
+  const connectTimer = setTimeout(() => {
+    if (sock.readyState === WebSocket.CONNECTING) {
+      sendToRenderer('ws:log', 'info', 'Connection timed out — no response from gateway')
+      sendToRenderer('ws:status', 'error', 'Connection timed out — gateway unreachable')
+      destroySocket(sock)
+      if (gws === sock) gws = null
+    }
+  }, 12000)
+
+  sock.on('open', () => {
+    clearTimeout(connectTimer)
     sendToRenderer('ws:log', 'info', 'WebSocket open — waiting for server challenge')
   })
 
-  gws.on('message', (data) => {
+  sock.on('message', (data) => {
     const raw = data.toString()
     sendToRenderer('ws:message', raw)
   })
 
-  gws.on('error', (err) => {
+  sock.on('error', (err) => {
+    // Unreachable host, refused connection, TLS failure, etc. — surface, never throw
+    clearTimeout(connectTimer)
     sendToRenderer('ws:log', 'info', `Socket error: ${err.message}`)
     sendToRenderer('ws:status', 'error', err.message)
   })
 
-  gws.on('close', (code, reason) => {
+  sock.on('close', (code, reason) => {
+    clearTimeout(connectTimer)
     const reasonStr = reason?.toString() || codeToReason(code)
     sendToRenderer('ws:log', 'info', `Closed — code=${code}${reasonStr ? ` (${reasonStr})` : ''}`)
     sendToRenderer('ws:status', 'disconnected', reasonStr || `code ${code}`)
-    gws = null
+    if (gws === sock) gws = null
   })
 
   return { ok: true }
 })
 
 ipcMain.handle('ws:disconnect', () => {
-  if (gws) {
-    gws.removeAllListeners()
-    gws.close()
-    gws = null
-  }
+  destroySocket(gws)
+  gws = null
   sendToRenderer('ws:status', 'disconnected')
   return { ok: true }
 })
@@ -507,3 +552,106 @@ ipcMain.handle('metrics:get', async () => {
     return { ok: false, error: String(e), cpu: 0, ramUsed: 0, ramTotal: 0, gpu: [] }
   }
 })
+
+// ── IPC: Ollama prompt-processing progress (from logs) ───────────────────────
+// Ollama's HTTP API exposes no prompt-eval progress — the llama.cpp runner only
+// prints it to logs. We tail those logs and forward the `progress` fraction:
+//   Linux  → journald  (journalctl -t ollama)
+//   macOS  → ~/.ollama/logs/server.log
+//   Windows→ %LOCALAPPDATA%\Ollama\server.log
+// Example line:
+//   slot print_timing: id 0 | task 0 | prompt processing, n_tokens = 19456, progress = 0.83, t = 235.99 s / 82.44 tokens per second
+
+let ollamaWatchStarted = false
+let ollamaStop: (() => void) | null = null
+
+const OLLAMA_PROGRESS_RE = /prompt processing.*?n_tokens\s*=\s*(\d+).*?progress\s*=\s*([\d.]+).*?([\d.]+)\s*tokens per second/i
+
+function emitOllamaLine(line: string): void {
+  const m = OLLAMA_PROGRESS_RE.exec(line)
+  if (!m) return
+  const nTokens = parseInt(m[1], 10)
+  const progress = parseFloat(m[2])
+  const tps = parseFloat(m[3])
+  if (Number.isNaN(progress)) return
+  sendToRenderer('ollama:progress', { nTokens, progress, tps })
+}
+
+// Splits a chunked text stream into complete lines, forwarding each to emitOllamaLine.
+function makeLineSplitter(): (chunk: string) => void {
+  let buffer = ''
+  return (chunk: string) => {
+    buffer += chunk
+    let idx: number
+    while ((idx = buffer.indexOf('\n')) >= 0) {
+      emitOllamaLine(buffer.slice(0, idx))
+      buffer = buffer.slice(idx + 1)
+    }
+  }
+}
+
+// Tails an appended-to log file (macOS/Windows). Handles late creation and rotation.
+function tailOllamaFile(filePath: string): () => void {
+  let pos = 0
+  let watcher: FSWatcher | null = null
+  const feed = makeLineSplitter()
+
+  const readNew = () => {
+    let size: number
+    try { size = statSync(filePath).size } catch { return }
+    if (size < pos) pos = 0          // file was rotated/truncated
+    if (size <= pos) return
+    const stream = createReadStream(filePath, { start: pos, end: size - 1 })
+    pos = size
+    stream.on('data', d => feed(d.toString()))
+    stream.on('error', () => { /* ignore transient read errors */ })
+  }
+
+  const begin = () => {
+    if (watcher) return
+    try { pos = statSync(filePath).size } catch { pos = 0 }
+    try { watcher = watch(filePath, { persistent: false }, () => readNew()) } catch { /* ignore */ }
+  }
+
+  if (existsSync(filePath)) begin()
+  // Poll covers late file creation and platforms where fs.watch misses appends.
+  const poll = setInterval(() => { begin(); readNew() }, 1000)
+
+  return () => { watcher?.close(); clearInterval(poll) }
+}
+
+// Tails journald for the `ollama` syslog identifier (Linux systemd).
+function tailOllamaJournal(): () => void {
+  const feed = makeLineSplitter()
+  let fallback: (() => void) | null = null
+  const proc = spawn('journalctl', ['-t', 'ollama', '-f', '-n', '0', '-o', 'cat'], {
+    stdio: ['ignore', 'pipe', 'ignore'],
+  })
+  proc.stdout?.on('data', d => feed(d.toString()))
+  proc.on('error', () => {
+    // journalctl missing or access denied — fall back to a log file if one exists
+    if (!fallback) fallback = tailOllamaFile(join(homedir(), '.ollama', 'logs', 'server.log'))
+  })
+  return () => { try { proc.kill() } catch { /* noop */ } ; fallback?.() }
+}
+
+function startOllamaWatch(): void {
+  if (ollamaWatchStarted) return
+  ollamaWatchStarted = true
+  try {
+    if (process.platform === 'linux') {
+      ollamaStop = tailOllamaJournal()
+    } else if (process.platform === 'win32') {
+      const base = process.env['LOCALAPPDATA'] ?? join(homedir(), 'AppData', 'Local')
+      ollamaStop = tailOllamaFile(join(base, 'Ollama', 'server.log'))
+    } else {
+      ollamaStop = tailOllamaFile(join(homedir(), '.ollama', 'logs', 'server.log'))
+    }
+  } catch {
+    ollamaWatchStarted = false
+  }
+}
+
+ipcMain.handle('ollama:watch', () => { startOllamaWatch(); return { ok: true } })
+
+app.on('before-quit', () => { ollamaStop?.(); ollamaStop = null })

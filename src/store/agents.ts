@@ -20,6 +20,22 @@ function rawList(snapshot: ConfigSnapshot): ConfigEntry[] | null {
   return Array.isArray(list) ? list : null
 }
 
+// Mirrors the gateway's normalizeAgentId — the agent id is derived from the name.
+export function normalizeAgentId(name: string): string {
+  return (name ?? '').trim().toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/^-+/, '')
+    .replace(/-+$/, '') || 'main'
+}
+
+// The configured root under which non-default agent workspaces are created
+// (gateway resolves a new agent's workspace to `<root>/<agentId>`).
+function defaultWorkspaceRoot(snapshot: ConfigSnapshot): string | null {
+  const agents = (snapshot.parsed ?? snapshot.config)?.agents as { defaults?: { workspace?: unknown } } | undefined
+  const root = agents?.defaults?.workspace
+  return typeof root === 'string' && root.trim() ? root.trim() : null
+}
+
 // Send a minimal patch touching only one agent entry and one field.
 // Using the full raw list as a patch is broken because the runtime config has
 // a different shape (e.g. model as object) than the raw JSON5 (model as string),
@@ -51,12 +67,32 @@ interface AgentUpdatePayload {
   allowedSubAgents?: string[]
 }
 
+// The gateway derives the agent id from `name`. Workspace may be left empty —
+// the store fills in the gateway's default (`<defaults.workspace>/<agentId>`).
+interface AgentCreatePayload {
+  name: string
+  workspace?: string
+  model?: string
+  emoji?: string
+  avatar?: string
+}
+
+interface AgentsCreateResult {
+  ok: true
+  agentId: string
+  name: string
+  workspace: string
+  model?: string
+}
+
 interface AgentsState {
   agents: Agent[]
   defaultId: string | null
   loading: boolean
   error: string | null
   fetch: () => Promise<void>
+  create: (payload: AgentCreatePayload) => Promise<string>
+  defaultWorkspaceRoot: () => Promise<string | null>
   update: (id: string, changes: AgentUpdatePayload) => Promise<void>
   remove: (id: string) => Promise<void>
   listFiles: (agentId: string) => Promise<AgentFile[]>
@@ -96,6 +132,37 @@ export const useAgentsStore = create<AgentsState>((set) => ({
       set({ agents, defaultId: res.defaultId ?? null, loading: false })
     } catch (e) {
       set({ error: String(e), loading: false })
+    }
+  },
+
+  async create(payload) {
+    let workspace = payload.workspace?.trim() ?? ''
+    // Empty workspace → fall back to the gateway default: <defaults.workspace>/<agentId>
+    if (!workspace) {
+      const root = await useAgentsStore.getState().defaultWorkspaceRoot()
+      if (root) workspace = `${root.replace(/\/+$/, '')}/${normalizeAgentId(payload.name)}`
+    }
+    if (!workspace) {
+      throw new Error('Workspace is required — no default (agents.defaults.workspace) is configured on the gateway.')
+    }
+
+    const params: Record<string, unknown> = { name: payload.name.trim(), workspace }
+    const model = payload.model?.trim()
+    if (model) params.model = model
+    if (payload.emoji?.trim()) params.emoji = payload.emoji.trim()
+    if (payload.avatar?.trim()) params.avatar = payload.avatar.trim()
+
+    const res = await gatewayClient.request<AgentsCreateResult>('agents.create', params)
+    // Re-fetch so the new agent (with config-derived fields) appears in the list
+    await useAgentsStore.getState().fetch()
+    return res.agentId
+  },
+
+  async defaultWorkspaceRoot() {
+    try {
+      return defaultWorkspaceRoot(await getConfig())
+    } catch {
+      return null
     }
   },
 

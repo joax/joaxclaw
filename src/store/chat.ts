@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { nanoid } from '../lib/nanoid'
-import type { Conversation, ChatMessage, ContextOverflowInfo, ToolCall, MediaAttachment } from '../lib/types'
+import type { Conversation, ChatMessage, ContextOverflowInfo, ToolCall, MediaAttachment, ThinkingLevel } from '../lib/types'
 import { gatewayClient } from '../lib/gateway'
 import { useExtensionsStore } from './extensions'
 
@@ -190,6 +190,8 @@ interface ChatState {
 
   newConversation: (agentId: string, agentName: string, sessionKey?: string) => string
   selectConversation: (id: string) => void
+  setModelOverride: (convId: string, model: string | null) => Promise<void>
+  setThinkingLevel: (convId: string, level: ThinkingLevel) => void
   sendMessage: (convId: string, text: string, attachments?: MediaAttachment[]) => Promise<void>
   abortStream: (convId: string) => Promise<void>
   compact: (convId: string) => Promise<void>
@@ -347,6 +349,28 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   selectConversation(id) {
     set({ activeConvId: id })
+  },
+
+  // Per-chat model override. Empty/null = fall back to the agent's default model.
+  // Applied at sessions.create for new chats; patched live for existing sessions.
+  async setModelOverride(convId, model) {
+    const value = model?.trim() || undefined
+    set(s => ({
+      conversations: s.conversations.map(c => c.id === convId ? { ...c, modelOverride: value } : c)
+    }))
+    const conv = get().conversations.find(c => c.id === convId)
+    if (conv?.sessionKey) {
+      // null resets the session back to the agent default (gateway treats null as "clear")
+      await gatewayClient.request('sessions.patch', { key: conv.sessionKey, model: value ?? null }).catch(() => {})
+    }
+  },
+
+  // Per-chat thinking level. Stored locally and passed as `thinking` on each send.
+  setThinkingLevel(convId, level) {
+    const value = level === 'adaptive' ? undefined : level
+    set(s => ({
+      conversations: s.conversations.map(c => c.id === convId ? { ...c, thinkingLevel: value } : c)
+    }))
   },
 
   deleteConversation(id) {
@@ -537,7 +561,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
     try {
       let sessionKey = conv.sessionKey
       if (!sessionKey) {
-        const session = await gatewayClient.request<{ key: string; sessionId?: string }>('sessions.create', { agentId: conv.agentId })
+        const session = await gatewayClient.request<{ key: string; sessionId?: string }>('sessions.create', {
+          agentId: conv.agentId,
+          ...(conv.modelOverride ? { model: conv.modelOverride } : {}),
+        })
         sessionKey = session.key
         set(s => ({
           conversations: s.conversations.map(c => c.id === convId ? { ...c, sessionKey } : c)
@@ -549,6 +576,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       await gatewayClient.request('chat.send', {
         sessionKey,
         message: text,
+        ...(conv.thinkingLevel ? { thinking: conv.thinkingLevel } : {}),
         ...(attachments?.length ? {
           attachments: attachments.map(a => ({
             type: a.type,
