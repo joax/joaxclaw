@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { ChevronDown, ChevronRight, BrainCircuit, CheckCircle2, XCircle, Loader2, Clock, Hourglass, Terminal, PenLine, FileText, Search, Globe, Plug, Bot, Wrench, FolderSearch, AlertTriangle, Zap, ThumbsUp, ThumbsDown } from 'lucide-react'
 import type { ChatMessage, ContextOverflowInfo, ToolCall } from '../../lib/types'
 import { useExtensionsStore } from '../../store/extensions'
+import { useOllamaProgress } from '../../store/ollamaProgress'
 import { formatTimestamp } from '../../lib/dateUtils'
 import { MarkdownContent } from './MarkdownContent'
 import { AudioPlayer } from './AudioPlayer'
@@ -424,6 +425,8 @@ export function AssistantMessage({ message, showTools = true, showReasoning = tr
           >
             {cleanContent ? (
               <MarkdownContent text={cleanContent} streaming={message.streaming} />
+            ) : (message.streaming && !hasReasoning && !hasTools && !isWaitingForSession) ? (
+              <PromptProgress />
             ) : (
               <span className="streaming-cursor" style={{ color: 'var(--text-secondary)' }} />
             )}
@@ -443,6 +446,40 @@ export function AssistantMessage({ message, showTools = true, showReasoning = tr
         {!message.streaming && cleanContent && (
           <MessageFeedback message={message} />
         )}
+      </div>
+    </div>
+  )
+}
+
+// ── Prompt-processing progress (Ollama) ───────────────────────────────────────
+// Shown before the first token while the local Ollama runner is still ingesting
+// the prompt. Falls back to the plain streaming cursor when no progress is
+// available (short prompts, remote/non-Ollama models, or non-Electron runtime).
+
+function PromptProgress() {
+  const { progress, nTokens, tps } = useOllamaProgress()
+
+  // Start the main-process log watcher on first appearance.
+  useEffect(() => { useOllamaProgress.getState().ensureStarted() }, [])
+
+  if (progress == null) {
+    return <span className="streaming-cursor" style={{ color: 'var(--text-secondary)' }} />
+  }
+
+  const pct = Math.min(Math.round(progress * 100), 100)
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex items-center gap-2 text-xs" style={{ color: 'var(--text-secondary)' }}>
+        <Loader2 size={11} className="animate-spin" style={{ color: 'var(--accent)' }} />
+        <span style={{ color: 'var(--accent)' }}>Processing prompt… {pct}%</span>
+        {nTokens != null && (
+          <span style={{ opacity: 0.65 }}>
+            · {nTokens.toLocaleString()} tokens{tps ? ` · ${Math.round(tps)} tok/s` : ''}
+          </span>
+        )}
+      </div>
+      <div style={{ height: 4, background: 'var(--bg-primary)', borderRadius: 2, overflow: 'hidden' }}>
+        <div style={{ width: `${pct}%`, height: '100%', background: 'var(--accent)', borderRadius: 2, transition: 'width 0.3s' }} />
       </div>
     </div>
   )

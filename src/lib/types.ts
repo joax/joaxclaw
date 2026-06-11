@@ -109,6 +109,21 @@ export interface ChatMessage {
   model?: string               // actual model used for this assistant message (provider/model or bare model id)
 }
 
+// Per-chat thinking level. 'adaptive' (the default) means "no override" — let the
+// agent/model decide. Other values map to the gateway's normalizeThinkLevel buckets.
+export type ThinkingLevel = 'adaptive' | 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+
+export const THINKING_LEVELS: { value: ThinkingLevel; label: string }[] = [
+  { value: 'adaptive', label: 'Adaptive' },
+  { value: 'off',      label: 'Off' },
+  { value: 'minimal',  label: 'Minimal' },
+  { value: 'low',      label: 'Low' },
+  { value: 'medium',   label: 'Medium' },
+  { value: 'high',     label: 'High' },
+  { value: 'xhigh',    label: 'Extra High' },
+  { value: 'max',      label: 'Max' },
+]
+
 export interface Conversation {
   id: string
   sessionKey: string
@@ -118,6 +133,9 @@ export interface Conversation {
   lastMessage?: string
   lastAt?: string
   messages: ChatMessage[]
+  // Per-chat overrides, independent of the agent's configured model.
+  modelOverride?: string       // 'provider/model' — empty/undefined = agent default
+  thinkingLevel?: ThinkingLevel // undefined / 'adaptive' = no override
 }
 
 // ── Connection ────────────────────────────────────────────────────────────────

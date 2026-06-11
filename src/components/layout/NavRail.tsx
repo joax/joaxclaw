@@ -1,5 +1,7 @@
+import { useState } from 'react'
 import { MessageSquare, Bot, ClipboardList, Settings, Palette, HelpCircle, Puzzle, Timer, Brain, Cpu, GitBranch, LayoutDashboard, UsersRound } from 'lucide-react'
 import type { NavSection } from '../../App'
+import { HelpModal } from '../help/HelpModal'
 
 interface NavItem { id: NavSection; icon: React.ReactNode; label: string; disabled?: boolean }
 
@@ -27,6 +29,7 @@ const GROUP_3: NavItem[] = [
 interface Props { section: NavSection; onNavigate: (s: NavSection) => void; disabledSections?: NavSection[] }
 
 export function NavRail({ section, onNavigate, disabledSections = [] }: Props) {
+  const [showHelp, setShowHelp] = useState(false)
   return (
     <nav
       className="flex flex-col items-center py-2 shrink-0"
@@ -68,10 +71,12 @@ export function NavRail({ section, onNavigate, disabledSections = [] }: Props) {
             {item.icon}
           </NavBtn>
         ))}
-        <NavBtn label="Help" onClick={() => {}}>
+        <NavBtn label="Help" active={showHelp} onClick={() => setShowHelp(true)}>
           <HelpCircle size={20} />
         </NavBtn>
       </div>
+
+      {showHelp && <HelpModal onClose={() => setShowHelp(false)} />}
     </nav>
   )
 }
