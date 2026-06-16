@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
 import { X, Rocket, Keyboard, LifeBuoy, Info, ExternalLink } from 'lucide-react'
+import type { HelpTab } from '../../store/help'
 
-type Tab = 'start' | 'shortcuts' | 'troubleshooting' | 'about'
+type Tab = HelpTab
 
 const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: 'start',           label: 'Getting Started',  icon: <Rocket size={14} /> },
@@ -17,8 +18,8 @@ function openExternal(url: string) {
   window.open(url, '_blank')
 }
 
-export function HelpModal({ onClose }: { onClose: () => void }) {
-  const [tab, setTab] = useState<Tab>('start')
+export function HelpModal({ onClose, initialTab }: { onClose: () => void; initialTab?: Tab }) {
+  const [tab, setTab] = useState<Tab>(initialTab ?? 'start')
 
   // Close on Escape
   useEffect(() => {
@@ -145,6 +146,13 @@ function Troubleshooting() {
       <Issue q="Ollama models missing or not loaded">
         Make sure Ollama is running (it serves on <Code>:11434</Code>). The Models panel reflects your gateway's
         configured providers; a green dot means the model is currently loaded in Ollama.
+      </Issue>
+      <Issue q="Why are there two Ollama services (:11434 and :11435)?">
+        Ollama runs one request at a time per model, so a scheduled CRON job sharing a single Ollama can
+        interrupt your live chat. A second isolated instance keeps them apart: <b>:11434</b> for
+        interactive chats/agents, <b>:11435</b> for background CRON jobs (jobs use the
+        <Code>ollama-cron/</Code> model prefix). Configure each instance's URL in <b>Settings → Ollama
+        Endpoints</b> — needed when the gateway runs on a remote host.
       </Issue>
       <Issue q="No prompt-processing progress in chat">
         That progress is read from Ollama's local logs and only appears for longer prompts on a local Ollama

@@ -69,6 +69,7 @@ contextBridge.exposeInMainWorld('api', {
   // Ollama prompt-processing progress (parsed from Ollama logs in the main process)
   ollama: {
     watch: () => ipcRenderer.invoke('ollama:watch'),
+    probe: (baseUrl: string) => ipcRenderer.invoke('ollama:probe', baseUrl),
     onProgress: (cb: (p: { nTokens: number; progress: number; tps: number }) => void) => {
       const listener = (_: Electron.IpcRendererEvent, p: { nTokens: number; progress: number; tps: number }) => cb(p)
       ipcRenderer.on('ollama:progress', listener)

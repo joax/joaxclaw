@@ -19,6 +19,7 @@ interface ConnectionState {
   disconnect: () => void
   saveConnection: (conn: GatewayConnection) => void
   removeConnection: (url: string) => void
+  setOllamaUrls: (gatewayUrl: string, urls: { main?: string; cron?: string }) => void
 }
 
 export const useConnectionStore = create<ConnectionState>()(
@@ -77,6 +78,15 @@ export const useConnectionStore = create<ConnectionState>()(
 
       removeConnection(url) {
         set(s => ({ savedConnections: s.savedConnections.filter(c => c.url !== url) }))
+      },
+
+      setOllamaUrls(gatewayUrl, urls) {
+        const merge = (c: GatewayConnection): GatewayConnection =>
+          c.url === gatewayUrl ? { ...c, ollamaUrls: { ...c.ollamaUrls, ...urls } } : c
+        set(s => ({
+          connection: s.connection ? merge(s.connection) : s.connection,
+          savedConnections: s.savedConnections.map(merge),
+        }))
       }
     }),
     {

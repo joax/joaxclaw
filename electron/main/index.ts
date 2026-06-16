@@ -654,4 +654,22 @@ function startOllamaWatch(): void {
 
 ipcMain.handle('ollama:watch', () => { startOllamaWatch(); return { ok: true } })
 
+// Probe an Ollama instance's /api/tags from the MAIN process. Unlike a renderer
+// fetch this is not CORS-bound and can reach remote hosts (e.g. the gateway host
+// over a VPN) — so health checks work even when Ollama isn't on the local machine.
+ipcMain.handle('ollama:probe', async (_event, baseUrl: string) => {
+  if (typeof baseUrl !== 'string' || !baseUrl.trim()) return { ok: false }
+  const url = baseUrl.replace(/\/+$/, '') + '/api/tags'
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 3500)
+  try {
+    const res = await fetch(url, { signal: controller.signal })
+    return { ok: res.ok }
+  } catch {
+    return { ok: false }
+  } finally {
+    clearTimeout(timer)
+  }
+})
+
 app.on('before-quit', () => { ollamaStop?.(); ollamaStop = null })
