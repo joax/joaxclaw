@@ -1,16 +1,18 @@
 import { useEffect, useState } from 'react'
-import { RotateCcw, Square, CheckCircle2, XCircle, AlertCircle, RefreshCw, Eye, EyeOff } from 'lucide-react'
+import { RotateCcw, Square, CheckCircle2, XCircle, AlertCircle, RefreshCw, Eye, EyeOff, Info, X, Server, LifeBuoy, Zap, HardDrive } from 'lucide-react'
 import Editor from '@monaco-editor/react'
 import { useConnectionStore } from '../../store/connection'
 import { useMetricsStore } from '../../store/metrics'
 import { Btn } from '../ui/Btn'
 import { Input } from '../ui/Input'
 import { formatBytes } from '../../lib/ollama'
+import { resolveOllamaUrl } from '../../lib/ollamaHealth'
+import { useHelpStore } from '../../store/help'
 
 type GwStatus = { running: boolean; pid?: number; uptime?: string }
 
 export function GatewayView() {
-  const { status, connection, connect, disconnect } = useConnectionStore()
+  const { status, connection, savedConnections, connect, disconnect, setOllamaUrls } = useConnectionStore()
   const { ollamaModels } = useMetricsStore()
 
   const [configText, setConfigText] = useState('')
@@ -243,6 +245,14 @@ export function GatewayView() {
           </div>
         </Card>
 
+        {/* Ollama endpoints */}
+        <OllamaEndpointsCard
+          targetUrl={connection?.url ?? savedConnections.find(c => c.url === editUrl)?.url}
+          editUrl={editUrl}
+          overrides={connection?.ollamaUrls ?? savedConnections.find(c => c.url === (connection?.url ?? editUrl))?.ollamaUrls}
+          onSave={setOllamaUrls}
+        />
+
         {/* Ollama models */}
         <Card title="Ollama Models">
           <div className="space-y-2">
@@ -271,6 +281,191 @@ export function GatewayView() {
           </div>
         </Card>
       </div>
+    </div>
+  )
+}
+
+// Per-connection Ollama URL overrides (shared with the cron Ollama-isolation panel).
+function OllamaEndpointsCard({ targetUrl, editUrl, overrides, onSave }: {
+  targetUrl?: string
+  editUrl: string
+  overrides?: { main?: string; cron?: string }
+  onSave: (gatewayUrl: string, urls: { main?: string; cron?: string }) => void
+}) {
+  const [showWhy, setShowWhy] = useState(false)
+  // Placeholders reflect the default the app would use when no override is set.
+  const mainDefault = resolveOllamaUrl('main', targetUrl ?? editUrl)?.url ?? 'http://host:11434'
+  const cronDefault = resolveOllamaUrl('cron', targetUrl ?? editUrl)?.url ?? 'http://host:11435'
+
+  return (
+    <Card title="Ollama Endpoints">
+      <div className="space-y-2.5">
+        {/* Info callout — why are there two Ollama instances? */}
+        <button
+          onClick={() => setShowWhy(true)}
+          className="flex items-center gap-2 w-full px-2.5 py-2 rounded text-left"
+          style={{
+            background: 'color-mix(in srgb, var(--accent) 8%, var(--bg-elevated))',
+            border: '1px solid color-mix(in srgb, var(--accent) 25%, transparent)',
+            cursor: 'pointer',
+          }}
+        >
+          <Info size={13} style={{ color: 'var(--accent)', flexShrink: 0 }} />
+          <span className="text-xs flex-1" style={{ color: 'var(--text-primary)' }}>Why two Ollama instances?</span>
+          <span className="text-xs" style={{ color: 'var(--accent)' }}>Learn more</span>
+        </button>
+
+        <p className="text-xs" style={{ color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+          URLs used for Ollama health checks. Leave blank to use the default (localhost when the
+          gateway is local, otherwise the gateway host).
+        </p>
+
+        {showWhy && <WhyTwoOllamasOverlay onClose={() => setShowWhy(false)} />}
+        <OllamaUrlRow
+          label="Main"
+          port={11434}
+          placeholder={mainDefault}
+          value={overrides?.main ?? ''}
+          disabled={!targetUrl}
+          onSave={v => targetUrl && onSave(targetUrl, { main: v || undefined })}
+        />
+        <OllamaUrlRow
+          label="CRON"
+          port={11435}
+          placeholder={cronDefault}
+          value={overrides?.cron ?? ''}
+          disabled={!targetUrl}
+          onSave={v => targetUrl && onSave(targetUrl, { cron: v || undefined })}
+        />
+        {!targetUrl && (
+          <p className="text-xs" style={{ color: 'var(--text-secondary)', opacity: 0.7 }}>
+            Connect to a gateway (or pick a saved one) to configure its endpoints.
+          </p>
+        )}
+      </div>
+    </Card>
+  )
+}
+
+// Explains the two-instance Ollama setup, with a link into the Help service.
+function WhyTwoOllamasOverlay({ onClose }: { onClose: () => void }) {
+  const openHelp = useHelpStore(s => s.openHelp)
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  return (
+    <>
+      <div className="fixed inset-0 z-40" style={{ background: 'rgba(0,0,0,0.5)' }} onClick={onClose} />
+      <div
+        className="fixed left-1/2 top-1/2 z-50 flex flex-col"
+        style={{
+          transform: 'translate(-50%, -50%)', width: 480, maxHeight: '80vh',
+          background: 'var(--bg-surface)', border: '1px solid var(--border)',
+          borderRadius: 'var(--radius)', boxShadow: '0 12px 40px rgba(0,0,0,0.4)', overflow: 'hidden',
+        }}
+      >
+        <div className="flex items-center justify-between px-5 py-4 shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
+          <div className="flex items-center gap-2">
+            <Server size={15} style={{ color: 'var(--accent)' }} />
+            <h2 className="font-semibold text-base" style={{ color: 'var(--text-primary)' }}>Why two Ollama instances?</h2>
+          </div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)', padding: 4 }}>
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="overflow-y-auto p-5 space-y-3" style={{ color: 'var(--text-secondary)', fontSize: 13, lineHeight: 1.6 }}>
+          <p>
+            Ollama serves <b>one request at a time per model</b> — a new request preempts whatever is
+            running. So a single Ollama shared between your live chats and scheduled jobs means
+            <b style={{ color: 'var(--text-primary)' }}> "last request wins"</b>.
+          </p>
+
+          <div className="flex items-start gap-2 px-3 py-2 rounded" style={{
+            background: 'color-mix(in srgb, var(--danger) 6%, var(--bg-elevated))',
+            border: '1px solid color-mix(in srgb, var(--danger) 25%, transparent)',
+          }}>
+            <Zap size={13} style={{ color: 'var(--danger)', flexShrink: 0, marginTop: 1 }} />
+            <span style={{ fontSize: 12 }}>
+              Without isolation, a CRON job firing mid-conversation <b style={{ color: 'var(--text-primary)' }}>cancels your active chat session</b>.
+            </span>
+          </div>
+
+          <p>
+            Running a second, isolated Ollama for background work keeps the two from contending:
+          </p>
+          <ul className="space-y-1.5" style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+            <li className="flex items-center gap-2">
+              <Server size={12} style={{ color: 'var(--success)', flexShrink: 0 }} />
+              <span><b style={{ color: 'var(--text-primary)' }}>Main · :11434</b> — interactive chats & agents</span>
+            </li>
+            <li className="flex items-center gap-2">
+              <Server size={12} style={{ color: 'var(--warning)', flexShrink: 0 }} />
+              <span><b style={{ color: 'var(--text-primary)' }}>CRON · :11435</b> — background scheduled jobs</span>
+            </li>
+            <li className="flex items-center gap-2">
+              <HardDrive size={12} style={{ color: 'var(--text-secondary)', flexShrink: 0 }} />
+              <span>Shared model files on disk · separate GPU queues</span>
+            </li>
+          </ul>
+
+          <p>
+            CRON jobs target the isolated instance with the <code style={codeStyle}>ollama-cron/</code> model
+            prefix (the service is <code style={codeStyle}>ollama-cron</code>). Set each instance's URL above —
+            useful when the gateway, and therefore Ollama, runs on a remote host.
+          </p>
+        </div>
+
+        <div className="flex items-center justify-end gap-2 px-5 py-4 shrink-0" style={{ borderTop: '1px solid var(--border)' }}>
+          <Btn
+            variant="outline"
+            size="sm"
+            icon={<LifeBuoy size={13} />}
+            onClick={() => { onClose(); openHelp('troubleshooting') }}
+          >
+            Open Help
+          </Btn>
+          <Btn size="sm" onClick={onClose}>Got it</Btn>
+        </div>
+      </div>
+    </>
+  )
+}
+
+const codeStyle: React.CSSProperties = {
+  fontFamily: 'monospace', fontSize: 11, padding: '1px 5px', borderRadius: 4,
+  background: 'var(--bg-primary)', border: '1px solid var(--border)', color: 'var(--text-primary)',
+}
+
+// Single URL input that commits on blur / Enter.
+function OllamaUrlRow({ label, port, value, placeholder, disabled, onSave }: {
+  label: string; port: number; value: string; placeholder: string; disabled?: boolean; onSave: (v: string) => void
+}) {
+  const [draft, setDraft] = useState(value)
+  useEffect(() => { setDraft(value) }, [value])
+  return (
+    <div>
+      <label className="block text-xs mb-1" style={{ color: 'var(--text-secondary)' }}>
+        {label} <span style={{ opacity: 0.6, fontFamily: 'monospace' }}>:{port}</span>
+      </label>
+      <input
+        value={draft}
+        disabled={disabled}
+        onChange={e => setDraft(e.target.value)}
+        onBlur={() => { if (draft.trim() !== value.trim()) onSave(draft.trim()) }}
+        onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+        placeholder={placeholder}
+        style={{
+          width: '100%', boxSizing: 'border-box', padding: '6px 10px', fontSize: 12, fontFamily: 'monospace',
+          borderRadius: 'var(--radius)', border: '1px solid var(--border)',
+          background: 'var(--bg-elevated)', color: 'var(--text-primary)', outline: 'none',
+          opacity: disabled ? 0.5 : 1, cursor: disabled ? 'not-allowed' : 'text',
+        }}
+      />
     </div>
   )
 }

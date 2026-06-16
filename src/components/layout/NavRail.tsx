@@ -1,7 +1,7 @@
-import { useState } from 'react'
 import { MessageSquare, Bot, ClipboardList, Settings, Palette, HelpCircle, Puzzle, Timer, Brain, Cpu, GitBranch, LayoutDashboard, UsersRound } from 'lucide-react'
 import type { NavSection } from '../../App'
 import { HelpModal } from '../help/HelpModal'
+import { useHelpStore } from '../../store/help'
 
 interface NavItem { id: NavSection; icon: React.ReactNode; label: string; disabled?: boolean }
 
@@ -29,7 +29,7 @@ const GROUP_3: NavItem[] = [
 interface Props { section: NavSection; onNavigate: (s: NavSection) => void; disabledSections?: NavSection[] }
 
 export function NavRail({ section, onNavigate, disabledSections = [] }: Props) {
-  const [showHelp, setShowHelp] = useState(false)
+  const { open: helpOpen, tab: helpTab, openHelp, closeHelp } = useHelpStore()
   return (
     <nav
       className="flex flex-col items-center py-2 shrink-0"
@@ -71,12 +71,12 @@ export function NavRail({ section, onNavigate, disabledSections = [] }: Props) {
             {item.icon}
           </NavBtn>
         ))}
-        <NavBtn label="Help" active={showHelp} onClick={() => setShowHelp(true)}>
+        <NavBtn label="Help" active={helpOpen} onClick={() => openHelp()}>
           <HelpCircle size={20} />
         </NavBtn>
       </div>
 
-      {showHelp && <HelpModal onClose={() => setShowHelp(false)} />}
+      {helpOpen && <HelpModal initialTab={helpTab} onClose={closeHelp} />}
     </nav>
   )
 }

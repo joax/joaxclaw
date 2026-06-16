@@ -1,9 +1,12 @@
-import { useEffect, useState } from 'react'
-import { RefreshCw, Play, Trash2, ChevronDown, Clock, CheckCircle2, XCircle, SkipForward, Loader2, ToggleLeft, ToggleRight, AlertCircle, Pencil, MessageSquare, Server, Terminal, HardDrive, Zap } from 'lucide-react'
+import { useEffect, useState, useMemo } from 'react'
+import { RefreshCw, Play, Trash2, ChevronDown, Clock, CheckCircle2, XCircle, HelpCircle, SkipForward, Loader2, ToggleLeft, ToggleRight, AlertCircle, Pencil, MessageSquare, Server, Terminal, HardDrive, Zap } from 'lucide-react'
 import { ModelIcon } from '../ui/ModelIcon'
 import { useCronsStore } from '../../store/crons'
 import { useChatStore } from '../../store/chat'
+import { useConnectionStore } from '../../store/connection'
+import { useModelsStore } from '../../store/models'
 import type { CronJob, CronRunEntry, CronSchedule } from '../../lib/types'
+import { checkOllama, gatewayHost, isLocalGateway, type OllamaStatus } from '../../lib/ollamaHealth'
 import { Btn } from '../ui/Btn'
 import { CronEditor } from './CronEditor'
 
@@ -566,35 +569,43 @@ function InfoChip({ label, value, mono }: { label: string; value: string; mono?:
 
 // ── Ollama isolation panel ────────────────────────────────────────────────────
 
-function OllamaServerBox({ port, label, role, up }: { port: number; label: string; role: string; up: boolean }) {
-  const color = up ? 'var(--success)' : 'var(--warning)'
+function ollamaStatusColor(state: OllamaStatus): string {
+  return state === 'up' ? 'var(--success)' : state === 'down' ? 'var(--warning)' : 'var(--text-secondary)'
+}
+
+function OllamaServerBox({ port, label, role, state }: { port: number; label: string; role: string; state: OllamaStatus }) {
+  const up = state === 'up'
+  const unknown = state === 'unknown'
+  const color = ollamaStatusColor(state)
+  const borderC = up
+    ? 'color-mix(in srgb, var(--success) 30%, transparent)'
+    : unknown ? 'var(--border)' : 'color-mix(in srgb, var(--warning) 35%, transparent)'
+  const bg = up
+    ? 'color-mix(in srgb, var(--success) 5%, var(--bg-elevated))'
+    : unknown ? 'var(--bg-elevated)' : 'color-mix(in srgb, var(--warning) 5%, var(--bg-elevated))'
   return (
     <div
       className="flex flex-col items-center gap-1 px-2 py-2 rounded flex-1"
-      style={{
-        border: `1px solid ${up ? 'color-mix(in srgb, var(--success) 30%, transparent)' : 'color-mix(in srgb, var(--warning) 35%, transparent)'}`,
-        background: up ? 'color-mix(in srgb, var(--success) 5%, var(--bg-elevated))' : 'color-mix(in srgb, var(--warning) 5%, var(--bg-elevated))',
-      }}
+      style={{ border: `1px solid ${borderC}`, background: bg }}
     >
       <Server size={14} style={{ color, opacity: up ? 1 : 0.65 }} />
       <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1.2 }}>{label}</span>
       <code style={{ fontSize: 8, color, fontFamily: 'monospace' }}>:{port}</code>
       <span style={{ fontSize: 8, color: 'var(--text-secondary)', textAlign: 'center', lineHeight: 1.3 }}>{role}</span>
-      <span style={{ fontSize: 8, color, fontWeight: 600 }}>{up ? '● running' : '○ offline'}</span>
+      <span style={{ fontSize: 8, color, fontWeight: 600 }}>{up ? '● running' : unknown ? '◐ unknown' : '○ offline'}</span>
     </div>
   )
 }
 
-function StatusLine({ label, up, badge }: { label: string; up: boolean; badge?: string }) {
+function StatusLine({ label, state, badge }: { label: string; state: OllamaStatus; badge?: string }) {
+  const color = ollamaStatusColor(state)
+  const Icon = state === 'up' ? CheckCircle2 : state === 'down' ? XCircle : HelpCircle
   return (
     <div className="flex items-center gap-1.5">
-      {up
-        ? <CheckCircle2 size={10} style={{ color: 'var(--success)', flexShrink: 0 }} />
-        : <XCircle size={10} style={{ color: 'var(--warning)', flexShrink: 0 }} />
-      }
+      <Icon size={10} style={{ color, flexShrink: 0 }} />
       <span style={{ fontSize: 10, color: 'var(--text-secondary)', flex: 1 }}>{label}</span>
       {badge && (
-        <span style={{ fontSize: 9, fontFamily: 'monospace', color: up ? 'var(--success)' : 'var(--warning)', fontWeight: 600 }}>
+        <span style={{ fontSize: 9, fontFamily: 'monospace', color, fontWeight: 600 }}>
           {badge}
         </span>
       )}
@@ -634,40 +645,69 @@ function SetupStep({ n, text, code }: { n: number; text: string; code?: string }
 }
 
 function OllamaIsolationPanel({ jobs }: { jobs: CronJob[] }) {
-  const [mainUp, setMainUp] = useState<boolean | null>(null)
-  const [cronUp, setCronUp] = useState<boolean | null>(null)
+  const connection = useConnectionStore(s => s.connection)
+  const savedConnections = useConnectionStore(s => s.savedConnections)
+  const setOllamaUrls = useConnectionStore(s => s.setOllamaUrls)
+  const providers = useModelsStore(s => s.providers)
+  const loadModels = useModelsStore(s => s.load)
+
+  const gatewayUrl = connection?.url
+  const remote = !isLocalGateway(gatewayHost(gatewayUrl))
+  // Read overrides from the live connection first, then the persisted saved entry.
+  const saved = savedConnections.find(c => c.url === gatewayUrl)
+  const mainOverride = connection?.ollamaUrls?.main ?? saved?.ollamaUrls?.main
+  const cronOverride = connection?.ollamaUrls?.cron ?? saved?.ollamaUrls?.cron
+
+  // Is the isolated CRON provider configured on the GATEWAY (independent of liveness)?
+  const cronConfigured = useMemo(
+    () => Object.entries(providers).some(([id, p]) =>
+      id === 'ollama-cron' || id.startsWith('ollama-cron') || (p.baseUrl ?? '').includes(':11435')
+    ),
+    [providers]
+  )
+
+  const [mainStatus, setMainStatus] = useState<OllamaStatus>('unknown')
+  const [cronStatus, setCronStatus] = useState<OllamaStatus>('unknown')
   const [open, setOpen] = useState(false)
+  const [showUrlForm, setShowUrlForm] = useState(false)
+
+  useEffect(() => { loadModels() }, [])
 
   useEffect(() => {
     let cancelled = false
     const check = async () => {
       const [main, cron] = await Promise.all([
-        fetch('http://localhost:11434/api/tags').then(() => true).catch(() => false),
-        fetch('http://localhost:11435/api/tags').then(() => true).catch(() => false),
+        checkOllama('main', gatewayUrl, mainOverride),
+        checkOllama('cron', gatewayUrl, cronOverride),
       ])
       if (cancelled) return
-      setMainUp(main)
-      setCronUp(cron)
-      // Auto-expand on first result if there is an issue
+      setMainStatus(main)
+      setCronStatus(cron)
+      // Auto-expand once if there's a confirmed problem (not merely "unknown")
       setOpen(prev => {
         if (prev) return prev
         const hasContention = jobs.some(j => (j.payload?.kind === 'agentTurn' ? j.payload.model ?? '' : '').startsWith('ollama/'))
-        return !cron || hasContention
+        return cron === 'down' || hasContention
       })
     }
     check()
     const id = setInterval(check, 6000)
     return () => { cancelled = true; clearInterval(id) }
-  }, [])
-
-  if (!mainUp) return null
+  }, [gatewayUrl, mainOverride, cronOverride])
 
   const getModel = (j: CronJob) => j.payload?.kind === 'agentTurn' ? (j.payload.model ?? '') : ''
   const ollamaJobs = jobs.filter(j => getModel(j).startsWith('ollama'))
   const contentingJobs = ollamaJobs.filter(j => getModel(j).startsWith('ollama/'))
   const isolatedJobs = ollamaJobs.filter(j => getModel(j).startsWith('ollama-cron/'))
-  const fullyIsolated = cronUp && contentingJobs.length === 0 && isolatedJobs.length > 0
-  const hasIssue = contentingJobs.length > 0 || !cronUp
+
+  // Hide the panel only when there's nothing Ollama-related to show.
+  if (mainStatus !== 'up' && !cronConfigured && ollamaJobs.length === 0) return null
+
+  const fullyIsolated = cronStatus === 'up' && contentingJobs.length === 0 && isolatedJobs.length > 0
+  const cronDown = cronStatus === 'down'                       // confirmed down (local/explicit probe failed)
+  const cronUnknown = cronStatus === 'unknown'                 // can't verify (remote, firewalled)
+  // "needs setup" only on a *confirmed* problem — never on an inconclusive remote probe.
+  const hasIssue = contentingJobs.length > 0 || cronDown
 
   const borderColor = hasIssue
     ? 'color-mix(in srgb, var(--warning) 50%, transparent)'
@@ -697,6 +737,14 @@ function OllamaIsolationPanel({ jobs }: { jobs: CronJob[] }) {
             background: 'color-mix(in srgb, var(--success) 12%, transparent)', flexShrink: 0,
           }}>
             ✓ active
+          </span>
+        )}
+        {!fullyIsolated && !hasIssue && cronUnknown && (
+          <span style={{
+            fontSize: 9, color: 'var(--text-secondary)', padding: '1px 5px', borderRadius: 3,
+            background: 'var(--bg-elevated)', flexShrink: 0,
+          }}>
+            {cronConfigured ? 'configured' : remote ? 'remote' : 'unknown'}
           </span>
         )}
         {hasIssue && (
@@ -802,13 +850,13 @@ function OllamaIsolationPanel({ jobs }: { jobs: CronJob[] }) {
 
             {/* Instance boxes */}
             <div className="flex items-stretch gap-1.5">
-              <OllamaServerBox port={11434} label="Main" role="Interactive" up={true} />
+              <OllamaServerBox port={11434} label="Main" role="Interactive" state={mainStatus} />
               <div className="flex flex-col items-center justify-center gap-1" style={{ flexShrink: 0 }}>
                 <div style={{ flex: 1, width: 1, borderLeft: '1px dashed var(--border)' }} />
                 <span style={{ fontSize: 9, color: 'var(--text-secondary)', fontWeight: 700, padding: '1px 2px' }}>≠</span>
                 <div style={{ flex: 1, width: 1, borderLeft: '1px dashed var(--border)' }} />
               </div>
-              <OllamaServerBox port={11435} label="CRON" role="Background" up={cronUp === true} />
+              <OllamaServerBox port={11435} label="CRON" role="Background" state={cronStatus} />
             </div>
 
             {/* Shared disk footer */}
@@ -825,24 +873,53 @@ function OllamaIsolationPanel({ jobs }: { jobs: CronJob[] }) {
             className="flex flex-col gap-1.5 px-2.5 py-2 rounded"
             style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)' }}
           >
-            <StatusLine label=":11434 Main Ollama" up={true} />
-            <StatusLine label=":11435 CRON Ollama" up={cronUp === true} />
+            <StatusLine label=":11434 Main Ollama" state={mainStatus} />
+            <StatusLine label=":11435 CRON Ollama" state={cronStatus} />
             {ollamaJobs.length > 0 && (
               <StatusLine
                 label="Jobs isolated"
-                up={contentingJobs.length === 0}
+                state={contentingJobs.length === 0 ? 'up' : 'down'}
                 badge={`${isolatedJobs.length}/${ollamaJobs.length}`}
               />
             )}
           </div>
 
+          {/* ── Remote gateway notice ── */}
+          {remote && cronUnknown && (
+            <div className="flex flex-col gap-1 px-2.5 py-2 rounded" style={{
+              background: 'var(--bg-elevated)', border: '1px solid var(--border)',
+            }}>
+              <p style={{ fontSize: 9, color: 'var(--text-secondary)', margin: 0, lineHeight: 1.5 }}>
+                The gateway is remote — Ollama runs on the server and isn't reachable from this client,
+                so liveness can't be verified here.
+                {cronConfigured
+                  ? ' The CRON provider is configured in the gateway config.'
+                  : ' No isolated CRON provider was found in the gateway config.'}
+              </p>
+              <button
+                onClick={() => setShowUrlForm(v => !v)}
+                style={{ alignSelf: 'flex-start', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent)', fontSize: 9, padding: 0 }}
+              >
+                {showUrlForm ? 'Hide' : 'Set a reachable Ollama URL'}
+              </button>
+              {showUrlForm && gatewayUrl && (
+                <div className="flex flex-col gap-1.5 pt-1">
+                  <OllamaUrlField label="Main :11434" placeholder={`http://${gatewayHost(gatewayUrl) ?? 'host'}:11434`}
+                    value={mainOverride ?? ''} onSave={v => setOllamaUrls(gatewayUrl, { main: v || undefined })} />
+                  <OllamaUrlField label="CRON :11435" placeholder={`http://${gatewayHost(gatewayUrl) ?? 'host'}:11435`}
+                    value={cronOverride ?? ''} onSave={v => setOllamaUrls(gatewayUrl, { cron: v || undefined })} />
+                </div>
+              )}
+            </div>
+          )}
+
           {/* ── Setup steps (only when needed) ── */}
-          {!fullyIsolated && (
+          {!fullyIsolated && (contentingJobs.length > 0 || (cronDown && !remote)) && (
             <div className="flex flex-col gap-2 pt-1" style={{ borderTop: '1px solid var(--border)' }}>
               <span style={{ fontSize: 9, fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: 0.8 }}>
                 Setup
               </span>
-              {!cronUp && (
+              {cronDown && !remote && (
                 <>
                   <SetupStep
                     n={1}
@@ -858,7 +935,7 @@ function OllamaIsolationPanel({ jobs }: { jobs: CronJob[] }) {
               )}
               {contentingJobs.length > 0 && (
                 <SetupStep
-                  n={cronUp ? 1 : 3}
+                  n={cronDown && !remote ? 3 : 1}
                   text={`${contentingJobs.length} job${contentingJobs.length > 1 ? 's use' : ' uses'} ollama/ — change prefix to ollama-cron/ to isolate`}
                 />
               )}
@@ -867,6 +944,31 @@ function OllamaIsolationPanel({ jobs }: { jobs: CronJob[] }) {
         </div>
       )}
     </div>
+  )
+}
+
+// Small inline URL field that commits on blur / Enter.
+function OllamaUrlField({ label, value, placeholder, onSave }: {
+  label: string; value: string; placeholder: string; onSave: (v: string) => void
+}) {
+  const [draft, setDraft] = useState(value)
+  useEffect(() => { setDraft(value) }, [value])
+  return (
+    <label className="flex items-center gap-2">
+      <span style={{ fontSize: 9, color: 'var(--text-secondary)', minWidth: 64, flexShrink: 0 }}>{label}</span>
+      <input
+        value={draft}
+        onChange={e => setDraft(e.target.value)}
+        onBlur={() => { if (draft.trim() !== value.trim()) onSave(draft.trim()) }}
+        onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+        placeholder={placeholder}
+        style={{
+          flex: 1, minWidth: 0, padding: '3px 7px', fontSize: 10, fontFamily: 'monospace',
+          borderRadius: 'var(--radius)', border: '1px solid var(--border)',
+          background: 'var(--bg-primary)', color: 'var(--text-primary)', outline: 'none',
+        }}
+      />
+    </label>
   )
 }
 
