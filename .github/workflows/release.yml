@@ -36,9 +36,51 @@ jobs:
             echo "should_release=true" >> "$GITHUB_OUTPUT"
           fi
 
+  # ── Create the release first, with notes from CHANGELOG.md ──────────────────
+  # A single job owns the release body so the build jobs (which only upload
+  # assets) can never race it to an empty-bodied release.
+  release:
+    needs: check
+    if: needs.check.outputs.should_release == 'true'
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract changelog notes for v${{ needs.check.outputs.version }}
+        id: changelog
+        run: |
+          VERSION="${{ needs.check.outputs.version }}"
+          # Pull the body of the matching "## [VERSION]" section (until the next "## [").
+          NOTES=$(awk -v v="$VERSION" '
+            $0 ~ "^## \\[" v "\\]" { found=1; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' CHANGELOG.md | sed '/^[[:space:]]*$/d')
+          if [ -z "$NOTES" ]; then
+            echo "::warning::No CHANGELOG.md entry for v${VERSION} — falling back to a generic note."
+            NOTES="Release v${VERSION}. See [CHANGELOG.md](CHANGELOG.md) for details."
+          fi
+          {
+            echo "notes<<RELEASE_NOTES_EOF"
+            echo "$NOTES"
+            echo "RELEASE_NOTES_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release (notes only)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.check.outputs.version }}
+          name: JoaxClaw v${{ needs.check.outputs.version }}
+          body: ${{ steps.changelog.outputs.notes }}
+          draft: false
+          prerelease: ${{ contains(needs.check.outputs.version, '-') }}
+          make_latest: ${{ !contains(needs.check.outputs.version, '-') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   # ── Linux x64 DEB ───────────────────────────────────────────────────────────
   build-linux:
-    needs: check
+    needs: [check, release]
     if: needs.check.outputs.should_release == 'true'
     runs-on: ubuntu-22.04
 
@@ -71,30 +113,18 @@ jobs:
           path: dist/*.deb
           retention-days: 90
 
-      - name: Extract changelog
-        id: changelog
-        run: |
-          VERSION="${{ needs.check.outputs.version }}"
-          NOTES=$(awk "/^## \[${VERSION}\]/{found=1; next} found && /^## \[/{exit} found{print}" CHANGELOG.md)
-          NOTES=$(echo "$NOTES" | sed '/^[[:space:]]*$/d')
-          printf 'notes<<EOF\n%s\nEOF\n' "$NOTES" >> "$GITHUB_OUTPUT"
-
-      - name: Create GitHub Release (with DEB)
+      - name: Add DEB to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ needs.check.outputs.version }}
-          name: JoaxClaw v${{ needs.check.outputs.version }}
-          body: ${{ steps.changelog.outputs.notes }}
           files: dist/*.deb
           fail_on_unmatched_files: true
-          draft: false
-          prerelease: ${{ contains(needs.check.outputs.version, '-') }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # ── macOS universal DMG (unsigned) ──────────────────────────────────────────
   build-mac:
-    needs: check
+    needs: [check, release]
     if: needs.check.outputs.should_release == 'true'
     runs-on: macos-latest
 

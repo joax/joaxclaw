@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { gatewayClient } from '../lib/gateway'
-import { parseChannels, type ChannelConfig, type ChannelBinding, type ChannelAccountStatus } from '../lib/channels'
+import { parseChannels, bindingKey, type ChannelConfig, type ChannelBinding, type ChannelAccountStatus } from '../lib/channels'
 
 // ── config.get / config.patch helpers ────────────────────────────────────────
 // Channels + bindings live in the gateway config. We read the *parsed* (raw
@@ -58,20 +58,20 @@ interface ChannelsState {
   updateSettings: (channelId: string, patch: Record<string, unknown>) => Promise<void>
   deleteChannel: (channelId: string) => Promise<void>
 
-  // Agent assignment via the bindings array
-  bindAgent: (channelId: string, agentId: string, accountId?: string) => Promise<void>
-  unbindAgent: (channelId: string, agentId: string, accountId?: string) => Promise<void>
+  // Agent assignment via the bindings array (scoped: channel / account / peer / team / guild)
+  addBinding: (agentId: string, match: ChannelBinding['match']) => Promise<void>
+  removeBinding: (binding: ChannelBinding) => Promise<void>
+
+  // Multi-account management (channels.<id>.accounts.<accountId> + defaultAccount)
+  addAccount: (channelId: string, accountId: string, name?: string) => Promise<void>
+  removeAccount: (channelId: string, accountId: string) => Promise<void>
+  setDefaultAccount: (channelId: string, accountId: string) => Promise<void>
 
   // Runtime control
   startChannel: (channelId: string, accountId?: string) => Promise<{ ok: boolean; message?: string }>
   stopChannel: (channelId: string, accountId?: string) => Promise<{ ok: boolean; message?: string }>
   logoutChannel: (channelId: string, accountId?: string) => Promise<{ ok: boolean; message?: string }>
 }
-
-const sameBinding = (b: ChannelBinding, channelId: string, agentId: string, accountId?: string) =>
-  b.agentId === agentId &&
-  b.match?.channel === channelId &&
-  (accountId ? b.match?.accountId === accountId : !b.match?.accountId)
 
 export const useChannelsStore = create<ChannelsState>((set, get) => ({
   channels: [],
@@ -132,22 +132,51 @@ export const useChannelsStore = create<ChannelsState>((set, get) => ({
     await get().fetch()
   },
 
-  async bindAgent(channelId, agentId, accountId) {
+  async addBinding(agentId, match) {
     const current = get().bindings
-    if (current.some(b => sameBinding(b, channelId, agentId, accountId))) return
-    const match: ChannelBinding['match'] = { channel: channelId, ...(accountId ? { accountId } : {}) }
-    const next = [...current, { agentId, match }]
+    const next: ChannelBinding = { agentId, match }
+    if (current.some(b => bindingKey(b) === bindingKey(next))) return
     const snap = await getConfig()
     // replacePaths so the gateway treats `bindings` as a wholesale replacement
-    // (consistent with unbind/delete, which shrink it).
+    // (consistent with removeBinding/delete, which shrink it).
+    await patchConfig({ bindings: [...current, next] }, snap.hash, ['bindings'])
+    await get().fetch()
+  },
+
+  async removeBinding(binding) {
+    const key = bindingKey(binding)
+    const next = get().bindings.filter(b => bindingKey(b) !== key)
+    const snap = await getConfig()
     await patchConfig({ bindings: next }, snap.hash, ['bindings'])
     await get().fetch()
   },
 
-  async unbindAgent(channelId, agentId, accountId) {
-    const next = get().bindings.filter(b => !sameBinding(b, channelId, agentId, accountId))
+  async addAccount(channelId, accountId, name) {
+    const id = accountId.trim()
+    if (!id) return
     const snap = await getConfig()
-    await patchConfig({ bindings: next }, snap.hash, ['bindings'])
+    await patchConfig({ channels: { [channelId]: { accounts: { [id]: name?.trim() ? { name: name.trim() } : {} } } } }, snap.hash)
+    await get().fetch()
+  },
+
+  async removeAccount(channelId, accountId) {
+    const snap = await getConfig()
+    // Drop the account block; also clear defaultAccount if it pointed here, and
+    // remove any bindings scoped to this account.
+    const ch = get().channels.find(c => c.id === channelId)
+    const wasDefault = (ch?.raw as { defaultAccount?: string } | undefined)?.defaultAccount === accountId
+    const remainingBindings = get().bindings.filter(b => !(b.match.channel === channelId && b.match.accountId === accountId))
+    const patch: Record<string, unknown> = {
+      channels: { [channelId]: { accounts: { [accountId]: null }, ...(wasDefault ? { defaultAccount: null } : {}) } },
+      bindings: remainingBindings,
+    }
+    await patchConfig(patch, snap.hash, ['bindings'])
+    await get().fetch()
+  },
+
+  async setDefaultAccount(channelId, accountId) {
+    const snap = await getConfig()
+    await patchConfig({ channels: { [channelId]: { defaultAccount: accountId } } }, snap.hash)
     await get().fetch()
   },
 
