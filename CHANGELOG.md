@@ -7,6 +7,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Scoped channel routing** — agent bindings can now target more than the whole channel: a specific **account**, a **group/peer** (by id), a **Slack team**, or a **Discord guild**. A binding editor on each channel card builds the `match` and lists existing bindings with their scope; the gateway resolves the most specific match first (peer → guild → team → account → channel → default).
+- **Multi-account channels** — add/name/remove additional accounts per channel (`channels.<id>.accounts.<id>`) and set the default account, directly from the channel card. Per-account credentials are editable via **Edit → Advanced**.
+
+### Changed
+
+- Release workflow now creates the GitHub Release (with `CHANGELOG.md` notes) in a dedicated job that runs before the platform builds, so the notes can't be raced to an empty body by whichever build finishes first; the Linux/macOS jobs only upload their installer asset.
+
 ## [0.5.0] - 2026-06-17
 
 ### Added

@@ -33,12 +33,79 @@ export interface ChannelConfig {
   // is preserved verbatim so round-tripping never drops unknown keys.
   raw: Record<string, unknown>
   accounts: { id: string; name?: string }[]
+  defaultAccount?: string
   boundAgentIds: string[]
 }
 
+export interface BindingPeer { kind: string; id: string }
+
 export interface ChannelBinding {
   agentId: string
-  match: { channel: string; accountId?: string; [k: string]: unknown }
+  match: {
+    channel: string
+    accountId?: string
+    peer?: BindingPeer
+    teamId?: string
+    guildId?: string
+    roles?: string[]
+    [k: string]: unknown
+  }
+}
+
+// ── Binding scopes (routing) ──────────────────────────────────────────────────
+// How specific a binding is. The gateway resolves the most specific match first
+// (peer > guild+roles > guild > team > account > channel > default).
+
+export type BindingScopeKind = 'channel' | 'account' | 'peer' | 'team' | 'guild'
+
+export interface BindingScopeDef {
+  kind: BindingScopeKind
+  label: string
+  // Placeholder/help for the id input ('channel' needs no id).
+  idLabel?: string
+  idPlaceholder?: string
+  // Channel ids this scope is offered for (undefined = all channels).
+  onlyChannels?: string[]
+}
+
+export const BINDING_SCOPES: BindingScopeDef[] = [
+  { kind: 'channel', label: 'All messages on this channel' },
+  { kind: 'account', label: 'A specific account', idLabel: 'Account ID', idPlaceholder: 'work' },
+  { kind: 'peer', label: 'A specific group / chat', idLabel: 'Peer (group) ID', idPlaceholder: '-1001234567890' },
+  { kind: 'team', label: 'A Slack team', idLabel: 'Team ID', idPlaceholder: 'T0123ABCD', onlyChannels: ['slack'] },
+  { kind: 'guild', label: 'A Discord server (guild)', idLabel: 'Guild ID', idPlaceholder: '123456789012345678', onlyChannels: ['discord'] },
+]
+
+export function scopesForChannel(channelId: string): BindingScopeDef[] {
+  return BINDING_SCOPES.filter(s => !s.onlyChannels || s.onlyChannels.includes(channelId))
+}
+
+// Build a binding `match` for a scope + id.
+export function buildMatch(channelId: string, kind: BindingScopeKind, id: string): ChannelBinding['match'] {
+  const v = id.trim()
+  switch (kind) {
+    case 'account': return { channel: channelId, accountId: v }
+    case 'peer':    return { channel: channelId, peer: { kind: 'group', id: v } }
+    case 'team':    return { channel: channelId, teamId: v }
+    case 'guild':   return { channel: channelId, guildId: v }
+    case 'channel':
+    default:        return { channel: channelId }
+  }
+}
+
+// A short human description of a binding's scope, e.g. "group -100123" / "all".
+export function bindingScopeLabel(match: ChannelBinding['match']): string {
+  if (match.peer) return `${match.peer.kind} ${match.peer.id}`
+  if (match.teamId) return `team ${match.teamId}`
+  if (match.guildId) return `guild ${match.guildId}`
+  if (match.accountId) return `account ${match.accountId}`
+  return 'all messages'
+}
+
+// Stable key for de-duping / removing a binding (agent + its match shape).
+export function bindingKey(b: ChannelBinding): string {
+  const m = b.match
+  return JSON.stringify([b.agentId, m.channel, m.accountId ?? null, m.peer ?? null, m.teamId ?? null, m.guildId ?? null, m.roles ?? null])
 }
 
 // Live runtime status for one channel/account, from the channels.status RPC.
@@ -189,7 +256,7 @@ export function fieldLiteral(raw: Record<string, unknown>, key: string): string 
 // ── config ↔ store helpers ────────────────────────────────────────────────────
 
 interface RawChannelsCfg {
-  channels?: Record<string, { enabled?: boolean; accounts?: Record<string, ChannelAccountCfg> } & Record<string, unknown>>
+  channels?: Record<string, { enabled?: boolean; defaultAccount?: string; accounts?: Record<string, ChannelAccountCfg> } & Record<string, unknown>>
   bindings?: ChannelBinding[]
 }
 
@@ -208,6 +275,7 @@ export function parseChannels(cfg: RawChannelsCfg): { channels: ChannelConfig[];
       enabled: block.enabled !== false,
       raw: block as Record<string, unknown>,
       accounts,
+      defaultAccount: typeof block.defaultAccount === 'string' ? block.defaultAccount : undefined,
       boundAgentIds,
     })
   }

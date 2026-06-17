@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Plus, RefreshCw, X, Play, Square, LogOut, Trash2, Pencil, QrCode,
-  CheckCircle2, AlertCircle, Bot, Search, ExternalLink, Loader2,
+  CheckCircle2, AlertCircle, Bot, Search, ExternalLink, Loader2, Star, Users,
 } from 'lucide-react'
 import { Btn } from '../ui/Btn'
 import { Input, Textarea } from '../ui/Input'
@@ -10,7 +10,8 @@ import { useAgentsStore } from '../../store/agents'
 import { gatewayClient } from '../../lib/gateway'
 import {
   CHANNELS, channelDef, isQrChannel, isSecretRef, fieldLiteral,
-  type ChannelConfig, type ChannelDef,
+  scopesForChannel, buildMatch, bindingScopeLabel, bindingKey,
+  type ChannelConfig, type ChannelDef, type BindingScopeKind,
 } from '../../lib/channels'
 
 const DOCS_BASE = 'https://docs.openclaw.com/channels'
@@ -106,9 +107,12 @@ function ChannelCard({ channel, statuses, agents, onEdit, onLink }: {
   onLink: (account?: string) => void
 }) {
   const def = channelDef(channel.id)
-  const { setEnabled, deleteChannel, startChannel, stopChannel, logoutChannel, busy, bindAgent, unbindAgent } = useChannelsStore()
+  const { setEnabled, deleteChannel, startChannel, stopChannel, logoutChannel, busy, removeBinding, removeAccount, setDefaultAccount } = useChannelsStore()
+  const bindings = useChannelsStore(s => s.bindings)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [actionMsg, setActionMsg] = useState('')
+  const [showBinding, setShowBinding] = useState(false)
+  const [showAddAccount, setShowAddAccount] = useState(false)
 
   const running = statuses.some(s => s.running)
   const configured = statuses.length > 0 ? statuses.some(s => s.configured) : true
@@ -121,7 +125,7 @@ function ChannelCard({ channel, statuses, agents, onEdit, onLink }: {
   }
 
   const agentName = (id: string) => agents.find(a => a.id === id)?.name || id
-  const unbound = agents.filter(a => !channel.boundAgentIds.includes(a.id))
+  const channelBindings = bindings.filter(b => b.match?.channel === channel.id)
 
   return (
     <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', overflow: 'hidden', opacity: channel.enabled ? 1 : 0.65 }}>
@@ -143,31 +147,50 @@ function ChannelCard({ channel, statuses, agents, onEdit, onLink }: {
         <Toggle on={channel.enabled} onClick={() => setEnabled(channel.id, !channel.enabled)} />
       </div>
 
-      {/* Agent assignment */}
+      {/* Accounts */}
       <div className="px-3.5 py-2.5 flex items-center gap-2 flex-wrap" style={{ borderTop: '1px solid var(--border)', background: 'var(--bg-elevated)' }}>
-        <span className="text-xs flex items-center gap-1.5" style={{ color: 'var(--text-secondary)' }}><Bot size={13} /> Agents:</span>
-        {channel.boundAgentIds.length === 0 && (
+        <span className="text-xs flex items-center gap-1.5 shrink-0" style={{ color: 'var(--text-secondary)' }}><Users size={13} /> Accounts:</span>
+        {channel.accounts.length === 0 && (
+          <span className="text-xs italic" style={{ color: 'var(--text-secondary)', opacity: 0.7 }}>default</span>
+        )}
+        {channel.accounts.map(acc => {
+          const isDefault = channel.defaultAccount === acc.id
+          return (
+            <span key={acc.id} className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs" style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', color: 'var(--text-primary)' }}>
+              <button title={isDefault ? 'Default account' : 'Make default'} onClick={() => !isDefault && setDefaultAccount(channel.id, acc.id)} style={{ background: 'none', border: 'none', cursor: isDefault ? 'default' : 'pointer', color: isDefault ? 'var(--warning)' : 'var(--text-secondary)', padding: 0, display: 'flex' }}>
+                <Star size={11} fill={isDefault ? 'var(--warning)' : 'none'} />
+              </button>
+              {acc.name ? <span>{acc.name}</span> : null}
+              <span style={{ fontFamily: 'monospace', opacity: acc.name ? 0.6 : 1 }}>{acc.id}</span>
+              <button title="Remove account" onClick={() => removeAccount(channel.id, acc.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)', padding: 0, display: 'flex' }}>
+                <X size={11} />
+              </button>
+            </span>
+          )
+        })}
+        <button onClick={() => setShowAddAccount(true)} className="text-xs inline-flex items-center gap-0.5" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent)', padding: '2px 4px' }}>
+          <Plus size={11} /> add
+        </button>
+      </div>
+
+      {/* Routing (scoped agent bindings) */}
+      <div className="px-3.5 py-2.5 flex items-center gap-2 flex-wrap" style={{ borderTop: '1px solid var(--border)' }}>
+        <span className="text-xs flex items-center gap-1.5 shrink-0" style={{ color: 'var(--text-secondary)' }}><Bot size={13} /> Routing:</span>
+        {channelBindings.length === 0 && (
           <span className="text-xs italic" style={{ color: 'var(--text-secondary)', opacity: 0.7 }}>default agent (no binding)</span>
         )}
-        {channel.boundAgentIds.map(id => (
-          <span key={id} className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs" style={{ background: 'color-mix(in srgb, var(--accent) 15%, var(--bg-surface))', color: 'var(--accent)' }}>
-            {agentName(id)}
-            <button onClick={() => unbindAgent(channel.id, id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'inherit', padding: 0, display: 'flex' }}>
+        {channelBindings.map(b => (
+          <span key={bindingKey(b)} className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs" style={{ background: 'color-mix(in srgb, var(--accent) 15%, var(--bg-surface))', color: 'var(--accent)' }}>
+            <span style={{ fontWeight: 500 }}>{agentName(b.agentId)}</span>
+            <span style={{ opacity: 0.7 }}>· {bindingScopeLabel(b.match)}</span>
+            <button title="Remove binding" onClick={() => removeBinding(b)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'inherit', padding: 0, display: 'flex' }}>
               <X size={11} />
             </button>
           </span>
         ))}
-        {unbound.length > 0 && (
-          <select
-            value=""
-            onChange={e => { if (e.target.value) bindAgent(channel.id, e.target.value) }}
-            className="text-xs"
-            style={{ background: 'var(--bg-surface)', color: 'var(--text-secondary)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '2px 6px', cursor: 'pointer', outline: 'none' }}
-          >
-            <option value="">+ assign agent…</option>
-            {unbound.map(a => <option key={a.id} value={a.id}>{a.name || a.id}</option>)}
-          </select>
-        )}
+        <button onClick={() => setShowBinding(true)} className="text-xs inline-flex items-center gap-0.5" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent)', padding: '2px 4px' }}>
+          <Plus size={11} /> add binding
+        </button>
       </div>
 
       {/* Actions */}
@@ -197,8 +220,149 @@ function ChannelCard({ channel, statuses, agents, onEdit, onLink }: {
           <Btn variant="ghost" size="sm" icon={<Trash2 size={12} />} onClick={() => setConfirmDelete(true)}>Remove</Btn>
         )}
       </div>
+
+      {showBinding && (
+        <BindingEditor channel={channel} agents={agents} onClose={() => setShowBinding(false)} />
+      )}
+      {showAddAccount && (
+        <AddAccountModal channelId={channel.id} onClose={() => setShowAddAccount(false)} />
+      )}
     </div>
   )
+}
+
+// ── Scoped binding editor ─────────────────────────────────────────────────────
+
+function BindingEditor({ channel, agents, onClose }: {
+  channel: ChannelConfig
+  agents: { id: string; name?: string }[]
+  onClose: () => void
+}) {
+  const def = channelDef(channel.id)
+  const addBinding = useChannelsStore(s => s.addBinding)
+  const existing = useChannelsStore(s => s.bindings)
+  const scopes = scopesForChannel(channel.id)
+
+  const [agentId, setAgentId] = useState(agents[0]?.id ?? '')
+  const [kind, setKind] = useState<BindingScopeKind>('channel')
+  const [scopeId, setScopeId] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [err, setErr] = useState('')
+
+  const scope = scopes.find(s => s.kind === kind) ?? scopes[0]
+  const needsId = kind !== 'channel'
+  // Account scope is easiest to pick from configured accounts.
+  const accountOptions = channel.accounts.map(a => a.id)
+
+  const submit = async () => {
+    setErr('')
+    if (!agentId) { setErr('Pick an agent.'); return }
+    if (needsId && !scopeId.trim()) { setErr(`${scope.idLabel} is required.`); return }
+    const match = buildMatch(channel.id, kind, scopeId)
+    if (existing.some(b => bindingKey(b) === bindingKey({ agentId, match }))) {
+      setErr('That binding already exists.'); return
+    }
+    setSaving(true)
+    try { await addBinding(agentId, match); onClose() }
+    catch (e) { setErr(String(e)); setSaving(false) }
+  }
+
+  return (
+    <Overlay onClose={onClose} title={`Route ${def.label} → agent`} width={460} headerColor={def.color}>
+      <div className="px-5 py-4 space-y-3">
+        <p className="text-xs" style={{ color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+          Send matching messages to a specific agent. The gateway picks the most specific
+          binding first (peer → guild → team → account → channel), falling back to the default agent.
+        </p>
+
+        <div>
+          <label className="block text-xs mb-1" style={{ color: 'var(--text-secondary)' }}>Agent</label>
+          <select value={agentId} onChange={e => setAgentId(e.target.value)} style={selectStyle}>
+            {agents.length === 0 && <option value="">No agents</option>}
+            {agents.map(a => <option key={a.id} value={a.id}>{a.name || a.id}</option>)}
+          </select>
+        </div>
+
+        <div>
+          <label className="block text-xs mb-1" style={{ color: 'var(--text-secondary)' }}>Applies to</label>
+          <select value={kind} onChange={e => { setKind(e.target.value as BindingScopeKind); setScopeId('') }} style={selectStyle}>
+            {scopes.map(s => <option key={s.kind} value={s.kind}>{s.label}</option>)}
+          </select>
+        </div>
+
+        {needsId && (
+          <div>
+            <label className="block text-xs mb-1" style={{ color: 'var(--text-secondary)' }}>{scope.idLabel}</label>
+            {kind === 'account' && accountOptions.length > 0 ? (
+              <select value={scopeId} onChange={e => setScopeId(e.target.value)} style={selectStyle}>
+                <option value="">Select account…</option>
+                {accountOptions.map(id => <option key={id} value={id}>{id}</option>)}
+              </select>
+            ) : (
+              <Input value={scopeId} onChange={setScopeId} placeholder={scope.idPlaceholder} style={{ fontSize: 12, fontFamily: 'monospace' }} />
+            )}
+          </div>
+        )}
+
+        {err && <p className="text-xs" style={{ color: 'var(--danger)' }}>{err}</p>}
+      </div>
+      <div className="flex items-center justify-end gap-2 px-5 py-3.5 shrink-0" style={{ borderTop: '1px solid var(--border)' }}>
+        <Btn variant="outline" size="sm" onClick={onClose}>Cancel</Btn>
+        <Btn size="sm" loading={saving} onClick={submit}>Add binding</Btn>
+      </div>
+    </Overlay>
+  )
+}
+
+// ── Add account ───────────────────────────────────────────────────────────────
+
+function AddAccountModal({ channelId, onClose }: { channelId: string; onClose: () => void }) {
+  const def = channelDef(channelId)
+  const addAccount = useChannelsStore(s => s.addAccount)
+  const [id, setId] = useState('')
+  const [name, setName] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [err, setErr] = useState('')
+
+  const submit = async () => {
+    setErr('')
+    const accId = id.trim()
+    if (!accId) { setErr('Account ID is required.'); return }
+    if (!/^[a-zA-Z0-9_-]+$/.test(accId)) { setErr('Use letters, numbers, dashes or underscores.'); return }
+    setSaving(true)
+    try { await addAccount(channelId, accId, name); onClose() }
+    catch (e) { setErr(String(e)); setSaving(false) }
+  }
+
+  return (
+    <Overlay onClose={onClose} title={`Add ${def.label} account`} width={440} headerColor={def.color}>
+      <div className="px-5 py-4 space-y-3">
+        <p className="text-xs" style={{ color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+          Adds a second account/workspace under <code>channels.{channelId}.accounts</code>. Configure
+          its credentials in <b>Edit → Advanced</b>, then route messages to it from the binding editor.
+        </p>
+        <div>
+          <label className="block text-xs mb-1" style={{ color: 'var(--text-secondary)' }}>Account ID</label>
+          <Input value={id} onChange={setId} placeholder="work" autoFocus style={{ fontSize: 12, fontFamily: 'monospace' }} />
+        </div>
+        <div>
+          <label className="block text-xs mb-1" style={{ color: 'var(--text-secondary)' }}>Display name <span style={{ opacity: 0.6 }}>(optional)</span></label>
+          <Input value={name} onChange={setName} placeholder="Work workspace" style={{ fontSize: 12 }} />
+        </div>
+        {err && <p className="text-xs" style={{ color: 'var(--danger)' }}>{err}</p>}
+      </div>
+      <div className="flex items-center justify-end gap-2 px-5 py-3.5 shrink-0" style={{ borderTop: '1px solid var(--border)' }}>
+        <Btn variant="outline" size="sm" onClick={onClose}>Cancel</Btn>
+        <Btn size="sm" loading={saving} onClick={submit}>Add account</Btn>
+      </div>
+    </Overlay>
+  )
+}
+
+const selectStyle: React.CSSProperties = {
+  width: '100%', boxSizing: 'border-box', padding: '7px 10px', fontSize: 13,
+  borderRadius: 'var(--radius)', border: '1px solid var(--border)',
+  background: 'var(--bg-elevated)', color: 'var(--text-primary)', outline: 'none', cursor: 'pointer',
 }
 
 function StatusBadge({ running, configured, enabled }: { running: boolean; configured: boolean; enabled: boolean }) {
