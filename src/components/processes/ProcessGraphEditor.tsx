@@ -1,7 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { Plus, Trash2, X, Save, ZoomIn, ZoomOut, Maximize2, LayoutGrid, Bot, Database, FolderOpen, Brain, Radio, ChevronDown, AlertCircle, Shuffle, UserCheck } from 'lucide-react'
 import type { ProcessDef, GraphNode, GraphEdge, Deliverable, ProcessGraph, PortSide } from '../../lib/processParser'
-import { serializeProcess } from '../../lib/processParser'
 import { useAgentsStore } from '../../store/agents'
 import { useObsidianStore } from '../../store/obsidian'
 import { ModelIcon } from '../ui/ModelIcon'
@@ -596,7 +595,7 @@ function CollaborationPanel({ node, nodes, edges, agents, vaults, onChange, onCl
 
 // ── Edge label ────────────────────────────────────────────────────────────────
 
-function EdgeLabel({ edge, nodes, onDelete }: { edge: GraphEdge; nodes: GraphNode[]; onDelete: () => void }) {
+function EdgeLabel({ edge, nodes }: { edge: GraphEdge; nodes: GraphNode[] }) {
   const from = nodes.find(n => n.id === edge.from)
   const to   = nodes.find(n => n.id === edge.to)
   if (!from || !to) return null
@@ -664,15 +663,19 @@ export function ProcessGraphEditor({ def, onSave, onClose }: Props) {
   const zoomRef         = useRef(zoom)
   useEffect(() => { panRef.current  = pan  }, [pan])
   useEffect(() => { zoomRef.current = zoom }, [zoom])
-  useEffect(() => { fetchAgents(); loadVaults() }, [])
-
-  // Auto-layout + fit whenever a different process is opened
   useEffect(() => {
-    const laid = computeLayout(initGraph())
-    setGraph(laid)
+    void fetchAgents()
+    void loadVaults()
+  }, [fetchAgents, loadVaults])
+
+  // Restore the saved graph as-is, then fit it into view.
+  // Manual layout should persist across tab switches and reopenings.
+  useEffect(() => {
+    const current = initGraph()
+    setGraph(current)
     const frame = requestAnimationFrame(() => {
       if (!canvasRef.current) return
-      const { pan: p, zoom: z } = fitToView(laid.nodes, canvasRef.current)
+      const { pan: p, zoom: z } = fitToView(current.nodes, canvasRef.current)
       setPan(p); setZoom(z)
     })
     return () => cancelAnimationFrame(frame)
@@ -949,7 +952,7 @@ export function ProcessGraphEditor({ def, onSave, onClose }: Props) {
                   <path d={smartBezier(p1.x, p1.y, fp, p2.x, p2.y, tp)} fill="none" stroke="transparent" strokeWidth={12} style={{ pointerEvents: 'stroke', cursor: 'pointer' }} onClick={() => setSelectedEdgeId(isSelected ? null : edge.id)} />
                   <path d={smartBezier(p1.x, p1.y, fp, p2.x, p2.y, tp)} fill="none" stroke={edgeColor} strokeWidth={isSelected ? 2 : 1.5} />
                   <polygon points={arrowPoints(p2.x, p2.y, tp)} fill={edgeColor} />
-                  <EdgeLabel edge={edge} nodes={graph.nodes} onDelete={() => deleteEdge(edge.id)} />
+                  <EdgeLabel edge={edge} nodes={graph.nodes} />
                   {isSelected && (
                     <circle cx={p2.x} cy={p2.y} r={7} fill="var(--accent)" stroke="var(--bg-surface)" strokeWidth={2} style={{ pointerEvents: 'all', cursor: 'crosshair' }} onMouseDown={e => handleEdgeArrowMouseDown(e, edge)} />
                   )}
