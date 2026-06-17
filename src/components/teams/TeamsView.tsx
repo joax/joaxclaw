@@ -5,8 +5,8 @@ import {
   Clock, ArrowRight, FileText, AlertTriangle, GitBranch,
   Wrench, BarChart2, BookOpen, History,
 } from 'lucide-react'
-import { useTeamsStore, teamsDir } from '../../store/teams'
-import { useProcessesStore } from '../../store/processes'
+import { useTeamsStore } from '../../store/teams'
+import { useProcessesStore, runsDir, type ProcessRun } from '../../store/processes'
 import { useAgentsStore } from '../../store/agents'
 import { Btn } from '../ui/Btn'
 import { ProcessMonitor } from '../processes/ProcessMonitor'
@@ -435,14 +435,12 @@ function RoutesSection({ members, routes, onChange }: {
 function TeamBuilder({
   initialBlueprint,
   teamId,
-  teamsDirectory,
   graphCustomized,
   onSaved,
   onCancel,
 }: {
   initialBlueprint?: TeamBlueprint
   teamId?: string
-  teamsDirectory: string
   graphCustomized?: boolean
   onSaved: (bp: TeamBlueprint) => void
   onCancel?: () => void
@@ -457,7 +455,7 @@ function TeamBuilder({
   // Sync if the blueprint changes externally (e.g. after save)
   useEffect(() => {
     if (initialBlueprint) setDraft(draftFromBlueprint(initialBlueprint))
-  }, [initialBlueprint?.version, initialBlueprint?.updatedAt])
+  }, [initialBlueprint])
 
   const inp: React.CSSProperties = {
     padding: '6px 10px', fontSize: 13, borderRadius: 'var(--radius)',
@@ -773,6 +771,7 @@ function TeamDetail({
   )
   const [isStarting, setIsStarting] = useState(false)
   const [graphSaveError, setGraphSaveError] = useState<string | null>(null)
+  const [diskRun, setDiskRun] = useState<ProcessRun | null>(null)
   const importRef = useRef<HTMLInputElement>(null)
   const { importBundle } = useTeamsStore()
 
@@ -781,8 +780,31 @@ function TeamDetail({
   }, [run?.status])
 
   useEffect(() => {
-    if (tab === 'history') loadRevisions(blueprint.id)
-  }, [tab, blueprint.id])
+    setDiskRun(null)
+  }, [blueprint.id])
+
+  useEffect(() => {
+    if (tab !== 'history') return
+    void loadRevisions(blueprint.id)
+  }, [tab, blueprint.id, loadRevisions])
+
+  useEffect(() => {
+    if (tab !== 'history' || run) return
+    let cancelled = false
+
+    // Load persisted run from disk in case it's not in memory (e.g. after app restart)
+    const fileApi = (window as any)?.api?.file as { read: (p: string) => Promise<{ ok: boolean; text?: string }> } | null
+    void fileApi?.read(`${runsDir()}/${blueprint.id}.json`).then(res => {
+      if (cancelled || !res.ok || !res.text) return
+      try {
+        setDiskRun(JSON.parse(res.text) as ProcessRun)
+      } catch {
+        // Ignore malformed persisted run files.
+      }
+    })
+
+    return () => { cancelled = true }
+  }, [tab, blueprint.id, run])
 
   const controllerAgent = agents.find(a => a.id === blueprint.controllerAgentId)
   const isRunning = run?.status === 'running'
@@ -1029,7 +1051,6 @@ function TeamDetail({
               key={blueprint.id + '-' + blueprint.version}
               initialBlueprint={blueprint}
               teamId={blueprint.id}
-              teamsDirectory={teamsDir()}
               graphCustomized={blueprint.graphCustomized}
               onSaved={onUpdated}
             />
@@ -1088,26 +1109,82 @@ function TeamDetail({
         )}
 
         {tab === 'history' && (
-          <div style={{ padding: '16px 20px', overflowY: 'auto', height: '100%' }}>
-            <p style={{ fontSize: 11, color: 'var(--text-secondary)', margin: '0 0 12px' }}>
-              Last {MAX_REVISIONS} saved revisions. Newest first.
-            </p>
-            {teamRevisions.length === 0 ? (
-              <div style={{ textAlign: 'center', color: 'var(--text-secondary)', fontSize: 12, padding: '32px 0', opacity: 0.6 }}>
-                No revisions recorded yet — history is captured on every save.
-              </div>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                {[...teamRevisions].reverse().map((r, i, arr) => (
-                  <RevisionRow
-                    key={i}
-                    revision={r}
-                    isCurrent={r.blueprint.version === blueprint.version}
-                    prevRevision={arr[i + 1] ?? null}
-                  />
-                ))}
-              </div>
-            )}
+          <div style={{ padding: '16px 20px', overflowY: 'auto', height: '100%', display: 'flex', flexDirection: 'column', gap: 20 }}>
+
+            {/* ── Last Run ──────────────────────────────────────────────────── */}
+            {(() => {
+              const lastRun = run ?? diskRun
+              if (!lastRun) return (
+                <div style={{ textAlign: 'center', color: 'var(--text-secondary)', fontSize: 12, padding: '20px 0', opacity: 0.5 }}>
+                  No runs recorded yet.
+                </div>
+              )
+              const elapsed = (lastRun.finishedAt ?? Date.now()) - lastRun.startedAt
+              const runColor = lastRun.status === 'done' ? 'var(--success)' : lastRun.status === 'error' ? 'var(--danger)' : 'var(--text-secondary)'
+              return (
+                <div>
+                  <p style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', margin: '0 0 8px' }}>
+                    Last Run
+                  </p>
+                  <div style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius)', overflow: 'hidden', background: 'var(--bg-elevated)' }}>
+                    {/* Run header */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderBottom: '1px solid var(--border)', background: `color-mix(in srgb, ${runColor} 6%, var(--bg-elevated))` }}>
+                      <StatusDot status={lastRun.status} />
+                      <span style={{ fontSize: 12, fontWeight: 600, color: runColor }}>
+                        {lastRun.status === 'done' ? 'Completed' : lastRun.status === 'error' ? 'Failed' : lastRun.status === 'idle' ? 'Stopped' : 'Running'}
+                      </span>
+                      <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>in {fmtDuration(elapsed)}</span>
+                      <span style={{ fontSize: 11, color: 'var(--text-secondary)', opacity: 0.6, marginLeft: 'auto' }}>{fmtDate(lastRun.startedAt)}</span>
+                    </div>
+                    {/* Steps + error */}
+                    <div style={{ padding: '8px 14px', display: 'flex', gap: 16, fontSize: 11, color: 'var(--text-secondary)', borderBottom: lastRun.log.length > 0 ? '1px solid var(--border)' : undefined }}>
+                      <span>{lastRun.stepsDone} step{lastRun.stepsDone !== 1 ? 's' : ''} completed</span>
+                      {lastRun.error && <span style={{ color: 'var(--danger)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{lastRun.error}</span>}
+                    </div>
+                    {/* Activity log */}
+                    {lastRun.log.length > 0 && (
+                      <div style={{ padding: '8px 14px', display: 'flex', flexDirection: 'column', gap: 3, maxHeight: 200, overflowY: 'auto' }}>
+                        {lastRun.log.map((entry, i) => (
+                          <div key={i} style={{ display: 'flex', gap: 8, fontSize: 11 }}>
+                            <span style={{ fontFamily: 'monospace', color: 'var(--text-secondary)', opacity: 0.5, flexShrink: 0, fontSize: 10 }}>
+                              {fmtDate(entry.ts).split(' ').pop()}
+                            </span>
+                            <span style={{ color: 'var(--text-secondary)' }}>{entry.text}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )
+            })()}
+
+            {/* ── Blueprint revisions ───────────────────────────────────────── */}
+            <div>
+              <p style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', margin: '0 0 8px' }}>
+                Blueprint Revisions
+              </p>
+              <p style={{ fontSize: 11, color: 'var(--text-secondary)', margin: '0 0 10px', opacity: 0.6 }}>
+                Last {MAX_REVISIONS} saved revisions. Newest first.
+              </p>
+              {teamRevisions.length === 0 ? (
+                <div style={{ textAlign: 'center', color: 'var(--text-secondary)', fontSize: 12, padding: '16px 0', opacity: 0.5 }}>
+                  No revisions recorded yet — history is captured on every save.
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {[...teamRevisions].reverse().map((r, i, arr) => (
+                    <RevisionRow
+                      key={i}
+                      revision={r}
+                      isCurrent={r.blueprint.version === blueprint.version}
+                      prevRevision={arr[i + 1] ?? null}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+
           </div>
         )}
       </div>
@@ -1136,7 +1213,6 @@ function NewTeamModal({ onCreated, onCancel }: { onCreated: (bp: TeamBlueprint) 
         </div>
         <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
           <TeamBuilder
-            teamsDirectory={teamsDir()}
             onSaved={onCreated}
             onCancel={onCancel}
           />

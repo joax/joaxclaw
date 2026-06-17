@@ -20,7 +20,7 @@ export function processesDir(): string {
   return `${homedir()}/.openclaw/processes`
 }
 
-function runsDir(): string {
+export function runsDir(): string {
   return `${processesDir()}/.runs`
 }
 
@@ -141,8 +141,6 @@ export const useProcessesStore = create<ProcessesState>((set, get) => ({
       if (frame.event !== 'chat' && frame.event !== 'agent') return
       const p = (frame.payload ?? {}) as Record<string, unknown>
       const sk = String(p.sessionKey ?? '')
-      // Temporary diagnostic: log every chat/agent event and whether it matches a tracked session
-      console.log('[processes] event:', frame.event, 'sk:', sk, 'tracked:', _runSessions.has(sk), 'runSessions keys:', [..._runSessions.keys()])
       const processId = _runSessions.get(sk)
       if (!processId) return
 
