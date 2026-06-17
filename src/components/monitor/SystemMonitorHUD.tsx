@@ -1,11 +1,14 @@
-import { Heart, X, Cpu, MemoryStick, Monitor } from 'lucide-react'
-import { useConnectionStore } from '../../store/connection'
+import { Heart, X, Cpu, MemoryStick, Monitor, Server } from 'lucide-react'
+import { useConnectionStore, useIsRemoteGateway } from '../../store/connection'
 import { useMetricsStore } from '../../store/metrics'
 import { useSettingsStore } from '../../store/settings'
 import { formatBytes } from '../../lib/ollama'
+import { gatewayHost } from '../../lib/ollamaHealth'
 
 export function SystemMonitorHUD() {
   const { status, heartbeats, lastHeartbeat, uptimeStart } = useConnectionStore()
+  const remoteGateway = useIsRemoteGateway()
+  const gwHost = useConnectionStore(s => gatewayHost(s.connection?.url))
   const { metrics, ollamaModels } = useMetricsStore()
   const { toggleMonitor } = useSettingsStore()
 
@@ -74,6 +77,20 @@ export function SystemMonitorHUD() {
           </div>
         </Section>
 
+        {/* Hardware + local models. These come from THIS machine, so when the
+            gateway is remote they don't describe the gateway host — hide them. */}
+        {remoteGateway ? (
+          <Section label="Hardware">
+            <div className="flex items-start gap-2 px-2.5 py-2 rounded" style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)' }}>
+              <Server size={13} style={{ color: 'var(--text-secondary)', flexShrink: 0, marginTop: 1 }} />
+              <p className="text-xs" style={{ color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                Gateway runs on <b style={{ color: 'var(--text-primary)', fontFamily: 'monospace' }}>{gwHost}</b>.
+                GPU/CPU/RAM and loaded models are read from this client machine, so they're hidden — they wouldn't reflect the gateway host.
+              </p>
+            </div>
+          </Section>
+        ) : (
+        <>
         {/* Loaded models */}
         <Section label="Models in VRAM">
           {ollamaModels.filter(m => m.loaded).length === 0 ? (
@@ -142,6 +159,8 @@ export function SystemMonitorHUD() {
             </div>
           )}
         </div>
+        </>
+        )}
       </div>
     </div>
   )

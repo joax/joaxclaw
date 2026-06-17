@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { ConnectionStatus, GatewayConnection } from '../lib/types'
 import { gatewayClient } from '../lib/gateway'
+import { gatewayHost, isLocalGateway } from '../lib/ollamaHealth'
 
 interface HeartbeatEntry { time: number; ok: boolean }
 
@@ -30,6 +31,14 @@ interface ConnectionState {
   saveConnection: (conn: GatewayConnection) => void
   removeConnection: (url: string) => void
   setOllamaUrls: (gatewayUrl: string, urls: { main?: string; cron?: string }) => void
+}
+
+// True when connected to a gateway on another host. Client-side system metrics
+// (GPU/CPU/RAM and the local Ollama at localhost:11434) then describe THIS
+// machine, not the gateway host where inference actually runs — so the UI hides
+// them rather than present a laptop's stats as if they were the gateway's.
+export function useIsRemoteGateway(): boolean {
+  return useConnectionStore(s => s.status === 'connected' && !isLocalGateway(gatewayHost(s.connection?.url)))
 }
 
 // Reconnect bookkeeping kept outside the store (timers / flags, not UI state).
