@@ -16,16 +16,18 @@ import { DashboardView } from './components/dashboard/DashboardView'
 import { ModelsView } from './components/models/ModelsView'
 import { SystemMonitorHUD } from './components/monitor/SystemMonitorHUD'
 import { ConnectScreen } from './components/layout/ConnectScreen'
+import { ReconnectOverlay } from './components/layout/ReconnectOverlay'
 import { useConnectionStore } from './store/connection'
 import { useMetricsStore } from './store/metrics'
 import { useSettingsStore } from './store/settings'
 import { useExtensionsStore } from './store/extensions'
+import { useSkillsStore } from './store/skills'
 
 export type NavSection = 'dashboard' | 'chat' | 'agents' | 'processes' | 'teams' | 'extensions' | 'sessions' | 'crons' | 'obsidian' | 'models' | 'gateway' | 'settings'
 
 export default function App() {
   const [section, setSection] = useState<NavSection>('dashboard')
-  const { status } = useConnectionStore()
+  const { status, connection, reconnecting } = useConnectionStore()
   const { start: startMetrics, stop: stopMetrics } = useMetricsStore()
   const { monitorVisible } = useSettingsStore()
   const { plugins, skills, load: loadExtensions } = useExtensionsStore()
@@ -45,13 +47,23 @@ export default function App() {
     if (status === 'connected') loadExtensions()
   }, [status])
 
+  // Install the app-native agent skills (process-builder, teams-blueprint) on
+  // connect. Local gateways get a direct file write; remote gateways get an
+  // upload over the gateway WebSocket (skills.upload.* + skills.install).
+  const runSkillInstall = useSkillsStore(s => s.run)
+  useEffect(() => {
+    if (status === 'connected') runSkillInstall(connection?.url)
+  }, [status, connection?.url])
+
   const notConnected = status !== 'connected'
   const ALL_GATEWAY_SECTIONS: NavSection[] = ['dashboard', 'chat', 'agents', 'processes', 'teams', 'extensions', 'sessions', 'crons', 'obsidian', 'models', 'gateway']
   const disabledSections: NavSection[] = notConnected
     ? ALL_GATEWAY_SECTIONS
     : obsidianEnabled ? [] : ['obsidian']
 
-  const showConnect = notConnected && section !== 'settings'
+  // While auto-reconnecting (e.g. the gateway reloaded after a channel change),
+  // show the explanatory overlay instead of bouncing to the manual connect screen.
+  const showConnect = notConnected && !reconnecting && section !== 'settings'
 
   return (
     <div className="flex flex-col h-screen select-none">
@@ -59,7 +71,9 @@ export default function App() {
       <div className="flex flex-1 min-h-0">
         <NavRail section={section} onNavigate={setSection} disabledSections={disabledSections} />
         <main className="flex-1 min-w-0 flex flex-col relative" style={{ background: 'var(--bg-primary)' }}>
-          {showConnect ? (
+          {reconnecting ? (
+            <ReconnectOverlay />
+          ) : showConnect ? (
             <ConnectScreen onConnect={() => setSection('dashboard')} />
           ) : (
             <>

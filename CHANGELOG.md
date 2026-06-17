@@ -7,6 +7,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Local LLM engine detection & isolation** — generalized the Ollama-only cron panel to any local engine (Ollama, LM Studio, vLLM, llama.cpp, LocalAI, Jan, KoboldCpp). Engines are discovered from gateway config providers and, on a local gateway, by probing default ports (+ the Ollama `:11435` cron convention). New `src/lib/localEngines.ts` + `src/components/crons/LocalEnginesPanel.tsx`. Architecture notes: [src/lib/LOCAL_ENGINES.md](src/lib/LOCAL_ENGINES.md).
+
+### Changed
+
+- `ollama:probe` IPC now takes a full health URL (`/api/tags` for Ollama, `/v1/models` for OpenAI-compatible engines) instead of an Ollama base URL.
+- Removed the Ollama-specific `OllamaIsolationPanel` from `CronsView.tsx` in favor of the generalized `LocalEnginesPanel`.
+
+### TODO (see src/lib/LOCAL_ENGINES.md)
+
+- Generalize the Settings "Ollama Endpoints" override card to per-engine URLs (currently Ollama-only).
+- Remote-gateway liveness for loopback instances stays `unknown` (would need a gateway-side probe RPC).
+
 ## [0.4.0] - 2026-06-10
 
 ### Added

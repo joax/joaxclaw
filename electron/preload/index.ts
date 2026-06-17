@@ -50,6 +50,13 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke('obsidian:writeSkill', vaults)
   },
 
+  // App-native agent skills (process-builder, teams-blueprint)
+  skills: {
+    installNative: (force?: boolean) => ipcRenderer.invoke('skills:installNative', force),
+    listNative: () => ipcRenderer.invoke('skills:listNative'),
+    buildArchive: (slug: string) => ipcRenderer.invoke('skills:buildArchive', slug)
+  },
+
   // JoaxClaw local persistent store (~/.joaxclaw/store.json)
   localstore: {
     read: () => ipcRenderer.invoke('localstore:read'),

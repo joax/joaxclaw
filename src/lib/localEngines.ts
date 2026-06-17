@@ -1,0 +1,177 @@
+// Generalized local LLM engine detection + health probing.
+//
+// Mirrors the gateway's own model-preflight logic:
+//   - a provider is "local" when its baseUrl host is loopback / .local / private IPv4
+//   - health path is `/api/tags` for ollama, `/models` for OpenAI-compatible engines
+// Engines are discovered from the gateway's configured providers (models.providers)
+// and, on a local gateway, by probing well-known default ports.
+
+import type { GwModelProvider } from './types'
+
+export type EngineApiKind = 'ollama' | 'openai'
+export type EngineStatus = 'up' | 'down' | 'unknown'
+
+export interface EngineDef {
+  id: string
+  label: string
+  api: EngineApiKind
+  defaultPort: number
+  basePath: string   // path segment appended to host, e.g. '' (ollama) or '/v1' (openai-compatible)
+}
+
+// Known local engines for default-port detection. Engines that share a port
+// (llama.cpp / LocalAI on 8080) are listed once with a combined label.
+export const KNOWN_ENGINES: EngineDef[] = [
+  { id: 'ollama',    label: 'Ollama',              api: 'ollama', defaultPort: 11434, basePath: '' },
+  { id: 'lmstudio',  label: 'LM Studio',           api: 'openai', defaultPort: 1234,  basePath: '/v1' },
+  { id: 'vllm',      label: 'vLLM',                api: 'openai', defaultPort: 8000,  basePath: '/v1' },
+  { id: 'llamacpp',  label: 'llama.cpp / LocalAI', api: 'openai', defaultPort: 8080,  basePath: '/v1' },
+  { id: 'jan',       label: 'Jan',                 api: 'openai', defaultPort: 1337,  basePath: '/v1' },
+  { id: 'koboldcpp', label: 'KoboldCpp',           api: 'openai', defaultPort: 5001,  basePath: '/v1' },
+]
+
+export interface EngineInstance {
+  key: string             // provider id (config) or `${engineId}:${port}` (detected)
+  engineId: string        // canonical engine id (ollama, lmstudio, …) or the bare provider base
+  label: string
+  baseUrl: string
+  api: EngineApiKind
+  source: 'config' | 'detected'
+  isCron: boolean         // provider id ends with -cron (the isolated background instance)
+}
+
+// An engine grouped into its interactive ("main") and background ("cron") instances.
+export interface EngineGroup {
+  engineId: string
+  label: string
+  main?: EngineInstance
+  cron?: EngineInstance
+}
+
+function hostOf(url: string): string | null {
+  try {
+    let h = new URL(url).hostname.toLowerCase()
+    if (h.startsWith('[') && h.endsWith(']')) h = h.slice(1, -1)
+    return h || null
+  } catch {
+    return null
+  }
+}
+
+function isPrivateIpv4(host: string): boolean {
+  if (!/^\d+\.\d+\.\d+\.\d+$/.test(host)) return false
+  const [a, b] = host.split('.').map(n => parseInt(n, 10))
+  return a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168)
+}
+
+// Matches the gateway's isLocalProviderBaseUrl host classification.
+export function isLocalHost(host: string | null): boolean {
+  if (!host) return false
+  return host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0' ||
+    host === '::1' || host === '::ffff:7f00:1' || host === '::ffff:127.0.0.1' ||
+    host.endsWith('.local') || isPrivateIpv4(host)
+}
+
+// True for hosts a loopback/0.0.0.0 address — reachable only on the gateway's own host.
+function isLoopback(host: string | null): boolean {
+  return host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0' ||
+    host === '::1' || host === '::ffff:7f00:1' || host === '::ffff:127.0.0.1'
+}
+
+export function healthUrl(api: EngineApiKind, baseUrl: string): string {
+  const b = baseUrl.replace(/\/+$/, '')
+  return api === 'ollama' ? `${b}/api/tags` : `${b}/models`
+}
+
+// Maps a gateway provider `api` string to a probe family, or null if not a local engine api.
+function apiKind(api: string | undefined): EngineApiKind | null {
+  const a = (api ?? '').toLowerCase()
+  if (a === 'ollama') return 'ollama'
+  if (a === 'lmstudio' || a === 'vllm' || a === 'openai' || a.startsWith('openai-')) return 'openai'
+  return null
+}
+
+function engineMeta(providerId: string): { engineId: string; label: string } {
+  const base = providerId.replace(/-cron$/i, '').toLowerCase()
+  const known = KNOWN_ENGINES.find(e => base === e.id || base.startsWith(e.id))
+  if (known) return { engineId: known.id, label: known.label }
+  return { engineId: base, label: providerId.replace(/-cron$/i, '') }
+}
+
+// ── Probe (via the Electron main process; falls back to direct fetch) ──────────
+
+async function probeUrl(url: string): Promise<boolean> {
+  const api = (window as unknown as { api?: { ollama?: { probe?: (u: string) => Promise<{ ok: boolean }> } } })?.api?.ollama
+  if (api?.probe) {
+    try { return (await api.probe(url)).ok } catch { return false }
+  }
+  try { const r = await fetch(url); return r.ok } catch { return false }
+}
+
+// Probes one instance. Reachability depends on where the gateway runs:
+//   - local gateway, or instance on a non-loopback host → probe (up/down)
+//   - remote gateway + loopback instance → unreachable from here → unknown
+export async function checkInstance(inst: EngineInstance, gatewayIsLocal: boolean): Promise<EngineStatus> {
+  const reachable = gatewayIsLocal || !isLoopback(hostOf(inst.baseUrl))
+  if (!reachable) return 'unknown'
+  return (await probeUrl(healthUrl(inst.api, inst.baseUrl))) ? 'up' : 'down'
+}
+
+// ── Detection ─────────────────────────────────────────────────────────────────
+
+export function detectFromConfig(providers: Record<string, GwModelProvider>): EngineInstance[] {
+  const out: EngineInstance[] = []
+  for (const [pid, p] of Object.entries(providers)) {
+    const baseUrl = (p.baseUrl ?? '').trim()
+    if (!baseUrl) continue
+    const kind = apiKind(p.api)
+    if (!kind) continue
+    if (!isLocalHost(hostOf(baseUrl))) continue
+    const { engineId, label } = engineMeta(pid)
+    out.push({ key: pid, engineId, label, baseUrl, api: kind, source: 'config', isCron: /-cron$/i.test(pid) })
+  }
+  return out
+}
+
+// Well-known isolated "cron" instances that run on a fixed companion port rather
+// than being declared as a separate provider (the Ollama :11435 convention).
+const CRON_COMPANIONS: { engineId: string; label: string; api: EngineApiKind; port: number; basePath: string }[] = [
+  { engineId: 'ollama', label: 'Ollama', api: 'ollama', port: 11435, basePath: '' },
+]
+
+// Probes default ports for engines not already represented in config (local gateway only).
+export async function detectByPort(existing: EngineInstance[]): Promise<EngineInstance[]> {
+  const usedPorts = new Set(existing.map(e => { try { return new URL(e.baseUrl).port } catch { return '' } }))
+  const found: EngineInstance[] = []
+
+  await Promise.all(KNOWN_ENGINES.map(async e => {
+    if (usedPorts.has(String(e.defaultPort))) return
+    const baseUrl = `http://localhost:${e.defaultPort}${e.basePath}`
+    if (await probeUrl(healthUrl(e.api, baseUrl))) {
+      found.push({ key: `${e.id}:${e.defaultPort}`, engineId: e.id, label: e.label, baseUrl, api: e.api, source: 'detected', isCron: false })
+    }
+  }))
+
+  await Promise.all(CRON_COMPANIONS.map(async c => {
+    if (usedPorts.has(String(c.port))) return
+    const baseUrl = `http://localhost:${c.port}${c.basePath}`
+    if (await probeUrl(healthUrl(c.api, baseUrl))) {
+      found.push({ key: `${c.engineId}-cron:${c.port}`, engineId: c.engineId, label: c.label, baseUrl, api: c.api, source: 'detected', isCron: true })
+    }
+  }))
+
+  return found
+}
+
+// Groups instances by engine into main + cron pairs.
+export function groupEngines(instances: EngineInstance[]): EngineGroup[] {
+  const byEngine = new Map<string, EngineGroup>()
+  for (const inst of instances) {
+    const g = byEngine.get(inst.engineId) ?? { engineId: inst.engineId, label: inst.label }
+    if (inst.isCron) g.cron = inst
+    else g.main = inst
+    g.label = g.main?.label ?? g.label
+    byEngine.set(inst.engineId, g)
+  }
+  return [...byEngine.values()]
+}
