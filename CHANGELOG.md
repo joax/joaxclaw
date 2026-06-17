@@ -7,16 +7,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-06-17
+
 ### Added
 
+- **Channel management (Settings → Channels)** — configure the messaging platforms the gateway talks on and assign each to an agent. Browse a catalog of ~33 openclaw channels; create one with first-class credential forms for the common channels (Telegram, Discord, Slack, WhatsApp, Feishu, SMS, QQ Bot) or a raw JSON5 editor (incl. env `SecretRef`s) for any other. Per-channel live status, enable/disable, Start/Stop/Logout runtime controls, and agent bindings (`bindings[]`). New `src/lib/channels.ts`, `src/store/channels.ts`, `src/components/gateway/ChannelsPanel.tsx`.
+- **WhatsApp QR pairing in-app** — links over the gateway's `web.login.start` / `web.login.wait` RPCs (the same flow the official control-UI uses), rendering the QR as a PNG with auto-refresh and connection detection — no CLI shell-out, and it works for remote gateways.
+- **Auto-reconnect with explanatory UI** — adding/enabling a channel makes the gateway reload and briefly drop the control-UI WebSocket. The app now silently retries with backoff and shows a `ReconnectOverlay` ("the gateway is reloading…") instead of bouncing to the connect screen, then restores the tab you were on. New `src/components/layout/ReconnectOverlay.tsx`; reconnect state in `src/store/connection.ts`.
 - **Local LLM engine detection & isolation** — generalized the Ollama-only cron panel to any local engine (Ollama, LM Studio, vLLM, llama.cpp, LocalAI, Jan, KoboldCpp). Engines are discovered from gateway config providers and, on a local gateway, by probing default ports (+ the Ollama `:11435` cron convention). New `src/lib/localEngines.ts` + `src/components/crons/LocalEnginesPanel.tsx`. Architecture notes: [src/lib/LOCAL_ENGINES.md](src/lib/LOCAL_ENGINES.md).
 
 ### Changed
 
+- `config.patch` writes that shrink the `bindings` array (unbind agent, delete channel) now pass `replacePaths: ['bindings']`, which the gateway requires for array-entry removal.
+- `GatewayView` (Settings) remembers its active tab across remounts, so an auto-reconnect returns you to Channels rather than the Connection tab.
 - `ollama:probe` IPC now takes a full health URL (`/api/tags` for Ollama, `/v1/models` for OpenAI-compatible engines) instead of an Ollama base URL.
 - Removed the Ollama-specific `OllamaIsolationPanel` from `CronsView.tsx` in favor of the generalized `LocalEnginesPanel`.
 
-### TODO (see src/lib/LOCAL_ENGINES.md)
+### Notes / deferred (see src/lib/LOCAL_ENGINES.md)
 
 - Generalize the Settings "Ollama Endpoints" override card to per-engine URLs (currently Ollama-only).
 - Remote-gateway liveness for loopback instances stays `unknown` (would need a gateway-side probe RPC).
