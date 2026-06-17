@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { RotateCcw, Square, CheckCircle2, XCircle, AlertCircle, RefreshCw, Eye, EyeOff, Info, X, Server, LifeBuoy, Zap, HardDrive } from 'lucide-react'
+import { RotateCcw, Square, CheckCircle2, XCircle, AlertCircle, RefreshCw, Eye, EyeOff, Info, X, Server, LifeBuoy, Zap, HardDrive, Plug, Cpu, Sparkles, MessageSquare } from 'lucide-react'
 import Editor from '@monaco-editor/react'
 import { useConnectionStore } from '../../store/connection'
 import { useMetricsStore } from '../../store/metrics'
@@ -8,8 +8,22 @@ import { Input } from '../ui/Input'
 import { formatBytes } from '../../lib/ollama'
 import { resolveOllamaUrl } from '../../lib/ollamaHealth'
 import { useHelpStore } from '../../store/help'
+import { useSkillsStore } from '../../store/skills'
+import { ChannelsPanel } from './ChannelsPanel'
 
 type GwStatus = { running: boolean; pid?: number; uptime?: string }
+
+type SettingsTab = 'connection' | 'gateway' | 'channels' | 'ollama' | 'skills'
+// Remembered across remounts (e.g. when an auto-reconnect briefly swaps the view
+// out) so the user returns to the tab they were on — notably Channels.
+let lastSettingsTab: SettingsTab = 'connection'
+const SETTINGS_TABS: { id: SettingsTab; label: string; icon: React.ReactNode }[] = [
+  { id: 'connection', label: 'Connection', icon: <Plug size={15} /> },
+  { id: 'gateway',    label: 'Gateway',    icon: <Server size={15} /> },
+  { id: 'channels',   label: 'Channels',   icon: <MessageSquare size={15} /> },
+  { id: 'ollama',     label: 'Ollama',     icon: <Cpu size={15} /> },
+  { id: 'skills',     label: 'Skills',     icon: <Sparkles size={15} /> },
+]
 
 export function GatewayView() {
   const { status, connection, savedConnections, connect, disconnect, setOllamaUrls } = useConnectionStore()
@@ -29,6 +43,9 @@ export function GatewayView() {
 
   const [editUrl, setEditUrl] = useState(connection?.url ?? 'ws://localhost:18789')
   const [editToken, setEditToken] = useState(connection?.token ?? '')
+
+  const [tab, setTabState] = useState<SettingsTab>(lastSettingsTab)
+  const setTab = (t: SettingsTab) => { lastSettingsTab = t; setTabState(t) }
 
   // Load config file
   const loadConfig = async () => {
@@ -92,194 +109,206 @@ export function GatewayView() {
     connect({ url: editUrl, token: editToken })
   }
 
+  const statusDot = (
+    <div className="flex items-center gap-2 text-xs" style={{ color: 'var(--text-secondary)' }}>
+      <div className="w-2 h-2 rounded-full" style={{
+        background: status === 'connected' ? 'var(--success)' : status === 'connecting' ? 'var(--warning)' : 'var(--danger)'
+      }} />
+      {status}
+    </div>
+  )
+
   return (
-    <div className="flex flex-1 min-h-0 p-6 gap-5">
-      {/* Left: JSON editor */}
-      <div className="flex flex-col flex-1 min-w-0 gap-4">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-lg font-semibold" style={{ color: 'var(--text-primary)' }}>Gateway Config</h1>
-            {configPath && (
-              <p className="text-xs font-mono mt-0.5" style={{ color: 'var(--text-secondary)' }}>{configPath}</p>
-            )}
-          </div>
-          <div className="flex items-center gap-2">
-            <Btn variant="outline" size="sm" icon={<RefreshCw size={12} />} onClick={loadConfig} loading={configLoading}>
-              Reload
-            </Btn>
-          </div>
-        </div>
-
-        {configError && (
-          <div className="px-3 py-2 rounded text-sm flex items-center gap-2" style={{ background: 'color-mix(in srgb, var(--danger) 10%, transparent)', color: 'var(--danger)', border: '1px solid var(--danger)' }}>
-            <AlertCircle size={14} />
-            {configError}
-          </div>
-        )}
-
-        <div
-          className="flex-1 overflow-hidden"
-          style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius)', minHeight: 0 }}
-        >
-          <Editor
-            height="100%"
-            defaultLanguage="json"
-            value={configText}
-            onChange={v => { setConfigText(v ?? ''); setConfigDirty(true) }}
-            theme="vs-dark"
-            options={{
-              minimap: { enabled: false },
-              fontSize: 13,
-              lineHeight: 1.6,
-              scrollBeyondLastLine: false,
-              wordWrap: 'on',
-              formatOnPaste: true,
-              renderWhitespace: 'boundary',
-              padding: { top: 12 }
+    <div className="flex flex-1 min-h-0">
+      {/* Category rail */}
+      <div
+        className="flex flex-col shrink-0 py-4 px-3 gap-1"
+        style={{ width: 200, borderRight: '1px solid var(--border)', background: 'var(--bg-surface)' }}
+      >
+        <h1 className="text-sm font-semibold px-2 mb-2" style={{ color: 'var(--text-primary)' }}>Settings</h1>
+        {SETTINGS_TABS.map(t => (
+          <button
+            key={t.id}
+            onClick={() => setTab(t.id)}
+            className="flex items-center gap-2.5 px-3 py-2 text-sm text-left rounded"
+            style={{
+              background: tab === t.id ? 'color-mix(in srgb, var(--accent) 15%, var(--bg-elevated))' : 'transparent',
+              color: tab === t.id ? 'var(--accent)' : 'var(--text-secondary)',
+              border: 'none', cursor: 'pointer', borderRadius: 'var(--radius)',
             }}
-          />
-        </div>
-
-        {/* Save bar */}
-        {configDirty && (
-          <div
-            className="flex items-center gap-3 px-4 py-2.5 rounded animate-fade-in"
-            style={{ background: 'color-mix(in srgb, var(--warning) 10%, var(--bg-surface))', border: '1px solid var(--warning)' }}
           >
-            <AlertCircle size={14} style={{ color: 'var(--warning)' }} />
-            <span className="text-sm flex-1" style={{ color: 'var(--warning)' }}>Unsaved changes</span>
-            <Btn variant="outline" size="sm" onClick={() => { loadConfig(); setConfigDirty(false) }}>Discard</Btn>
-            <Btn
-              size="sm"
-              icon={saveStatus === 'saved' ? <CheckCircle2 size={13} /> : undefined}
-              onClick={handleSave}
-              loading={saveStatus === 'saving'}
-              style={saveStatus === 'saved' ? { background: 'var(--success)' } : undefined}
-            >
-              {saveStatus === 'saved' ? 'Saved!' : 'Save & Reload'}
-            </Btn>
-          </div>
-        )}
+            {t.icon}
+            {t.label}
+          </button>
+        ))}
+        <div className="flex-1" />
+        <div className="px-2">{statusDot}</div>
       </div>
 
-      {/* Right panel */}
-      <div className="flex flex-col gap-4" style={{ width: 280, flexShrink: 0 }}>
-        {/* Connection settings */}
-        <Card title="Connection">
-          <div className="space-y-3">
-            <div>
-              <label className="block text-xs mb-1" style={{ color: 'var(--text-secondary)' }}>URL</label>
-              <Input value={editUrl} onChange={setEditUrl} placeholder="ws://localhost:18789" style={{ fontSize: 12 }} />
-            </div>
-            <div>
-              <label className="block text-xs mb-1" style={{ color: 'var(--text-secondary)' }}>Token</label>
-              <div className="relative">
-                <Input
-                  value={editToken}
-                  onChange={setEditToken}
-                  type={showToken ? 'text' : 'password'}
-                  placeholder="Bearer token"
-                  style={{ fontSize: 12, paddingRight: 36 }}
-                />
-                <button
-                  onClick={() => setShowToken(s => !s)}
-                  style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)' }}
-                >
-                  {showToken ? <EyeOff size={13} /> : <Eye size={13} />}
-                </button>
+      {/* Content */}
+      <div className="flex flex-col flex-1 min-w-0 min-h-0">
+
+        {/* ── Connection ── */}
+        {tab === 'connection' && (
+          <SettingsScroll title="Connection">
+            <Card title="Gateway connection">
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-xs mb-1" style={{ color: 'var(--text-secondary)' }}>URL</label>
+                  <Input value={editUrl} onChange={setEditUrl} placeholder="ws://localhost:18789" style={{ fontSize: 12 }} />
+                </div>
+                <div>
+                  <label className="block text-xs mb-1" style={{ color: 'var(--text-secondary)' }}>Token</label>
+                  <div className="relative">
+                    <Input
+                      value={editToken}
+                      onChange={setEditToken}
+                      type={showToken ? 'text' : 'password'}
+                      placeholder="Bearer token"
+                      style={{ fontSize: 12, paddingRight: 36 }}
+                    />
+                    <button
+                      onClick={() => setShowToken(s => !s)}
+                      style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)' }}
+                    >
+                      {showToken ? <EyeOff size={13} /> : <Eye size={13} />}
+                    </button>
+                  </div>
+                </div>
+                {status === 'connected' ? (
+                  <Btn variant="danger" size="sm" onClick={disconnect} className="w-full">Disconnect</Btn>
+                ) : (
+                  <Btn size="sm" onClick={handleConnect} loading={status === 'connecting'} className="w-full">
+                    {status === 'connecting' ? 'Connecting…' : 'Connect'}
+                  </Btn>
+                )}
+                {statusDot}
+              </div>
+            </Card>
+          </SettingsScroll>
+        )}
+
+        {/* ── Gateway (controls + config editor) ── */}
+        {tab === 'gateway' && (
+          <div className="flex flex-col flex-1 min-h-0 p-6 gap-4">
+            <div className="flex items-center justify-between shrink-0">
+              <div>
+                <h2 className="text-base font-semibold" style={{ color: 'var(--text-primary)' }}>Gateway</h2>
+                {configPath && <p className="text-xs font-mono mt-0.5" style={{ color: 'var(--text-secondary)' }}>{configPath}</p>}
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1.5 text-xs mr-1" style={{ color: gwStatus?.running ? 'var(--success)' : 'var(--danger)' }}>
+                  {gwStatus?.running ? <CheckCircle2 size={13} /> : <XCircle size={13} />}
+                  <span>{gwStatus?.running ? 'Running' : 'Stopped'}</span>
+                  {gwStatus?.pid && <span className="opacity-60">PID {gwStatus.pid}</span>}
+                </div>
+                <Btn variant="outline" size="sm" icon={<RotateCcw size={12} />} loading={cmdRunning} onClick={() => runCmd(window.api.gateway.restart)}>Restart</Btn>
+                <Btn variant="outline" size="sm" icon={<RotateCcw size={12} />} loading={cmdRunning} onClick={() => runCmd(window.api.gateway.restartSafe)}>Safe</Btn>
+                <Btn variant="danger" size="sm" icon={<Square size={12} />} loading={cmdRunning} onClick={() => runCmd(window.api.gateway.stop)}>Stop</Btn>
+                <Btn variant="outline" size="sm" icon={<RefreshCw size={12} />} onClick={loadConfig} loading={configLoading}>Reload</Btn>
               </div>
             </div>
-            {status === 'connected' ? (
-              <Btn variant="danger" size="sm" onClick={disconnect} className="w-full">Disconnect</Btn>
-            ) : (
-              <Btn size="sm" onClick={handleConnect} loading={status === 'connecting'} className="w-full">
-                {status === 'connecting' ? 'Connecting…' : 'Connect'}
-              </Btn>
-            )}
-            <div className="flex items-center gap-2 text-xs" style={{ color: 'var(--text-secondary)' }}>
-              <div className="w-2 h-2 rounded-full" style={{
-                background: status === 'connected' ? 'var(--success)' : status === 'connecting' ? 'var(--warning)' : 'var(--danger)'
-              }} />
-              {status}
-            </div>
-          </div>
-        </Card>
 
-        {/* Gateway controls */}
-        <Card title="Gateway Controls">
-          <div className="space-y-2">
-            <div className="flex items-center gap-2 text-xs mb-3" style={{ color: gwStatus?.running ? 'var(--success)' : 'var(--danger)' }}>
-              {gwStatus?.running ? <CheckCircle2 size={13} /> : <XCircle size={13} />}
-              <span>{gwStatus?.running ? 'Running' : 'Stopped'}</span>
-              {gwStatus?.pid && <span className="opacity-60">PID {gwStatus.pid}</span>}
-            </div>
-            <Btn
-              variant="outline" size="sm" className="w-full"
-              icon={<RotateCcw size={12} />}
-              loading={cmdRunning}
-              onClick={() => runCmd(window.api.gateway.restart)}
-            >
-              Restart
-            </Btn>
-            <Btn
-              variant="outline" size="sm" className="w-full"
-              icon={<RotateCcw size={12} />}
-              loading={cmdRunning}
-              onClick={() => runCmd(window.api.gateway.restartSafe)}
-            >
-              Restart (safe)
-            </Btn>
-            <Btn
-              variant="danger" size="sm" className="w-full"
-              icon={<Square size={12} />}
-              loading={cmdRunning}
-              onClick={() => runCmd(window.api.gateway.stop)}
-            >
-              Stop
-            </Btn>
             {cmdOutput && (
-              <pre className="text-xs mt-2 p-2 rounded" style={{ background: 'var(--bg-primary)', color: 'var(--text-secondary)', fontSize: 11 }}>
+              <pre className="text-xs p-2 rounded shrink-0" style={{ background: 'var(--bg-primary)', color: 'var(--text-secondary)', fontSize: 11, maxHeight: 80, overflow: 'auto' }}>
                 {cmdOutput}
               </pre>
             )}
-          </div>
-        </Card>
 
-        {/* Ollama endpoints */}
-        <OllamaEndpointsCard
-          targetUrl={connection?.url ?? savedConnections.find(c => c.url === editUrl)?.url}
-          editUrl={editUrl}
-          overrides={connection?.ollamaUrls ?? savedConnections.find(c => c.url === (connection?.url ?? editUrl))?.ollamaUrls}
-          onSave={setOllamaUrls}
-        />
-
-        {/* Ollama models */}
-        <Card title="Ollama Models">
-          <div className="space-y-2">
-            {ollamaModels.length === 0 && (
-              <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>No models found. Is Ollama running?</p>
-            )}
-            {ollamaModels.map(model => (
-              <div key={model.name} className="text-xs">
-                <div className="flex items-center gap-2">
-                  <div className="w-1.5 h-1.5 rounded-full" style={{ background: model.loaded ? 'var(--success)' : 'var(--border)', flexShrink: 0 }} />
-                  <span className="flex-1 truncate font-mono" style={{ color: 'var(--text-primary)' }}>{model.name}</span>
-                  <span style={{ color: 'var(--text-secondary)' }}>{formatBytes(model.size)}</span>
-                </div>
-                {model.loaded && model.vramUsed && (
-                  <div className="ml-3.5 mt-1">
-                    <div className="meter">
-                      <div className="meter-fill" style={{ width: '60%', background: 'var(--accent)' }} />
-                    </div>
-                    <p className="mt-0.5" style={{ color: 'var(--text-secondary)' }}>
-                      VRAM {formatBytes(model.vramUsed)} loaded
-                    </p>
-                  </div>
-                )}
+            {configError && (
+              <div className="px-3 py-2 rounded text-sm flex items-center gap-2 shrink-0" style={{ background: 'color-mix(in srgb, var(--danger) 10%, transparent)', color: 'var(--danger)', border: '1px solid var(--danger)' }}>
+                <AlertCircle size={14} />
+                {configError}
               </div>
-            ))}
+            )}
+
+            <div className="flex-1 overflow-hidden" style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius)', minHeight: 0 }}>
+              <Editor
+                height="100%"
+                defaultLanguage="json"
+                value={configText}
+                onChange={v => { setConfigText(v ?? ''); setConfigDirty(true) }}
+                theme="vs-dark"
+                options={{
+                  minimap: { enabled: false }, fontSize: 13, lineHeight: 1.6,
+                  scrollBeyondLastLine: false, wordWrap: 'on', formatOnPaste: true,
+                  renderWhitespace: 'boundary', padding: { top: 12 },
+                }}
+              />
+            </div>
+
+            {configDirty && (
+              <div className="flex items-center gap-3 px-4 py-2.5 rounded animate-fade-in shrink-0" style={{ background: 'color-mix(in srgb, var(--warning) 10%, var(--bg-surface))', border: '1px solid var(--warning)' }}>
+                <AlertCircle size={14} style={{ color: 'var(--warning)' }} />
+                <span className="text-sm flex-1" style={{ color: 'var(--warning)' }}>Unsaved changes</span>
+                <Btn variant="outline" size="sm" onClick={() => { loadConfig(); setConfigDirty(false) }}>Discard</Btn>
+                <Btn size="sm" icon={saveStatus === 'saved' ? <CheckCircle2 size={13} /> : undefined} onClick={handleSave} loading={saveStatus === 'saving'} style={saveStatus === 'saved' ? { background: 'var(--success)' } : undefined}>
+                  {saveStatus === 'saved' ? 'Saved!' : 'Save & Reload'}
+                </Btn>
+              </div>
+            )}
           </div>
-        </Card>
+        )}
+
+        {/* ── Channels ── */}
+        {tab === 'channels' && (
+          <ChannelsPanel connected={status === 'connected'} />
+        )}
+
+        {/* ── Ollama ── */}
+        {tab === 'ollama' && (
+          <SettingsScroll title="Ollama">
+            <OllamaEndpointsCard
+              targetUrl={connection?.url ?? savedConnections.find(c => c.url === editUrl)?.url}
+              editUrl={editUrl}
+              overrides={connection?.ollamaUrls ?? savedConnections.find(c => c.url === (connection?.url ?? editUrl))?.ollamaUrls}
+              onSave={setOllamaUrls}
+            />
+            <Card title="Ollama Models">
+              <div className="space-y-2">
+                {ollamaModels.length === 0 && (
+                  <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>No models found. Is Ollama running?</p>
+                )}
+                {ollamaModels.map(model => (
+                  <div key={model.name} className="text-xs">
+                    <div className="flex items-center gap-2">
+                      <div className="w-1.5 h-1.5 rounded-full" style={{ background: model.loaded ? 'var(--success)' : 'var(--border)', flexShrink: 0 }} />
+                      <span className="flex-1 truncate font-mono" style={{ color: 'var(--text-primary)' }}>{model.name}</span>
+                      <span style={{ color: 'var(--text-secondary)' }}>{formatBytes(model.size)}</span>
+                    </div>
+                    {model.loaded && model.vramUsed && (
+                      <div className="ml-3.5 mt-1">
+                        <div className="meter">
+                          <div className="meter-fill" style={{ width: '60%', background: 'var(--accent)' }} />
+                        </div>
+                        <p className="mt-0.5" style={{ color: 'var(--text-secondary)' }}>VRAM {formatBytes(model.vramUsed)} loaded</p>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </Card>
+          </SettingsScroll>
+        )}
+
+        {/* ── Skills ── */}
+        {tab === 'skills' && (
+          <SettingsScroll title="Skills">
+            <AppSkillsCard gatewayUrl={connection?.url} connected={status === 'connected'} />
+          </SettingsScroll>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// Scrollable, width-constrained content wrapper for a settings section.
+function SettingsScroll({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="flex-1 overflow-y-auto min-h-0">
+      <div className="p-6 flex flex-col gap-4" style={{ maxWidth: 560 }}>
+        <h2 className="text-base font-semibold" style={{ color: 'var(--text-primary)' }}>{title}</h2>
+        {children}
       </div>
     </div>
   )
@@ -342,6 +371,55 @@ function OllamaEndpointsCard({ targetUrl, editUrl, overrides, onSave }: {
             Connect to a gateway (or pick a saved one) to configure its endpoints.
           </p>
         )}
+      </div>
+    </Card>
+  )
+}
+
+// Status + reinstall for the app-native agent skills (process-builder, teams-blueprint).
+function AppSkillsCard({ gatewayUrl, connected }: { gatewayUrl?: string; connected: boolean }) {
+  const { results, running, run } = useSkillsStore()
+
+  return (
+    <Card title="App Skills">
+      <div className="space-y-2.5">
+        <p className="text-xs" style={{ color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+          Agent skills that teach models to build JoaxClaw teams &amp; processes. Installed automatically on connect.
+        </p>
+
+        <div className="space-y-1.5">
+          {results.length === 0 && (
+            <p className="text-xs" style={{ color: 'var(--text-secondary)', opacity: 0.7 }}>
+              {connected ? 'Not installed yet.' : 'Connect to install.'}
+            </p>
+          )}
+          {results.map(r => (
+            <div key={r.slug} className="flex items-start gap-2 text-xs">
+              {r.status === 'error'
+                ? <XCircle size={12} style={{ color: 'var(--warning)', flexShrink: 0, marginTop: 1 }} />
+                : <CheckCircle2 size={12} style={{ color: r.status === 'installed' ? 'var(--success)' : 'var(--text-secondary)', flexShrink: 0, marginTop: 1 }} />}
+              <div className="min-w-0">
+                <span className="font-mono" style={{ color: 'var(--text-primary)' }}>{r.slug}</span>
+                <span style={{ color: 'var(--text-secondary)' }}> — {r.status}</span>
+                {r.error && (
+                  <p style={{ color: 'var(--warning)', opacity: 0.9, marginTop: 1, wordBreak: 'break-word' }}>{r.error}</p>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <Btn
+          variant="outline"
+          size="sm"
+          className="w-full"
+          icon={<RefreshCw size={12} />}
+          loading={running}
+          disabled={!connected}
+          onClick={() => run(gatewayUrl, true)}
+        >
+          Reinstall
+        </Btn>
       </div>
     </Card>
   )

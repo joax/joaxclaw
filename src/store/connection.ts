@@ -5,6 +5,12 @@ import { gatewayClient } from '../lib/gateway'
 
 interface HeartbeatEntry { time: number; ok: boolean }
 
+// How many times we silently retry a dropped connection before giving up and
+// falling back to the manual connect screen. The gateway reloads (and briefly
+// drops the WS) whenever a channel is added/enabled, so transient drops are
+// expected and should self-heal rather than kick the user out.
+export const RECONNECT_MAX_ATTEMPTS = 12
+
 interface ConnectionState {
   status: ConnectionStatus
   statusDetail: string
@@ -14,12 +20,25 @@ interface ConnectionState {
   lastHeartbeat: number | null
   uptime: number
   uptimeStart: number | null
+  // True while we are silently retrying a dropped connection (gateway reload).
+  reconnecting: boolean
+  reconnectAttempt: number
 
   connect: (conn: GatewayConnection) => void
   disconnect: () => void
+  cancelReconnect: () => void
   saveConnection: (conn: GatewayConnection) => void
   removeConnection: (url: string) => void
   setOllamaUrls: (gatewayUrl: string, urls: { main?: string; cron?: string }) => void
+}
+
+// Reconnect bookkeeping kept outside the store (timers / flags, not UI state).
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+let intentionalDisconnect = false
+let attempt = 0
+
+function clearReconnect() {
+  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
 }
 
 export const useConnectionStore = create<ConnectionState>()(
@@ -33,17 +52,32 @@ export const useConnectionStore = create<ConnectionState>()(
       lastHeartbeat: null,
       uptime: 0,
       uptimeStart: null,
+      reconnecting: false,
+      reconnectAttempt: 0,
 
       connect(conn) {
-        set({ status: 'connecting', connection: conn, heartbeats: [], lastHeartbeat: null })
+        intentionalDisconnect = false
+        attempt = 0
+        clearReconnect()
+        set({ status: 'connecting', connection: conn, heartbeats: [], lastHeartbeat: null, reconnecting: false, reconnectAttempt: 0 })
 
         gatewayClient.onStatusChange = (status, detail) => {
           if (status === 'connected') {
-            set({ status: 'connected', statusDetail: '', uptimeStart: Date.now() })
+            attempt = 0
+            clearReconnect()
+            set({ status: 'connected', statusDetail: '', uptimeStart: Date.now(), reconnecting: false, reconnectAttempt: 0 })
           } else if (status === 'connecting') {
-            set({ status: 'connecting', statusDetail: '' })
+            // Don't clobber the "reconnecting" banner with a plain connecting state.
+            if (!get().reconnecting) set({ status: 'connecting', statusDetail: '' })
+          } else if (status === 'error' && /auth rejected/i.test(detail ?? '')) {
+            // Bad token — looping would never succeed, so stop and surface it.
+            intentionalDisconnect = true
+            clearReconnect()
+            set({ status: 'error', statusDetail: detail ?? '', uptimeStart: null, uptime: 0, reconnecting: false, reconnectAttempt: 0 })
           } else {
-            set({ status: status as ConnectionStatus, statusDetail: detail ?? '', uptimeStart: null, uptime: 0 })
+            // Unexpected drop or transient error → auto-reconnect (gateway reload).
+            set({ status: 'disconnected', statusDetail: detail ?? '', uptimeStart: null, uptime: 0 })
+            scheduleReconnect(get, set)
           }
         }
 
@@ -65,8 +99,17 @@ export const useConnectionStore = create<ConnectionState>()(
       },
 
       disconnect() {
+        intentionalDisconnect = true
+        clearReconnect()
         gatewayClient.disconnect()
-        set({ status: 'disconnected', connection: null, uptimeStart: null, uptime: 0 })
+        set({ status: 'disconnected', connection: null, uptimeStart: null, uptime: 0, reconnecting: false, reconnectAttempt: 0 })
+      },
+
+      cancelReconnect() {
+        intentionalDisconnect = true
+        clearReconnect()
+        gatewayClient.disconnect()
+        set({ status: 'disconnected', statusDetail: '', reconnecting: false, reconnectAttempt: 0 })
       },
 
       saveConnection(conn) {
@@ -95,3 +138,31 @@ export const useConnectionStore = create<ConnectionState>()(
     }
   )
 )
+
+// Schedule a single reconnect attempt with exponential backoff (1→2→4→5s cap).
+// A failed attempt re-fires onStatusChange('disconnected'), which calls this
+// again, so the loop advances itself until it connects or hits the cap.
+type SetFn = (partial: Partial<ConnectionState>) => void
+type GetFn = () => ConnectionState
+
+function scheduleReconnect(get: GetFn, set: SetFn) {
+  if (intentionalDisconnect) return
+  const conn = get().connection
+  if (!conn) return
+
+  if (attempt >= RECONNECT_MAX_ATTEMPTS) {
+    clearReconnect()
+    set({ reconnecting: false, status: 'disconnected', statusDetail: 'Could not reconnect — the gateway may still be restarting. Try again.' })
+    return
+  }
+
+  attempt += 1
+  const delay = Math.min(1000 * 2 ** (attempt - 1), 5000)
+  set({ reconnecting: true, reconnectAttempt: attempt, status: 'connecting' })
+
+  clearReconnect()
+  reconnectTimer = setTimeout(() => {
+    if (intentionalDisconnect) return
+    gatewayClient.connect(conn.url, conn.token)
+  }, delay)
+}

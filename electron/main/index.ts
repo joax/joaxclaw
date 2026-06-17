@@ -4,6 +4,7 @@ import { readFile, writeFile, mkdir, readdir, unlink } from 'fs/promises'
 import { existsSync, statSync, createReadStream, watch, type FSWatcher } from 'fs'
 import { homedir } from 'os'
 import { exec, spawn } from 'child_process'
+import { createHash } from 'crypto'
 import si from 'systeminformation'
 import WebSocket from 'ws'
 
@@ -467,6 +468,236 @@ ipcMain.handle('obsidian:writeSkill', async (_event, vaults: Array<{ name: strin
   }
 })
 
+// ── IPC: Install app-native agent skills ─────────────────────────────────────
+// Writes SKILL.md files into ~/.openclaw/skills/<slug>/ so the gateway surfaces
+// them to agents (the `description` frontmatter is the "when to use" trigger).
+// Versioned via a sidecar file so we only rewrite when the bundled version bumps.
+
+// ── Minimal ZIP writer (stored / no compression) ─────────────────────────────
+// Skill archives are a few KB of text, so we avoid a zip dependency and emit a
+// valid stored-method zip the gateway (yauzl) reads. SKILL.md goes at the root.
+
+const CRC32_TABLE = (() => {
+  const t = new Uint32Array(256)
+  for (let n = 0; n < 256; n++) {
+    let c = n
+    for (let k = 0; k < 8; k++) c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1)
+    t[n] = c >>> 0
+  }
+  return t
+})()
+
+function crc32(buf: Buffer): number {
+  let c = 0xffffffff
+  for (let i = 0; i < buf.length; i++) c = CRC32_TABLE[(c ^ buf[i]) & 0xff] ^ (c >>> 8)
+  return (c ^ 0xffffffff) >>> 0
+}
+
+function buildZip(files: { name: string; data: Buffer }[]): Buffer {
+  const local: Buffer[] = []
+  const central: Buffer[] = []
+  let offset = 0
+  for (const f of files) {
+    const name = Buffer.from(f.name, 'utf8')
+    const crc = crc32(f.data)
+    const size = f.data.length
+
+    const lfh = Buffer.alloc(30)
+    lfh.writeUInt32LE(0x04034b50, 0)  // local file header signature
+    lfh.writeUInt16LE(20, 4)          // version needed
+    lfh.writeUInt16LE(0, 6)           // flags
+    lfh.writeUInt16LE(0, 8)           // method 0 = stored
+    lfh.writeUInt16LE(0, 10)          // mod time
+    lfh.writeUInt16LE(0x21, 12)       // mod date (1980-01-01)
+    lfh.writeUInt32LE(crc, 14)
+    lfh.writeUInt32LE(size, 18)       // compressed size
+    lfh.writeUInt32LE(size, 22)       // uncompressed size
+    lfh.writeUInt16LE(name.length, 26)
+    lfh.writeUInt16LE(0, 28)          // extra length
+    local.push(lfh, name, f.data)
+
+    const cdh = Buffer.alloc(46)
+    cdh.writeUInt32LE(0x02014b50, 0)  // central directory header signature
+    cdh.writeUInt16LE(20, 4)          // version made by
+    cdh.writeUInt16LE(20, 6)          // version needed
+    cdh.writeUInt16LE(0, 8)
+    cdh.writeUInt16LE(0, 10)
+    cdh.writeUInt16LE(0, 12)
+    cdh.writeUInt16LE(0x21, 14)
+    cdh.writeUInt32LE(crc, 16)
+    cdh.writeUInt32LE(size, 20)
+    cdh.writeUInt32LE(size, 24)
+    cdh.writeUInt16LE(name.length, 28)
+    cdh.writeUInt16LE(0, 30)          // extra
+    cdh.writeUInt16LE(0, 32)          // comment
+    cdh.writeUInt16LE(0, 34)          // disk number
+    cdh.writeUInt16LE(0, 36)          // internal attrs
+    cdh.writeUInt32LE(0, 38)          // external attrs
+    cdh.writeUInt32LE(offset, 42)     // local header offset
+    central.push(cdh, name)
+
+    offset += lfh.length + name.length + size
+  }
+
+  const centralBuf = Buffer.concat(central)
+  const eocd = Buffer.alloc(22)
+  eocd.writeUInt32LE(0x06054b50, 0)   // end of central directory signature
+  eocd.writeUInt16LE(0, 4)
+  eocd.writeUInt16LE(0, 6)
+  eocd.writeUInt16LE(files.length, 8)
+  eocd.writeUInt16LE(files.length, 10)
+  eocd.writeUInt32LE(centralBuf.length, 12)
+  eocd.writeUInt32LE(offset, 16)      // central directory offset
+  eocd.writeUInt16LE(0, 20)           // comment length
+
+  return Buffer.concat([...local, centralBuf, eocd])
+}
+
+const NATIVE_SKILLS: { slug: string; version: number; lines: string[] }[] = [
+  {
+    slug: 'teams-blueprint',
+    version: 1,
+    lines: [
+      '---',
+      'name: teams-blueprint',
+      'description: Use when the user asks to assemble, design, or build a TEAM of agents that collaborate with defined roles, tasks, and handoffs (e.g. "a team that researches, then writes, then reviews"). Produces a runnable JoaxClaw team.',
+      '---',
+      '',
+      '# Teams Blueprint',
+      '',
+      'Build a JoaxClaw **team**: a controller agent that orchestrates an ordered list of member agents, with optional conditional routing. You author one JSON "blueprint"; JoaxClaw compiles it into an executable workflow graph automatically — you never specify node positions or graph coordinates.',
+      '',
+      '## How to create a team',
+      '',
+      '1. Inspect the configured agents and pick a **controller** (the team lead) plus the **member** agents, each with a role and a concrete task. Use only agent ids that already exist.',
+      '2. Write the blueprint JSON to: `~/.openclaw/teams/<id>.team.json` where `<id>` is a kebab-case slug equal to the `id` field.',
+      '3. Tell the user to open **Teams** in JoaxClaw, review, and run it — the app picks up the file automatically.',
+      '',
+      '## Blueprint schema (`<id>.team.json`)',
+      '',
+      '```json',
+      '{',
+      '  "schemaVersion": 1,',
+      '  "id": "research-write-review",',
+      '  "name": "Research, Write, Review",',
+      '  "description": "Optional one-line summary",',
+      '  "controllerAgentId": "<an existing agent id>",',
+      '  "members": [',
+      '    { "agentId": "<agent id>", "role": "Researcher", "task": "Gather sources and summarize key findings." },',
+      '    { "agentId": "<agent id>", "role": "Writer", "task": "Draft the article from the research." },',
+      '    { "agentId": "<agent id>", "role": "Reviewer", "task": "Critique the draft and request fixes." }',
+      '  ],',
+      '  "routes": [],',
+      '  "outputContract": "A finished, reviewed article.",',
+      '  "tags": ["content"],',
+      '  "createdAt": 0,',
+      '  "updatedAt": 0,',
+      '  "version": 1',
+      '}',
+      '```',
+      '',
+      '### Members',
+      'Ordered list. Each member: `agentId` (a real configured agent), `role`, `task`. Optional `soul` (persona/voice) and `reviewBefore: true` (insert a human review gate before that member — not allowed on the first member).',
+      '',
+      '### Conditional routing (optional)',
+      'Add `routes` only for branching; omit it for a straight linear pipeline. Each route fires after a member completes:',
+      '',
+      '```json',
+      '"routes": [',
+      '  {',
+      '    "afterMemberId": "<agentId of the deciding member>",',
+      '    "branches": [',
+      '      { "condition": "the draft needs major rework", "nextMemberId": "<writer agentId>", "brief": "Rework these sections..." },',
+      '      { "condition": "", "nextMemberId": "__end__" }',
+      '    ]',
+      '  }',
+      ']',
+      '```',
+      '',
+      '- Branches are evaluated in order; the first matching condition wins.',
+      '- An empty `condition` ("") is the catch-all default — put it last.',
+      '- `nextMemberId` is a member\'s `agentId`, or `"__end__"` to finish.',
+      '',
+      '## Rules',
+      '- Use only `agentId`s that already exist — inspect the configured agents first.',
+      '- `id` must equal the filename slug and be unique.',
+      '- Keep each task concrete and self-contained; a member only sees its own task plus handoff context.',
+      '- Never hand-author a graph — the app compiles `members` + `routes` into the executable process.',
+      '',
+    ],
+  },
+  {
+    slug: 'process-builder',
+    version: 1,
+    lines: [
+      '---',
+      'name: process-builder',
+      'description: Use when the user asks to build or run a multi-agent workflow, process, or pipeline (sequential or branching steps handed off across agents). Produces a runnable JoaxClaw process.',
+      '---',
+      '',
+      '# Process Builder',
+      '',
+      'JoaxClaw runs multi-agent **processes**: a controller agent orchestrates a graph of agent steps with handoffs and optional conditional routing.',
+      '',
+      '## Prefer a team blueprint',
+      '',
+      'For almost every multi-agent workflow, author a **team blueprint** instead of a raw process — see the `teams-blueprint` skill. You describe the controller plus ordered members (and optional routes) as JSON, and JoaxClaw compiles the executable process graph for you. This is the reliable path: you do not hand-write node coordinates.',
+      '',
+      'So:',
+      '1. Map the request to a controller agent + a sequence of member agents (role + task each).',
+      '2. Follow the `teams-blueprint` skill to write `~/.openclaw/teams/<id>.team.json`.',
+      '3. Tell the user to open **Teams** and run it.',
+      '',
+      '## Raw process files (advanced)',
+      '',
+      'A compiled process lives at `~/.openclaw/processes/<id>.md` as YAML frontmatter plus an embedded `<!--graph-data ...-->` block of nodes (with x/y positions) and edges. Authoring this by hand is error-prone and rarely necessary — only do it when you must control exact node layout. Otherwise use a team blueprint, which generates this file automatically.',
+      '',
+      'When JoaxClaw launches a process it tags the controller session with the label `process:<id>`, which the app uses to link the run back to the process.',
+      '',
+    ],
+  },
+]
+
+// Local install: writes the SKILL.md files directly (gateway must be on this host).
+ipcMain.handle('skills:installNative', async (_event, force?: boolean) => {
+  const results: { slug: string; status: 'installed' | 'up-to-date' | 'error'; error?: string }[] = []
+  for (const skill of NATIVE_SKILLS) {
+    const dir = join(homedir(), '.openclaw', 'skills', skill.slug)
+    const verFile = join(dir, '.joaxclaw-version')
+    try {
+      let existing = ''
+      try { existing = (await readFile(verFile, 'utf8')).trim() } catch { /* not installed yet */ }
+      if (!force && existing === String(skill.version)) {
+        results.push({ slug: skill.slug, status: 'up-to-date' })
+        continue
+      }
+      await mkdir(dir, { recursive: true })
+      await writeFile(join(dir, 'SKILL.md'), skill.lines.join('\n'), 'utf8')
+      await writeFile(verFile, String(skill.version), 'utf8')
+      results.push({ slug: skill.slug, status: 'installed' })
+    } catch (e) {
+      results.push({ slug: skill.slug, status: 'error', error: String(e) })
+    }
+  }
+  return { ok: true, results }
+})
+
+// Lists the bundled native skills (slug + version) for the remote-install flow.
+ipcMain.handle('skills:listNative', () =>
+  NATIVE_SKILLS.map(s => ({ slug: s.slug, version: s.version }))
+)
+
+// Builds a zip archive (SKILL.md at root) for one native skill, for upload to a
+// remote gateway via skills.upload.*. Returns the archive as base64 + its sha256.
+ipcMain.handle('skills:buildArchive', (_event, slug: string) => {
+  const skill = NATIVE_SKILLS.find(s => s.slug === slug)
+  if (!skill) return { ok: false, error: `unknown skill: ${slug}` }
+  const content = Buffer.from(skill.lines.join('\n'), 'utf8')
+  const zip = buildZip([{ name: 'SKILL.md', data: content }])
+  const sha256 = createHash('sha256').update(zip).digest('hex')
+  return { ok: true, slug: skill.slug, version: skill.version, base64: zip.toString('base64'), sha256, sizeBytes: zip.length }
+})
+
 // ── IPC: JoaxClaw local store (~/.joaxclaw/store.json) ───────────────────────
 const joaxclawDir = join(homedir(), '.joaxclaw')
 const joaxclawStorePath = join(joaxclawDir, 'store.json')
@@ -654,12 +885,12 @@ function startOllamaWatch(): void {
 
 ipcMain.handle('ollama:watch', () => { startOllamaWatch(); return { ok: true } })
 
-// Probe an Ollama instance's /api/tags from the MAIN process. Unlike a renderer
+// Probe a local LLM engine health URL from the MAIN process. Unlike a renderer
 // fetch this is not CORS-bound and can reach remote hosts (e.g. the gateway host
-// over a VPN) — so health checks work even when Ollama isn't on the local machine.
-ipcMain.handle('ollama:probe', async (_event, baseUrl: string) => {
-  if (typeof baseUrl !== 'string' || !baseUrl.trim()) return { ok: false }
-  const url = baseUrl.replace(/\/+$/, '') + '/api/tags'
+// over a VPN). The caller passes the full health URL (e.g. .../api/tags for Ollama
+// or .../v1/models for OpenAI-compatible engines like LM Studio / vLLM).
+ipcMain.handle('ollama:probe', async (_event, url: string) => {
+  if (typeof url !== 'string' || !url.trim()) return { ok: false }
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), 3500)
   try {

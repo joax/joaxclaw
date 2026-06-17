@@ -38,13 +38,15 @@ export function resolveOllamaUrl(
 type OllamaProbeApi = { probe?: (url: string) => Promise<{ ok: boolean }> }
 
 async function probe(url: string): Promise<boolean> {
+  // The main process probes the full URL as-is, so build the Ollama health path here.
+  const healthUrl = `${url.replace(/\/+$/, '')}/api/tags`
   const api = (window as unknown as { api?: { ollama?: OllamaProbeApi } })?.api?.ollama
   if (api?.probe) {
-    try { return (await api.probe(url)).ok } catch { return false }
+    try { return (await api.probe(healthUrl)).ok } catch { return false }
   }
   // Non-Electron fallback (CORS-limited, localhost only)
   try {
-    const r = await fetch(`${url.replace(/\/+$/, '')}/api/tags`)
+    const r = await fetch(healthUrl)
     return r.ok
   } catch {
     return false
