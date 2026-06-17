@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Wifi, WifiOff, Heart, Cpu, MemoryStick, ChevronUp } from 'lucide-react'
 import { ModelIcon } from '../ui/ModelIcon'
-import { useConnectionStore } from '../../store/connection'
+import { useConnectionStore, useIsRemoteGateway } from '../../store/connection'
 import { useMetricsStore } from '../../store/metrics'
 import { useSettingsStore } from '../../store/settings'
 import { useSessionsStore } from '../../store/sessions'
@@ -11,6 +11,7 @@ import { formatBytes } from '../../lib/ollama'
 
 export function StatusBar() {
   const { status, lastHeartbeat, heartbeats, uptimeStart } = useConnectionStore()
+  const remoteGateway = useIsRemoteGateway()
   const { metrics, ollamaModels, activeModel } = useMetricsStore()
   const { showGpu, showRam, showHeartbeat, showModelName, toggleMonitor, monitorVisible } = useSettingsStore()
   const sessions = useSessionsStore(s => s.sessions)
@@ -130,8 +131,8 @@ export function StatusBar() {
         </>
       )}
 
-      {/* GPU */}
-      {showGpu && gpu && (
+      {/* GPU — hidden when the gateway is remote (these are the client's stats) */}
+      {showGpu && gpu && !remoteGateway && (
         <>
           <div className="flex items-center gap-1.5">
             <Cpu size={11} />
@@ -147,8 +148,8 @@ export function StatusBar() {
         </>
       )}
 
-      {/* RAM */}
-      {showRam && metrics && (
+      {/* RAM — hidden when the gateway is remote (these are the client's stats) */}
+      {showRam && metrics && !remoteGateway && (
         <>
           <div className="flex items-center gap-1.5">
             <MemoryStick size={11} />

@@ -14,6 +14,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Client hardware metrics are hidden when the gateway is remote.** GPU/CPU/RAM and the local-Ollama model list are read from the client machine (and `localhost:11434`), so they don't describe a remote gateway host. The status bar drops the GPU/RAM chips, and the System Monitor + dashboard Resources panel show a short "these are your client machine" note instead. New `useIsRemoteGateway()` selector in `store/connection.ts`.
 - Release workflow now creates the GitHub Release (with `CHANGELOG.md` notes) in a dedicated job that runs before the platform builds, so the notes can't be raced to an empty body by whichever build finishes first; the Linux/macOS jobs only upload their installer asset.
 
 ## [0.5.0] - 2026-06-17

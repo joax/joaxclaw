@@ -3,7 +3,8 @@ import {
   Send, ChevronDown, Loader2, CheckCircle2, XCircle,
   ArrowRight, Activity, Timer, Cpu, Clock, Zap, UsersRound,
 } from 'lucide-react'
-import { useConnectionStore } from '../../store/connection'
+import { useConnectionStore, useIsRemoteGateway } from '../../store/connection'
+import { gatewayHost } from '../../lib/ollamaHealth'
 import { useChatStore } from '../../store/chat'
 import { useAgentsStore } from '../../store/agents'
 import { useSessionsStore } from '../../store/sessions'
@@ -454,6 +455,27 @@ function CronsSection({ onNavigate }: { onNavigate: (s: NavSection) => void }) {
 
 function ResourcesSection() {
   const { metrics, ollamaModels } = useMetricsStore()
+  const remoteGateway = useIsRemoteGateway()
+  const gwHost = useConnectionStore(s => gatewayHost(s.connection?.url))
+
+  const sectionLabelHdr: React.CSSProperties = { fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text-secondary)' }
+
+  // Resources are read from this client machine; when the gateway is remote they
+  // don't describe the gateway host, so we explain that instead of showing them.
+  if (remoteGateway) {
+    return (
+      <div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
+          <Cpu size={11} style={{ color: 'var(--text-secondary)' }} />
+          <span style={sectionLabelHdr}>Resources</span>
+        </div>
+        <p style={{ fontSize: 11, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+          Gateway runs on <b style={{ color: 'var(--text-primary)', fontFamily: 'monospace' }}>{gwHost}</b>.
+          GPU/CPU/RAM here are from this client machine, not the gateway host — hidden to avoid confusion.
+        </p>
+      </div>
+    )
+  }
 
   if (!metrics) return null
 
