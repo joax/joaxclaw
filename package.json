@@ -34,6 +34,7 @@
     "files": [
       "out/**/*",
       "resources/**/*",
+      "plugins/joaxclaw-fs/**/*",
       "package.json"
     ],
     "mac": {

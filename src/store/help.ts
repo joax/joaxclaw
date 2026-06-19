@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 
-export type HelpTab = 'start' | 'shortcuts' | 'troubleshooting' | 'about'
+export type HelpTab = 'start' | 'shortcuts' | 'gateways' | 'remote-teams' | 'troubleshooting' | 'about'
 
 // Global control for the Help modal so it can be opened from anywhere
 // (nav rail, settings callouts, etc.), optionally deep-linked to a tab.

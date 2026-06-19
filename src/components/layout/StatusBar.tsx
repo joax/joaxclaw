@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Wifi, WifiOff, Heart, Cpu, MemoryStick, ChevronUp } from 'lucide-react'
+import { Wifi, WifiOff, Heart, Cpu, MemoryStick, ChevronUp, Globe, HardDrive } from 'lucide-react'
 import { ModelIcon } from '../ui/ModelIcon'
 import { useConnectionStore, useIsRemoteGateway } from '../../store/connection'
 import { useMetricsStore } from '../../store/metrics'
@@ -7,11 +7,13 @@ import { useSettingsStore } from '../../store/settings'
 import { useSessionsStore } from '../../store/sessions'
 import { useChatStore } from '../../store/chat'
 import { useModelsStore } from '../../store/models'
+import { useHelpStore } from '../../store/help'
 import { formatBytes } from '../../lib/ollama'
 
 export function StatusBar() {
   const { status, lastHeartbeat, heartbeats, uptimeStart } = useConnectionStore()
   const remoteGateway = useIsRemoteGateway()
+  const openHelp = useHelpStore(s => s.openHelp)
   const { metrics, ollamaModels, activeModel } = useMetricsStore()
   const { showGpu, showRam, showHeartbeat, showModelName, toggleMonitor, monitorVisible } = useSettingsStore()
   const sessions = useSessionsStore(s => s.sessions)
@@ -93,6 +95,21 @@ export function StatusBar() {
           <span className="opacity-50" style={{ fontVariantNumeric: 'tabular-nums', fontFamily: 'monospace', minWidth: '4ch' }}>
             · {uptime}
           </span>
+        )}
+        {status === 'connected' && (
+          <button
+            onClick={() => openHelp('gateways')}
+            title={`${remoteGateway ? 'Remote' : 'Local'} gateway — tap for the difference`}
+            className="flex items-center gap-1 transition-opacity hover:opacity-100"
+            style={{
+              border: 'none', background: 'none', cursor: 'pointer', padding: 0, opacity: 0.85,
+              color: remoteGateway ? 'var(--accent)' : 'var(--text-secondary)',
+            }}
+          >
+            <span className="opacity-40" style={{ color: 'var(--text-secondary)' }}>·</span>
+            {remoteGateway ? <Globe size={11} /> : <HardDrive size={11} />}
+            <span>{remoteGateway ? 'Remote' : 'Local'}</span>
+          </button>
         )}
       </div>
 

@@ -30,7 +30,7 @@ interface ConnectionState {
   cancelReconnect: () => void
   saveConnection: (conn: GatewayConnection) => void
   removeConnection: (url: string) => void
-  setOllamaUrls: (gatewayUrl: string, urls: { main?: string; cron?: string }) => void
+  setEngineUrl: (gatewayUrl: string, key: string, url: string) => void
 }
 
 // True when connected to a gateway on another host. Client-side system metrics
@@ -39,6 +39,13 @@ interface ConnectionState {
 // them rather than present a laptop's stats as if they were the gateway's.
 export function useIsRemoteGateway(): boolean {
   return useConnectionStore(s => s.status === 'connected' && !isLocalGateway(gatewayHost(s.connection?.url)))
+}
+
+// Non-hook variant for use inside stores / async logic (e.g. the teams store
+// deciding whether a missing plugin should hard-fail or fall back to local files).
+export function isRemoteGatewayState(): boolean {
+  const s = useConnectionStore.getState()
+  return s.status === 'connected' && !isLocalGateway(gatewayHost(s.connection?.url))
 }
 
 // Reconnect bookkeeping kept outside the store (timers / flags, not UI state).
@@ -132,9 +139,14 @@ export const useConnectionStore = create<ConnectionState>()(
         set(s => ({ savedConnections: s.savedConnections.filter(c => c.url !== url) }))
       },
 
-      setOllamaUrls(gatewayUrl, urls) {
-        const merge = (c: GatewayConnection): GatewayConnection =>
-          c.url === gatewayUrl ? { ...c, ollamaUrls: { ...c.ollamaUrls, ...urls } } : c
+      setEngineUrl(gatewayUrl, key, url) {
+        const merge = (c: GatewayConnection): GatewayConnection => {
+          if (c.url !== gatewayUrl) return c
+          const next = { ...(c.engineUrls ?? {}) }
+          if (url.trim()) next[key] = url.trim()
+          else delete next[key]
+          return { ...c, engineUrls: next }
+        }
         set(s => ({
           connection: s.connection ? merge(s.connection) : s.connection,
           savedConnections: s.savedConnections.map(merge),

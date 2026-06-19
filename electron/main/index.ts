@@ -698,6 +698,47 @@ ipcMain.handle('skills:buildArchive', (_event, slug: string) => {
   return { ok: true, slug: skill.slug, version: skill.version, base64: zip.toString('base64'), sha256, sizeBytes: zip.length }
 })
 
+// ── IPC: joaxclaw-fs plugin install script (for the "Install via agent" flow) ──
+// Builds a self-contained bash script that writes the bundled joaxclaw-fs plugin
+// files to the host (base64 → file, so nothing is downloaded and the bytes can't
+// be garbled), installs the plugin, and restarts the gateway. The renderer hands
+// this to an agent in chat; the agent runs it on the gateway host. No registry,
+// no clone, no skill upload — the code travels inside the chat message. The plugin
+// serves BOTH teams.* and processes.*, so one install covers Teams and Processes.
+const JOAXCLAW_FS_PLUGIN_FILES = ['index.js', 'package.json', 'openclaw.plugin.json']
+
+ipcMain.handle('teams:installScript', async () => {
+  try {
+    const srcDir = join(app.getAppPath(), 'plugins', 'joaxclaw-fs')
+    const lines: string[] = [
+      '# Install the JoaxClaw joaxclaw-fs gateway plugin on this host.',
+      'set -e',
+      'DIR="${OPENCLAW_STATE_DIR:-$HOME/.openclaw}/joaxclaw-fs-plugin"',
+      'mkdir -p "$DIR"',
+    ]
+    for (const name of JOAXCLAW_FS_PLUGIN_FILES) {
+      const data = await readFile(join(srcDir, name))
+      // 76-col-wrapped base64 in a quoted heredoc → no shell expansion, exact bytes.
+      const b64 = data.toString('base64').replace(/(.{76})/g, '$1\n').replace(/\n$/, '')
+      const delim = `B64_${name.replace(/[^A-Za-z0-9]/g, '_').toUpperCase()}`
+      lines.push(`base64 -d > "$DIR/${name}" <<'${delim}'`, b64, delim)
+    }
+    lines.push(
+      'openclaw plugins install --link "$DIR"',
+      'openclaw plugins allow joaxclaw-fs >/dev/null 2>&1 || true',
+      'openclaw plugins list | grep -i joaxclaw-fs || true',
+      'echo "joaxclaw-fs installed. Restarting the gateway in a few seconds to load it."',
+      '# Restart DETACHED + delayed so this command (and your turn) finishes cleanly',
+      '# first — otherwise the restart kills the session mid-call and it hangs as',
+      '# "running". The gateway comes back on its own and JoaxClaw reconnects.',
+      "nohup sh -c 'sleep 4; openclaw gateway restart' >/dev/null 2>&1 &",
+    )
+    return { ok: true, script: lines.join('\n') }
+  } catch (e) {
+    return { ok: false, error: String(e) }
+  }
+})
+
 // ── IPC: JoaxClaw local store (~/.joaxclaw/store.json) ───────────────────────
 const joaxclawDir = join(homedir(), '.joaxclaw')
 const joaxclawStorePath = join(joaxclawDir, 'store.json')

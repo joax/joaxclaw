@@ -67,23 +67,30 @@ For an engine group with a **config** cron provider:
 - `isolatedJobs` = jobs whose model prefix === the **cron** provider id
 - A detected-only cron (running service, not a provider) shows a hint to add a `<engine>-cron` provider, since jobs can only target a configured provider.
 
+## Per-engine URL overrides
+
+`GatewayConnection.engineUrls?: Record<string, string>` (in `types.ts`) maps an engine
+instance **key** (provider id, or `<engine>:<port>` for port-detected) → a client-reachable
+URL. Set via `connection.setEngineUrl(gatewayUrl, key, url)` (empty url clears it). Used by
+`checkInstance(inst, gatewayIsLocal, overrideUrl?)` — the override takes precedence over the
+config baseUrl, which is how a remote gateway's loopback engines become reachable (point the
+override at a tailnet/LAN URL; see the Help → Gateways page).
+
+Both surfaces apply overrides:
+- **Settings → Local LLM** ([../components/gateway/LocalEnginesCard.tsx](../components/gateway/LocalEnginesCard.tsx)) — one editable row per detected engine with **live reachability feedback** (Checking… / Reachable / Unreachable / Unknown) on mount, on edit-commit, and via a Re-check button.
+- **Crons → Local LLM Engines panel** — reads `connection.engineUrls` and passes the override into `checkInstance`.
+
 ## Status / TODO (resume here)
 
 Done:
 - Config + default-port + Ollama-cron-companion detection, generalized across engines.
 - Generalized main-process probe (full URL, `/api/tags` vs `/v1/models`).
-- New `LocalEnginesPanel` replacing the Ollama-only panel.
+- `LocalEnginesPanel` (crons) replacing the Ollama-only panel.
+- **Settings "Local LLM" tab** (was "Ollama") with `LocalEnginesCard`: per-engine URL overrides (`engineUrls` / `setEngineUrl`) + live probe feedback. Removed `OllamaEndpointsCard`/`OllamaUrlRow`/`WhyTwoOllamasOverlay` and `connection.ollamaUrls`/`setOllamaUrls`.
 - Validated on a local gateway (only Ollama up → shown correctly; other engines absent → no false positives).
 
 Deferred:
-- **Settings → "Ollama Endpoints" card is still Ollama-only.** It edits per-connection
-  `connection.ollamaUrls.{main,cron}` overrides. To generalize, move to a per-provider
-  URL map (e.g. `connection.engineUrls: Record<providerId, string>`) and render a row per
-  detected engine. Touches: `GatewayView.tsx` (OllamaEndpointsCard), `store/connection.ts`
-  (`setOllamaUrls` → `setEngineUrl`), `types.ts` (`GatewayConnection`).
-- **Remote-gateway liveness** for non-loopback instances relies on the engine being on a
-  client-reachable host; loopback-on-server stays `unknown`. A gateway-side probe RPC would
-  fix this (no such RPC exists today; the gateway only probes during cron preflight).
-- **Cron-companion ports** are hardcoded for Ollama only (`:11435`). Other engines rely on a
-  declared `<engine>-cron` provider.
-- `checkOllama` in `ollamaHealth.ts` is dead — remove when convenient.
+- **Remote-gateway liveness** for loopback instances relies on a client-reachable override URL; without one it stays `unknown`. A gateway-side probe RPC would remove the need for the override (none exists today; the gateway only probes during cron preflight).
+- **Cron-companion ports** are hardcoded for Ollama only (`:11435`). Other engines rely on a declared `<engine>-cron` provider.
+- **Per-engine model listing** — Settings still only lists *local* Ollama models (`Ollama Models (local)` card, hidden when remote). Listing each engine's `/models` is unimplemented.
+- `checkOllama`/`resolveOllamaUrl` in `ollamaHealth.ts` may now be dead — remove when convenient.
