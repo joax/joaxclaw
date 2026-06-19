@@ -7,15 +7,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-06-19
+
 ### Added
 
+- **Teams & Processes work over a remote gateway** via a new bundled gateway plugin, **`joaxclaw-fs`** ([plugins/joaxclaw-fs/](plugins/joaxclaw-fs/)). Team blueprints (`~/.openclaw/teams`) and process definitions/runs (`~/.openclaw/processes`) are files on the gateway host; the app used to read them only over local file IPC, so they were invisible on a remote gateway. The plugin registers `teams.*` and `processes.*` (read/write, operator-scoped) over the WebSocket. Both stores now probe for it and use an **RPC backend** when present (local *and* remote, incl. items authored by agents on the host), falling back to local files on a local gateway. Covers both features with one install.
+- **"Install via agent"** — on a remote Teams/Processes screen, one click hands an agent on the gateway host a self-contained script (the plugin's files travel **base64-embedded inside the chat message** — no clone, npm, registry, or upload) that installs `joaxclaw-fs` and restarts the gateway. You just approve the command. A "Manual steps" path and Help → **Remote Teams** page document the same install.
 - **Scoped channel routing** — agent bindings can now target more than the whole channel: a specific **account**, a **group/peer** (by id), a **Slack team**, or a **Discord guild**. A binding editor on each channel card builds the `match` and lists existing bindings with their scope; the gateway resolves the most specific match first (peer → guild → team → account → channel → default).
 - **Multi-account channels** — add/name/remove additional accounts per channel (`channels.<id>.accounts.<id>`) and set the default account, directly from the channel card. Per-account credentials are editable via **Edit → Advanced**.
+- **Secret-scan pre-commit gate** ([scripts/check-secrets.mjs](scripts/check-secrets.mjs)) — a dependency-free scanner runs first in the pre-commit hook over staged content and blocks commits containing keys/tokens/credentials (private keys, AWS/OpenAI/Google/GitHub/Slack/Stripe/etc., JWTs, `user:pass@` URLs, and the openclaw gateway-token format), with matches redacted in output. `npm run audit-secrets` scans every tracked file.
 
 ### Changed
 
 - **Client hardware metrics are hidden when the gateway is remote.** GPU/CPU/RAM and the local-Ollama model list are read from the client machine (and `localhost:11434`), so they don't describe a remote gateway host. The status bar drops the GPU/RAM chips, and the System Monitor + dashboard Resources panel show a short "these are your client machine" note instead. New `useIsRemoteGateway()` selector in `store/connection.ts`.
+- Teams and Processes now **re-load whenever the gateway (re)connects**, so the "install the plugin" notice re-probes and clears itself automatically after an install + gateway restart — no manual retry.
+- Polished the team designer (graph editor + Teams view).
 - Release workflow now creates the GitHub Release (with `CHANGELOG.md` notes) in a dedicated job that runs before the platform builds, so the notes can't be raced to an empty body by whichever build finishes first; the Linux/macOS jobs only upload their installer asset.
+
+### Notes
+
+- The `joaxclaw-fs` plugin ships in-repo and isn't published to a registry; remote installs use the in-app **Install via agent** flow or a manual `openclaw plugins install --link`. Publishing for one-command installs is a possible follow-up.
 
 ## [0.5.0] - 2026-06-17
 
