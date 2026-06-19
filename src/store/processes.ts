@@ -3,6 +3,7 @@ import type { ProcessDef } from '../lib/processParser'
 import { parseProcessFile } from '../lib/processParser'
 import { compileProcessToJob, buildLaunchPrompt } from '../lib/processCompiler'
 import { gatewayClient } from '../lib/gateway'
+import { isRemoteGatewayState } from './connection'
 import { nanoid } from '../lib/nanoid'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -22,6 +23,92 @@ export function processesDir(): string {
 
 export function runsDir(): string {
   return `${processesDir()}/.runs`
+}
+
+// ── Storage backends (mirrors src/store/teams.ts) ──────────────────────────────
+// Process definitions (<id>.md) and run state (.runs/<id>.json) live as files on
+// the gateway host. We reach them via the joaxclaw-fs plugin's processes.* RPC
+// (works local AND remote, and sees agent-authored processes), or — on a LOCAL
+// gateway without the plugin — direct Electron file I/O. On a REMOTE gateway with
+// no plugin there's no path to the host's files, so the view shows install help.
+
+interface ProcDefRaw { id: string; md: string | null }
+interface ProcRunRaw { id: string; run: string | null }
+interface ProcessesBackend {
+  kind: 'rpc' | 'file'
+  list: () => Promise<{ defs: ProcDefRaw[]; runs: ProcRunRaw[] }>
+  getDef: (id: string) => Promise<string | null>
+  setDef: (id: string, md: string) => Promise<void>
+  deleteDef: (id: string) => Promise<void>
+  setRun: (id: string, run: string) => Promise<void>
+}
+
+const idFromMdPath = (p: string): string => (p.split('/').pop() ?? p).replace(/\.md$/, '')
+const mdPathFor = (id: string): string => `${processesDir()}/${id}.md`
+const isUnknownMethod = (e: unknown): boolean => /unknown method/i.test(e instanceof Error ? e.message : String(e))
+
+const rpcBackend: ProcessesBackend = {
+  kind: 'rpc',
+  async list() {
+    const r = await gatewayClient.request<{ defs?: ProcDefRaw[]; runs?: ProcRunRaw[] }>('processes.list')
+    return { defs: r.defs ?? [], runs: r.runs ?? [] }
+  },
+  async getDef(id) {
+    const r = await gatewayClient.request<{ md?: string | null }>('processes.get', { id })
+    return r.md ?? null
+  },
+  async setDef(id, md) { await gatewayClient.request('processes.set', { id, md }) },
+  async deleteDef(id) { await gatewayClient.request('processes.delete', { id }) },
+  async setRun(id, run) { await gatewayClient.request('processes.runs.set', { id, run }) },
+}
+
+async function readFileText(p: string): Promise<string | null> {
+  const api = fileApi(); if (!api) return null
+  const r = await api.read(p)
+  return r.ok && r.text != null ? r.text : null
+}
+const fileBackend: ProcessesBackend = {
+  kind: 'file',
+  async list() {
+    const api = fileApi(); if (!api) throw new Error('File API not available')
+    const { ok, files, error } = await api.listdir(processesDir(), '.md')
+    if (!ok) throw new Error(error ?? 'Failed to list processes')
+    const defs = await Promise.all(files.map(async f => ({ id: idFromMdPath(f.path), md: await readFileText(f.path) })))
+    const runsRes = await api.listdir(runsDir(), '.json').catch(() => ({ ok: false as const, files: [] as { name: string; path: string }[] }))
+    const runs = runsRes.ok
+      ? await Promise.all(runsRes.files.map(async f => ({ id: f.name.replace(/\.json$/, ''), run: await readFileText(f.path) })))
+      : []
+    return { defs, runs }
+  },
+  async getDef(id) { return readFileText(mdPathFor(id)) },
+  async setDef(id, md) {
+    const api = fileApi(); if (!api) throw new Error('File API not available')
+    const r = await api.write(mdPathFor(id), md)
+    if (!r.ok) throw new Error(r.error ?? 'Failed to write process')
+  },
+  async deleteDef(id) {
+    const api = fileApi(); if (!api) return
+    await api.delete(mdPathFor(id)).catch(() => {})
+    await api.delete(`${runsDir()}/${id}.json`).catch(() => {})
+  },
+  async setRun(id, run) {
+    const api = fileApi(); if (!api) return
+    await api.write(`${runsDir()}/${id}.json`, run).catch(() => {})
+  },
+}
+
+// Prefer the plugin (probe processes.list); fall back to local files on a local
+// gateway, or signal needsPlugin on a remote one.
+async function resolveBackend(): Promise<{ backend: ProcessesBackend | null; needsPlugin: boolean }> {
+  try {
+    await rpcBackend.list()
+    return { backend: rpcBackend, needsPlugin: false }
+  } catch (e) {
+    if (!isUnknownMethod(e)) throw e
+    return isRemoteGatewayState()
+      ? { backend: null, needsPlugin: true }
+      : { backend: fileBackend, needsPlugin: false }
+  }
 }
 
 export type RunStatus = 'idle' | 'running' | 'done' | 'error'
@@ -65,10 +152,10 @@ const _spawnCallIds = new Map<string, string>()
 // ── Persist run state to disk ─────────────────────────────────────────────────
 
 async function persistRun(run: ProcessRun) {
-  const api = fileApi()
-  if (!api) return
+  const backend = useProcessesStore.getState()._backend
+  if (!backend) return
   try {
-    await api.write(`${runsDir()}/${run.processId}.json`, JSON.stringify(run, null, 2))
+    await backend.setRun(run.processId, JSON.stringify(run, null, 2))
   } catch { /* non-critical */ }
 }
 
@@ -80,6 +167,10 @@ interface ProcessesState {
   loading: boolean
   error: string | null
   _subscribed: boolean
+  // True on a remote gateway when the joaxclaw-fs plugin isn't installed → the
+  // view shows install instructions instead of the (unreachable) process list.
+  needsPlugin: boolean
+  _backend: ProcessesBackend | null
 
   load:   () => Promise<void>
   reload: (path: string) => Promise<void>
@@ -98,6 +189,8 @@ export const useProcessesStore = create<ProcessesState>((set, get) => ({
   loading: false,
   error: null,
   _subscribed: false,
+  needsPlugin: false,
+  _backend: null,
 
   // ── Event subscription ────────────────────────────────────────────────────────
 
@@ -432,39 +525,36 @@ export const useProcessesStore = create<ProcessesState>((set, get) => ({
 
   async load() {
     get()._startEventListening()  // ensure we catch externally-started processes
-    set({ loading: true, error: null })
-    const api = fileApi()
-    if (!api) { set({ loading: false, error: 'File API not available' }); return }
-
+    set({ loading: true, error: null, needsPlugin: false })
     try {
-      const { ok, files, error } = await api.listdir(processesDir(), '.md')
-      if (!ok) { set({ loading: false, error: error ?? 'Failed to list processes' }); return }
+      const { backend, needsPlugin } = await resolveBackend()
+      if (!backend) {
+        set({ loading: false, needsPlugin, _backend: null, processes: [], runs: {} })
+        return
+      }
+
+      const { defs: rawDefs, runs: rawRuns } = await backend.list()
 
       const defs: ProcessDef[] = []
-      for (const f of files) {
-        const res = await api.read(f.path)
-        if (!res.ok || !res.text) continue
-        const def = parseProcessFile(f.path, res.text)
+      for (const d of rawDefs) {
+        if (!d.md) continue
+        const def = parseProcessFile(mdPathFor(d.id), d.md)
         if (def) defs.push(def)
       }
 
       // Restore persisted run states
       const restoredRuns: Record<string, ProcessRun> = {}
-      const runsResult = await api.listdir(runsDir(), '.json').catch(() => ({ ok: false as const, files: [] }))
-      if (runsResult.ok) {
-        for (const f of runsResult.files) {
-          try {
-            const res = await api.read(f.path)
-            if (!res.ok || !res.text) continue
-            const run = JSON.parse(res.text) as ProcessRun
-            if (run.status === 'running') {
-              run.status = 'error'
-              run.error = 'Interrupted — app was restarted'
-              run.finishedAt = Date.now()
-            }
-            restoredRuns[run.processId] = run
-          } catch { /* skip corrupt run files */ }
-        }
+      for (const r of rawRuns) {
+        if (!r.run) continue
+        try {
+          const run = JSON.parse(r.run) as ProcessRun
+          if (run.status === 'running') {
+            run.status = 'error'
+            run.error = 'Interrupted — app was restarted'
+            run.finishedAt = Date.now()
+          }
+          restoredRuns[run.processId] = run
+        } catch { /* skip corrupt run files */ }
       }
 
       set(s => {
@@ -475,7 +565,7 @@ export const useProcessesStore = create<ProcessesState>((set, get) => ({
         for (const [id, run] of Object.entries(s.runs)) {
           if (run.status === 'running') merged[id] = run
         }
-        return { processes: defs, runs: merged, loading: false }
+        return { _backend: backend, processes: defs, runs: merged, loading: false, needsPlugin: false }
       })
     } catch (e) {
       set({ loading: false, error: String(e) })
@@ -483,37 +573,36 @@ export const useProcessesStore = create<ProcessesState>((set, get) => ({
   },
 
   async reload(path) {
-    const api = fileApi()
-    if (!api) return
-    const res = await api.read(path)
-    if (!res.ok || !res.text) return
-    const def = parseProcessFile(path, res.text)
+    const backend = get()._backend
+    if (!backend) return
+    const id = idFromMdPath(path)
+    const md = await backend.getDef(id).catch(() => null)
+    if (!md) return
+    const def = parseProcessFile(mdPathFor(id), md)
     if (!def) return
     set(s => ({
-      processes: s.processes.some(p => p.path === path)
-        ? s.processes.map(p => p.path === path ? def : p)
+      processes: s.processes.some(p => p.path === def.path)
+        ? s.processes.map(p => p.path === def.path ? def : p)
         : [...s.processes, def],
     }))
   },
 
   async save(path, text) {
-    const api = fileApi()
-    if (!api) return false
-    const res = await api.write(path, text)
-    if (!res.ok) return false
+    let backend = get()._backend
+    if (!backend) { const r = await resolveBackend().catch(() => null); backend = r?.backend ?? null }
+    if (!backend) { set({ error: 'Process storage is unavailable on this gateway' }); return false }
+    try {
+      await backend.setDef(idFromMdPath(path), text)
+    } catch (e) { set({ error: String(e) }); return false }
     await get().reload(path)
     return true
   },
 
   async delete(path) {
-    const api = fileApi()
-    if (!api || typeof api.delete !== 'function') {
-      set({ error: 'Delete not available — please restart the app' })
-      return false
-    }
+    const backend = get()._backend
+    if (!backend) { set({ error: 'Process storage is unavailable on this gateway' }); return false }
     try {
-      const res = await api.delete(path)
-      if (!res.ok) { set({ error: res.error ?? 'Failed to delete process' }); return false }
+      await backend.deleteDef(idFromMdPath(path))
       set(s => ({ processes: s.processes.filter(p => p.path !== path), error: null }))
       return true
     } catch (e) {

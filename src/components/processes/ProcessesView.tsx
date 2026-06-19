@@ -2,12 +2,14 @@ import { useEffect, useState } from 'react'
 import { Play, Plus, RefreshCw, GitBranch, Users, ArrowRight, FileText, Loader2, CheckCircle2, XCircle, Clock, X, Trash2, ChevronDown } from 'lucide-react'
 import { useProcessesStore, processesDir, type ProcessRun } from '../../store/processes'
 import { useAgentsStore } from '../../store/agents'
+import { useConnectionStore } from '../../store/connection'
 import { ModelIcon } from '../ui/ModelIcon'
 import { Btn } from '../ui/Btn'
 import type { ProcessDef } from '../../lib/processParser'
 import { processTemplate, serializeProcess } from '../../lib/processParser'
 import { ProcessGraphEditor } from './ProcessGraphEditor'
 import { ProcessMonitor } from './ProcessMonitor'
+import { RemotePluginNotice } from '../common/RemotePluginNotice'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -409,17 +411,23 @@ function NewProcessModal({ onDone }: { onDone: () => void }) {
 
 // ── Main view ─────────────────────────────────────────────────────────────────
 
-export function ProcessesView() {
-  const { processes, runs, loading, error, load, delete: deleteProcess } = useProcessesStore()
+export function ProcessesView({ onOpenChat }: { onOpenChat?: () => void } = {}) {
+  const { processes, runs, loading, error, needsPlugin, load, delete: deleteProcess } = useProcessesStore()
   const { fetch: fetchAgents } = useAgentsStore()
+  const status = useConnectionStore(s => s.status)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [search,     setSearch    ] = useState('')
   const [showNew,    setShowNew   ] = useState(false)
 
+  // (Re)load whenever the gateway connects — so the needsPlugin notice re-probes
+  // and clears itself after the joaxclaw-fs plugin is installed + the gateway
+  // restarts (the "Install via agent" flow), with no manual Retry needed.
   useEffect(() => {
+    if (status !== 'connected') return
     load()
     fetchAgents()
-  }, [])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status])
 
   useEffect(() => {
     if (!selectedId && processes.length > 0) setSelectedId(processes[0].id)
@@ -433,6 +441,8 @@ export function ProcessesView() {
   )
 
   const selectedProcess = processes.find(p => p.id === selectedId)
+
+  if (needsPlugin) return <RemotePluginNotice feature="Processes" onRetry={() => load()} onOpenChat={onOpenChat} />
 
   return (
     <div className="flex flex-1 min-h-0">

@@ -27,6 +27,7 @@ export function LocalEnginesPanel({ jobs }: { jobs: CronJob[] }) {
   const providers = useModelsStore(s => s.providers)
   const loadModels = useModelsStore(s => s.load)
   const connectionUrl = useConnectionStore(s => s.connection?.url)
+  const engineUrls = useConnectionStore(s => s.connection?.engineUrls)
 
   const [groups, setGroups] = useState<EngineGroup[]>([])
   const [statuses, setStatuses] = useState<Record<string, EngineStatus>>({})
@@ -49,7 +50,7 @@ export function LocalEnginesPanel({ jobs }: { jobs: CronJob[] }) {
       }
       const grouped = groupEngines(instances)
       const next: Record<string, EngineStatus> = {}
-      await Promise.all(instances.map(async i => { next[i.key] = await checkInstance(i, local) }))
+      await Promise.all(instances.map(async i => { next[i.key] = await checkInstance(i, local, engineUrls?.[i.key]) }))
       if (cancelled) return
       setGroups(grouped)
       setStatuses(next)
@@ -57,7 +58,7 @@ export function LocalEnginesPanel({ jobs }: { jobs: CronJob[] }) {
     run()
     const id = setInterval(run, 6000)
     return () => { cancelled = true; clearInterval(id) }
-  }, [providers, connectionUrl, remote])
+  }, [providers, connectionUrl, remote, engineUrls])
 
   // Auto-expand once if a confirmed problem exists (cron down, or job contention).
   const anyIssue = groups.some(g => {

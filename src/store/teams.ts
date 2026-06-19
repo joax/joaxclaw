@@ -27,6 +27,8 @@ import {
   appendRevision,
 } from '../lib/teamBlueprint'
 import { buildTeamProcessDef, extractMembersFromDef } from '../lib/teamCompiler'
+import { gatewayClient } from '../lib/gateway'
+import { isRemoteGatewayState } from './connection'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const fileApi = () => (window as any)?.api?.file as {
@@ -43,12 +45,123 @@ export function teamsDir(): string {
   return `${homedir()}/.openclaw/teams`
 }
 
+// ── Storage backends ───────────────────────────────────────────────────────────
+//
+// Teams live as files in the gateway host's ~/.openclaw/teams. We reach them two
+// ways: the `teams-fs` gateway plugin (teams.* RPC over the WS — works local AND
+// remote, and sees agent-authored teams), or, when that plugin isn't installed on
+// a LOCAL gateway, direct Electron file I/O. On a REMOTE gateway with no plugin
+// there's no path to the host's files, so the view shows install instructions.
+//
+// A backend deals only in raw artifact text; all blueprint/process (de)serialization
+// stays in the store so both backends share identical logic.
+
+interface RawTeam { id: string; blueprint: string | null; md: string | null; revisions: string | null }
+interface TeamParts { blueprint?: string; md?: string; revisions?: string }
+
+interface TeamsBackend {
+  kind: 'rpc' | 'file'
+  list: () => Promise<RawTeam[]>
+  read: (id: string) => Promise<RawTeam>
+  write: (id: string, parts: TeamParts) => Promise<void>
+  remove: (id: string) => Promise<void>
+}
+
+function isUnknownMethod(e: unknown): boolean {
+  return /unknown method/i.test(e instanceof Error ? e.message : String(e))
+}
+
+// Plugin backend — rides the existing gateway WebSocket.
+const rpcBackend: TeamsBackend = {
+  kind: 'rpc',
+  async list() {
+    const r = await gatewayClient.request<{ teams: RawTeam[] }>('teams.list')
+    return r.teams ?? []
+  },
+  async read(id) {
+    const r = await gatewayClient.request<Partial<RawTeam>>('teams.get', { id })
+    return { id, blueprint: r.blueprint ?? null, md: r.md ?? null, revisions: r.revisions ?? null }
+  },
+  async write(id, parts) { await gatewayClient.request('teams.set', { id, ...parts }) },
+  async remove(id) { await gatewayClient.request('teams.delete', { id }) },
+}
+
+// Local-file backend — only valid when the gateway is on this machine.
+async function readFileText(path: string): Promise<string | null> {
+  const api = fileApi(); if (!api) return null
+  const r = await api.read(path)
+  return r.ok && r.text != null ? r.text : null
+}
+const fileBackend: TeamsBackend = {
+  kind: 'file',
+  async list() {
+    const api = fileApi(); if (!api) throw new Error('File API not available')
+    const dir = teamsDir()
+    const { ok, files, error } = await api.listdir(dir)
+    if (!ok) throw new Error(error ?? 'Failed to list teams directory')
+    const ids = new Set<string>()
+    for (const f of files) {
+      for (const suf of ['.team.json', '.md', '.revisions.json']) {
+        if (f.name.endsWith(suf)) ids.add(f.name.slice(0, -suf.length))
+      }
+    }
+    return Promise.all([...ids].map(id => fileBackend.read(id)))
+  },
+  async read(id) {
+    const dir = teamsDir()
+    const [blueprint, md, revisions] = await Promise.all([
+      readFileText(blueprintPath(id, dir)),
+      readFileText(compiledMdPath(id, dir)),
+      readFileText(revisionsPath(id, dir)),
+    ])
+    return { id, blueprint, md, revisions }
+  },
+  async write(id, parts) {
+    const api = fileApi(); if (!api) throw new Error('File API not available')
+    const dir = teamsDir()
+    const writes: Promise<{ ok: boolean; error?: string }>[] = []
+    if (parts.blueprint !== undefined) writes.push(api.write(blueprintPath(id, dir), parts.blueprint))
+    if (parts.md !== undefined) writes.push(api.write(compiledMdPath(id, dir), parts.md))
+    if (parts.revisions !== undefined) writes.push(api.write(revisionsPath(id, dir), parts.revisions))
+    const results = await Promise.all(writes)
+    const failed = results.find(r => !r.ok)
+    if (failed) throw new Error(failed.error ?? 'Failed to write team files')
+  },
+  async remove(id) {
+    const api = fileApi(); if (!api) return
+    const dir = teamsDir()
+    await Promise.all([
+      api.delete(blueprintPath(id, dir)).catch(() => {}),
+      api.delete(compiledMdPath(id, dir)).catch(() => {}),
+      api.delete(revisionsPath(id, dir)).catch(() => {}),
+    ])
+  },
+}
+
+// Pick the backend: prefer the plugin (probe teams.list). If it's missing, fall
+// back to local files on a local gateway, or signal `needsPlugin` on a remote one.
+async function resolveBackend(): Promise<{ backend: TeamsBackend | null; needsPlugin: boolean }> {
+  try {
+    await rpcBackend.list()
+    return { backend: rpcBackend, needsPlugin: false }
+  } catch (e) {
+    if (!isUnknownMethod(e)) throw e
+    return isRemoteGatewayState()
+      ? { backend: null, needsPlugin: true }
+      : { backend: fileBackend, needsPlugin: false }
+  }
+}
+
 interface TeamsState {
   blueprints: TeamBlueprint[]
   compiledDefs: Record<string, ProcessDef>   // id → compiled ProcessDef
   revisions: Record<string, TeamRevision[]>  // id → revision log (newest last, max 20)
   loading: boolean
   error: string | null
+  // True on a remote gateway when the teams-fs plugin isn't installed → the view
+  // shows install instructions instead of the (unreachable) team list.
+  needsPlugin: boolean
+  backend: TeamsBackend | null
 
   load: () => Promise<void>
 
@@ -78,83 +191,67 @@ export const useTeamsStore = create<TeamsState>((set, get) => ({
   revisions: {},
   loading: false,
   error: null,
+  needsPlugin: false,
+  backend: null,
 
   // ── Load ──────────────────────────────────────────────────────────────────────
 
   async load() {
-    set({ loading: true, error: null })
-    const api = fileApi()
-    if (!api) { set({ loading: false, error: 'File API not available' }); return }
-
+    set({ loading: true, error: null, needsPlugin: false })
     try {
-      const dir = teamsDir()
-      // Get all files in the teams directory (no extension filter)
-      const { ok, files, error } = await api.listdir(dir)
-      if (!ok) { set({ loading: false, error: error ?? 'Failed to list teams directory' }); return }
+      const { backend, needsPlugin } = await resolveBackend()
+      if (!backend) {
+        set({ loading: false, needsPlugin, backend: null, blueprints: [], compiledDefs: {} })
+        return
+      }
 
-      const jsonFiles = files.filter(f => f.name.endsWith('.team.json'))
-      const mdFiles   = files.filter(f => f.name.endsWith('.md'))
-
+      const raw = await backend.list()
       const blueprints: TeamBlueprint[] = []
       const compiledDefs: Record<string, ProcessDef> = {}
-      const knownIds = new Set<string>()
 
-      // ── 1. Load from .team.json (primary) ────────────────────────────────────
+      for (const t of raw) {
+        // mdPath is a nominal label for the ProcessDef; actual I/O goes through the backend by id.
+        const mdPath = compiledMdPath(t.id, teamsDir())
 
-      for (const f of jsonFiles) {
-        const res = await api.read(f.path)
-        if (!res.ok || !res.text) continue
-        const bp = parseBlueprint(res.text)
-        if (!bp) continue
+        if (t.blueprint) {
+          const bp = parseBlueprint(t.blueprint)
+          if (!bp) continue
+          blueprints.push(bp)
 
-        blueprints.push(bp)
-        knownIds.add(bp.id)
-
-        // Load or recompile the .md
-        const mdPath = compiledMdPath(bp.id, dir)
-        const mdRes = await api.read(mdPath)
-        if (mdRes.ok && mdRes.text) {
-          const def = parseProcessFile(mdPath, mdRes.text)
-          if (def) { compiledDefs[bp.id] = def; continue }
+          let def = t.md ? parseProcessFile(mdPath, t.md) : null
+          if (!def) {
+            // .md missing or corrupt — recompile and persist
+            def = buildTeamProcessDef(bp, mdPath)
+            await backend.write(bp.id, { md: serializeProcess(def) })
+          }
+          compiledDefs[bp.id] = def
+        } else if (t.md) {
+          // Legacy team with only a compiled .md — reconstruct + persist a blueprint.
+          const def = parseProcessFile(mdPath, t.md)
+          if (!def) continue
+          const members = extractMembersFromDef(def)
+          const now = Date.now()
+          const bp: TeamBlueprint = {
+            schemaVersion: TEAM_SCHEMA_VERSION,
+            id: def.id,
+            name: def.name,
+            description: def.description,
+            controllerAgentId: def.controllerAgentId ?? '',
+            members,
+            outputContract: def.outputContract,
+            tags: def.tags,
+            createdAt: now,
+            updatedAt: now,
+            version: 1,
+            graphCustomized: false,
+          }
+          await backend.write(bp.id, { blueprint: serializeBlueprint(bp) })
+          blueprints.push(bp)
+          compiledDefs[bp.id] = def
         }
-        // .md missing or corrupt — recompile
-        const def = buildTeamProcessDef(bp, mdPath)
-        await api.write(mdPath, serializeProcess(def))
-        compiledDefs[bp.id] = def
       }
 
-      // ── 2. Migrate legacy .md-only teams (no .team.json) ─────────────────────
-
-      for (const f of mdFiles) {
-        const res = await api.read(f.path)
-        if (!res.ok || !res.text) continue
-        const def = parseProcessFile(f.path, res.text)
-        if (!def || knownIds.has(def.id)) continue
-
-        // Reconstruct a blueprint from the compiled .md
-        const members = extractMembersFromDef(def)
-        const now = Date.now()
-        const bp: TeamBlueprint = {
-          schemaVersion: TEAM_SCHEMA_VERSION,
-          id: def.id,
-          name: def.name,
-          description: def.description,
-          controllerAgentId: def.controllerAgentId ?? '',
-          members,
-          outputContract: def.outputContract,
-          tags: def.tags,
-          createdAt: now,
-          updatedAt: now,
-          version: 1,
-          graphCustomized: false,
-        }
-        await api.write(blueprintPath(bp.id, dir), serializeBlueprint(bp))
-        blueprints.push(bp)
-        compiledDefs[bp.id] = def
-        knownIds.add(bp.id)
-      }
-
-      set({ blueprints, compiledDefs, loading: false })
+      set({ backend, blueprints, compiledDefs, loading: false, needsPlugin: false })
     } catch (e) {
       set({ loading: false, error: String(e) })
     }
@@ -163,36 +260,32 @@ export const useTeamsStore = create<TeamsState>((set, get) => ({
   // ── saveBlueprint ─────────────────────────────────────────────────────────────
 
   async saveBlueprint(bp) {
-    const api = fileApi()
-    if (!api) { set({ error: 'File API not available' }); return false }
+    let backend = get().backend
+    if (!backend) { const r = await resolveBackend().catch(() => null); backend = r?.backend ?? null }
+    if (!backend) { set({ error: 'Teams storage is unavailable on this gateway' }); return false }
 
-    const dir = teamsDir()
-    const jsonPath = blueprintPath(bp.id, dir)
-    const mdPath   = compiledMdPath(bp.id, dir)
-    const revPath  = revisionsPath(bp.id, dir)
+    const mdPath = compiledMdPath(bp.id, teamsDir())
 
     // Recompile .md from blueprint (graph customization is reset)
     const bpToSave: TeamBlueprint = { ...bp, graphCustomized: false }
     const def = buildTeamProcessDef(bpToSave, mdPath)
     const mdText = serializeProcess(def)
 
-    // Build updated revision log (load from file on first access for this session)
+    // Build updated revision log (load on first access for this session)
     let prevRevs: TeamRevision[] = get().revisions[bpToSave.id] ?? []
     if (prevRevs.length === 0) {
-      const loaded = await api.read(revPath)
-      if (loaded.ok && loaded.text) prevRevs = parseRevisions(loaded.text)
+      const loaded = await backend.read(bpToSave.id).catch(() => null)
+      if (loaded?.revisions) prevRevs = parseRevisions(loaded.revisions)
     }
     const newRevisions = appendRevision(prevRevs, bpToSave)
 
-    const [jsonRes, mdRes, revRes] = await Promise.all([
-      api.write(jsonPath, serializeBlueprint(bpToSave)),
-      api.write(mdPath, mdText),
-      api.write(revPath, serializeRevisions(newRevisions)),
-    ])
-
-    if (!jsonRes.ok) { set({ error: jsonRes.error ?? 'Failed to save blueprint' }); return false }
-    if (!mdRes.ok)   { set({ error: mdRes.error  ?? 'Failed to write compiled process' }); return false }
-    if (!revRes.ok) console.warn('Revision history write failed:', revRes.error)
+    try {
+      await backend.write(bpToSave.id, {
+        blueprint: serializeBlueprint(bpToSave),
+        md: mdText,
+        revisions: serializeRevisions(newRevisions),
+      })
+    } catch (e) { set({ error: String(e) }); return false }
 
     set(s => ({
       error: null,
@@ -208,41 +301,36 @@ export const useTeamsStore = create<TeamsState>((set, get) => ({
   // ── saveCompiledDef ───────────────────────────────────────────────────────────
 
   async saveCompiledDef(def) {
-    const api = fileApi()
-    if (!api) { set({ error: 'File API not available' }); return false }
+    const backend = get().backend
+    if (!backend) { set({ error: 'Teams storage is unavailable on this gateway' }); return false }
 
     const mdText = serializeProcess(def)
-    const mdRes = await api.write(def.path, mdText)
-    if (!mdRes.ok) { set({ error: mdRes.error ?? 'Failed to save graph' }); return false }
-
-    const dir = teamsDir()
-    const jsonPath = blueprintPath(def.id, dir)
-    const revPath  = revisionsPath(def.id, dir)
-
     const bp = get().blueprints.find(b => b.id === def.id)
+
     if (!bp) {
-      // Blueprint not in memory — just update the compiled def
+      // Blueprint not in memory — just persist the compiled def
+      try { await backend.write(def.id, { md: mdText }) }
+      catch (e) { set({ error: String(e) }); return false }
       set(s => ({ compiledDefs: { ...s.compiledDefs, [def.id]: def }, error: null }))
       return true
     }
 
     const bpUpdated: TeamBlueprint = { ...bp, graphCustomized: true, updatedAt: Date.now() }
 
-    // Load revision history if not yet cached for this session
     let prevRevs: TeamRevision[] = get().revisions[def.id] ?? []
     if (prevRevs.length === 0) {
-      const loaded = await api.read(revPath)
-      if (loaded.ok && loaded.text) prevRevs = parseRevisions(loaded.text)
+      const loaded = await backend.read(def.id).catch(() => null)
+      if (loaded?.revisions) prevRevs = parseRevisions(loaded.revisions)
     }
     const newRevisions = appendRevision(prevRevs, bpUpdated)
 
-    const [jsonRes, revRes] = await Promise.all([
-      api.write(jsonPath, serializeBlueprint(bpUpdated)),
-      api.write(revPath, serializeRevisions(newRevisions)),
-    ])
-
-    if (!jsonRes.ok) { set({ error: jsonRes.error ?? 'Failed to persist blueprint after graph save' }); return false }
-    if (!revRes.ok) console.warn('Revision history write failed (graph save):', revRes.error)
+    try {
+      await backend.write(def.id, {
+        md: mdText,
+        blueprint: serializeBlueprint(bpUpdated),
+        revisions: serializeRevisions(newRevisions),
+      })
+    } catch (e) { set({ error: String(e) }); return false }
 
     set(s => ({
       compiledDefs: { ...s.compiledDefs, [def.id]: def },
@@ -256,14 +344,10 @@ export const useTeamsStore = create<TeamsState>((set, get) => ({
   // ── deleteTeam ────────────────────────────────────────────────────────────────
 
   async deleteTeam(id) {
-    const api = fileApi()
-    if (!api) { set({ error: 'File API not available' }); return false }
-    const dir = teamsDir()
-    await Promise.all([
-      api.delete(blueprintPath(id, dir)).catch(() => {}),
-      api.delete(compiledMdPath(id, dir)).catch(() => {}),
-      api.delete(revisionsPath(id, dir)).catch(() => {}),
-    ])
+    const backend = get().backend
+    if (!backend) { set({ error: 'Teams storage is unavailable on this gateway' }); return false }
+    try { await backend.remove(id) }
+    catch (e) { set({ error: String(e) }); return false }
     set(s => ({
       blueprints: s.blueprints.filter(b => b.id !== id),
       compiledDefs: Object.fromEntries(Object.entries(s.compiledDefs).filter(([k]) => k !== id)),
@@ -299,8 +383,9 @@ export const useTeamsStore = create<TeamsState>((set, get) => ({
   // ── importBundle ──────────────────────────────────────────────────────────────
 
   async importBundle(text, filename) {
-    const api = fileApi()
-    if (!api) { set({ error: 'File API not available' }); return null }
+    let backend = get().backend
+    if (!backend) { const r = await resolveBackend().catch(() => null); backend = r?.backend ?? null }
+    if (!backend) { set({ error: 'Teams storage is unavailable on this gateway' }); return null }
 
     const dir = teamsDir()
 
@@ -317,14 +402,9 @@ export const useTeamsStore = create<TeamsState>((set, get) => ({
       const def = bundledDef ?? buildTeamProcessDef(bp, mdPath)
       const mdText = bundledDef ? bundle.compiledProcessMd! : serializeProcess(def)
 
-      const [jsonRes, mdRes] = await Promise.all([
-        api.write(blueprintPath(bp.id, dir), serializeBlueprint(bp)),
-        api.write(mdPath, mdText),
-      ])
-      if (!jsonRes.ok || !mdRes.ok) {
-        set({ error: 'Failed to write imported team files' })
-        return null
-      }
+      try { await backend.write(bp.id, { blueprint: serializeBlueprint(bp), md: mdText }) }
+      catch { set({ error: 'Failed to write imported team' }); return null }
+
       set(s => ({
         error: null,
         blueprints: s.blueprints.some(b => b.id === bp.id)
@@ -360,10 +440,8 @@ export const useTeamsStore = create<TeamsState>((set, get) => ({
       version: 1,
     }
 
-    await Promise.all([
-      api.write(blueprintPath(bp.id, dir), serializeBlueprint(bp)),
-      api.write(def.path, text),
-    ])
+    try { await backend.write(bp.id, { blueprint: serializeBlueprint(bp), md: text }) }
+    catch { set({ error: 'Failed to write imported team' }); return null }
 
     set(s => ({
       error: null,
@@ -378,12 +456,11 @@ export const useTeamsStore = create<TeamsState>((set, get) => ({
   // ── loadRevisions ─────────────────────────────────────────────────────────────
 
   async loadRevisions(id) {
-    const api = fileApi()
-    if (!api) return
-    const path = revisionsPath(id, teamsDir())
-    const res = await api.read(path)
-    if (!res.ok || !res.text) return
-    const revs = parseRevisions(res.text)
+    const backend = get().backend
+    if (!backend) return
+    const raw = await backend.read(id).catch(() => null)
+    if (!raw?.revisions) return
+    const revs = parseRevisions(raw.revisions)
     set(s => ({ revisions: { ...s.revisions, [id]: revs } }))
   },
 }))

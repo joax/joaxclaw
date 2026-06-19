@@ -108,13 +108,19 @@ async function probeUrl(url: string): Promise<boolean> {
   try { const r = await fetch(url); return r.ok } catch { return false }
 }
 
-// Probes one instance. Reachability depends on where the gateway runs:
-//   - local gateway, or instance on a non-loopback host → probe (up/down)
-//   - remote gateway + loopback instance → unreachable from here → unknown
-export async function checkInstance(inst: EngineInstance, gatewayIsLocal: boolean): Promise<EngineStatus> {
-  const reachable = gatewayIsLocal || !isLoopback(hostOf(inst.baseUrl))
+// Probes one instance. An override URL (reachable from this client, e.g. a tailnet
+// address) takes precedence over the config baseUrl. Reachability:
+//   - local gateway, or target on a non-loopback host → probe (up/down)
+//   - remote gateway + loopback target → unreachable from here → unknown
+export async function checkInstance(
+  inst: EngineInstance,
+  gatewayIsLocal: boolean,
+  overrideUrl?: string
+): Promise<EngineStatus> {
+  const baseUrl = overrideUrl?.trim() || inst.baseUrl
+  const reachable = gatewayIsLocal || !isLoopback(hostOf(baseUrl))
   if (!reachable) return 'unknown'
-  return (await probeUrl(healthUrl(inst.api, inst.baseUrl))) ? 'up' : 'down'
+  return (await probeUrl(healthUrl(inst.api, baseUrl))) ? 'up' : 'down'
 }
 
 // ── Detection ─────────────────────────────────────────────────────────────────

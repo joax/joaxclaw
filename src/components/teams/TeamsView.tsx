@@ -8,6 +8,8 @@ import {
 import { useTeamsStore } from '../../store/teams'
 import { useProcessesStore, runsDir, type ProcessRun } from '../../store/processes'
 import { useAgentsStore } from '../../store/agents'
+import { useConnectionStore } from '../../store/connection'
+import { RemotePluginNotice } from '../common/RemotePluginNotice'
 import { Btn } from '../ui/Btn'
 import { ProcessMonitor } from '../processes/ProcessMonitor'
 import { ProcessGraphEditor } from '../processes/ProcessGraphEditor'
@@ -1224,21 +1226,28 @@ function NewTeamModal({ onCreated, onCancel }: { onCreated: (bp: TeamBlueprint) 
 
 // ── Main TeamsView ─────────────────────────────────────────────────────────────
 
-export function TeamsView() {
-  const { blueprints, compiledDefs, loading, error, load, deleteTeam, importBundle } = useTeamsStore()
+export function TeamsView({ onOpenChat }: { onOpenChat?: () => void } = {}) {
+  const { blueprints, compiledDefs, loading, error, needsPlugin, load, deleteTeam, importBundle } = useTeamsStore()
   const { runs, _startEventListening } = useProcessesStore()
   const { fetch: fetchAgents } = useAgentsStore()
+  const status = useConnectionStore(s => s.status)
 
   const [selectedId, setSelectedId]  = useState<string | null>(null)
   const [search,     setSearch]      = useState('')
   const [showNew,    setShowNew]     = useState(false)
   const importRef = useRef<HTMLInputElement>(null)
 
+  // load() picks its own backend: the joaxclaw-fs plugin over the WS (local OR
+  // remote), or local files on a local gateway. It only sets needsPlugin when a
+  // remote gateway lacks the plugin. Re-run on every (re)connect so the notice
+  // re-probes and clears itself after the plugin is installed + gateway restarts.
   useEffect(() => {
+    if (status !== 'connected') return
     load()
     fetchAgents()
     _startEventListening()
-  }, [])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status])
 
   useEffect(() => {
     if (!selectedId && blueprints.length > 0) {
@@ -1265,6 +1274,8 @@ export function TeamsView() {
     if (imported) { setSelectedId(imported.id) }
     e.target.value = ''
   }
+
+  if (needsPlugin) return <RemotePluginNotice feature="Teams" onRetry={() => load()} onOpenChat={onOpenChat} />
 
   return (
     <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>

@@ -144,9 +144,10 @@ export interface GatewayConnection {
   url: string
   token: string
   label?: string
-  // Optional explicit Ollama endpoints reachable from this client, used for health
-  // checks when the gateway (and thus Ollama) is remote. Empty = derive/skip.
-  ollamaUrls?: { main?: string; cron?: string }
+  // Per-engine reachable URL overrides, keyed by the local-engine instance key
+  // (provider id, or `<engine>:<port>` for port-detected instances). Used for health
+  // checks when the gateway (and its engines) are remote. Empty = use the config URL.
+  engineUrls?: Record<string, string>
 }
 
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error'
