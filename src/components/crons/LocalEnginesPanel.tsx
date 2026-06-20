@@ -43,11 +43,11 @@ export function LocalEnginesPanel({ jobs }: { jobs: CronJob[] }) {
     const run = async () => {
       const local = !remote
       let instances: EngineInstance[] = detectFromConfig(providers)
-      if (local) {
-        const detected = await detectByPort(instances)
-        if (cancelled) return
-        instances = [...instances, ...detected]
-      }
+      // Discover unconfigured engines on default ports — on the client locally, or on
+      // the gateway host (via the joaxclaw-fs engines.* methods) when it's remote.
+      const detected = await detectByPort(instances, remote)
+      if (cancelled) return
+      instances = [...instances, ...detected]
       const grouped = groupEngines(instances)
       const next: Record<string, EngineStatus> = {}
       await Promise.all(instances.map(async i => { next[i.key] = await checkInstance(i, local, engineUrls?.[i.key]) }))
@@ -93,7 +93,8 @@ export function LocalEnginesPanel({ jobs }: { jobs: CronJob[] }) {
         <div className="flex flex-col gap-2 p-2.5">
           {remote && (
             <p style={{ fontSize: 9, color: 'var(--text-secondary)', lineHeight: 1.5, margin: 0 }}>
-              Gateway is remote — engines on its loopback address can't be verified from here; shown as unknown.
+              Gateway is remote — engine health is checked on the gateway host via the joaxclaw-fs plugin.
+              Engines show as <em>unknown</em> until that plugin is installed (Teams/Processes → Install via agent).
             </p>
           )}
           {groups.map(g => (

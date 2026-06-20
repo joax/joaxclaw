@@ -33,11 +33,10 @@ export function LocalEnginesCard({ gatewayUrl }: { gatewayUrl?: string }) {
     let cancelled = false
     const run = async () => {
       let insts = detectFromConfig(providers)
-      if (!remote) {
-        const detected = await detectByPort(insts)
-        if (cancelled) return
-        insts = [...insts, ...detected]
-      }
+      // Probe default ports locally, or on the gateway host (via joaxclaw-fs) when remote.
+      const detected = await detectByPort(insts, remote)
+      if (cancelled) return
+      insts = [...insts, ...detected]
       if (!cancelled) setInstances(insts)
     }
     run()
@@ -57,8 +56,8 @@ export function LocalEnginesCard({ gatewayUrl }: { gatewayUrl?: string }) {
 
       <div className="p-3 space-y-3">
         <p className="text-xs" style={{ color: 'var(--text-secondary)', lineHeight: 1.5 }}>
-          Detected from the gateway config{!remote && ' and by probing default ports'}. Set a reachable URL per
-          engine — required when the gateway runs on another host.
+          Detected from the gateway config and by probing default ports{remote && ' on the gateway host (via the joaxclaw-fs plugin)'}.
+          Set a reachable URL per engine — required when the gateway runs on another host and you want to reach it directly.
           {' '}
           <button onClick={() => openHelp('gateways')} style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--accent)' }}>
             How? (Tailscale)

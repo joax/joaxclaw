@@ -1,8 +1,8 @@
 # openclaw-joaxclaw-fs
 
-Gateway plugin that exposes JoaxClaw's host-side **teams** and **processes** over the
-WebSocket so they work on a **remote** gateway (and so agent-authored teams/processes
-are reachable from the app).
+Gateway plugin that exposes JoaxClaw's host-side **teams**, **processes**, and **local
+LLM engine** checks over the WebSocket so they work on a **remote** gateway (and so
+agent-authored teams/processes are reachable from the app).
 
 They live as files in the gateway host's state dir:
 
@@ -31,9 +31,18 @@ gateway RPC methods that read/write those directories on the host.
 | `processes.set` | write | `{ id, md }` | `{ ok, id }` |
 | `processes.delete` | write | `{ id }` | `{ ok, id }` |
 | `processes.runs.set` | write | `{ id, run }` | `{ ok, id }` |
+| `engines.probe` | read | `{ url, timeoutMs? }` | `{ ok, status }` |
+| `engines.fetch` | read | `{ url, timeoutMs? }` | `{ ok, status, body }` |
 
 Artifacts are passed through verbatim as strings (or `null` when missing); the app
 owns (de)serialization. Ids are validated to stay inside the state directories.
+
+`engines.probe` / `engines.fetch` GET a local LLM engine's health/model URL **from
+the gateway host** — that's how the app checks liveness and lists models for engines
+on the host's loopback/LAN (unreachable from a remote client). The requested URL is
+guarded to local-engine hosts only (loopback, `*.local`, private IPv4); anything else
+is rejected, so these can't be used as a general request proxy. `engines.fetch` caps
+the returned body at 1 MiB; the app parses it (Ollama `/api/tags`, OpenAI `/models`).
 
 ## Install
 

@@ -88,9 +88,9 @@ Done:
 - `LocalEnginesPanel` (crons) replacing the Ollama-only panel.
 - **Settings "Local LLM" tab** (was "Ollama") with `LocalEnginesCard`: per-engine URL overrides (`engineUrls` / `setEngineUrl`) + live probe feedback. Removed `OllamaEndpointsCard`/`OllamaUrlRow`/`WhyTwoOllamasOverlay` and `connection.ollamaUrls`/`setOllamaUrls`.
 - Validated on a local gateway (only Ollama up → shown correctly; other engines absent → no false positives).
+- **Remote-gateway liveness via the `joaxclaw-fs` plugin.** `engines.probe` / `engines.fetch` (host-side, SSRF-guarded to local-engine hosts) let the app check liveness and read model lists for engines on a *remote* gateway's loopback/LAN. `checkInstance` / `detectByPort` route through them when the gateway is remote and no client-reachable override is set (`probeStatus(url, viaGateway)` in [localEngines.ts](./localEngines.ts)); engines show `unknown` only when the plugin isn't installed. Default-port discovery also runs on the remote host. Verified end-to-end against a live gateway (probe up/down, SSRF rejects, real Ollama model list). See [../../plugins/joaxclaw-fs/README.md](../../plugins/joaxclaw-fs/README.md).
 
 Deferred:
-- **Remote-gateway liveness** for loopback instances relies on a client-reachable override URL; without one it stays `unknown`. A gateway-side probe RPC would remove the need for the override (none exists today; the gateway only probes during cron preflight).
 - **Cron-companion ports** are hardcoded for Ollama only (`:11435`). Other engines rely on a declared `<engine>-cron` provider.
-- **Per-engine model listing** — Settings still only lists *local* Ollama models (`Ollama Models (local)` card, hidden when remote). Listing each engine's `/models` is unimplemented.
+- **Per-engine model listing in the UI** — the `engines.fetch` primitive returns each engine's model list, but Settings still only renders *local* Ollama models (`Ollama Models (local)` card, hidden when remote). Surfacing per-engine `/models` in the UI is unimplemented.
 - `checkOllama`/`resolveOllamaUrl` in `ollamaHealth.ts` may now be dead — remove when convenient.
