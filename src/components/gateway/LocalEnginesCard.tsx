@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react'
-import { CheckCircle2, XCircle, Loader2, HelpCircle, RefreshCw, Server } from 'lucide-react'
+import { CheckCircle2, XCircle, Loader2, HelpCircle, RefreshCw, Server, Boxes, ChevronDown } from 'lucide-react'
 import { useModelsStore } from '../../store/models'
 import { useConnectionStore, useIsRemoteGateway } from '../../store/connection'
 import { useHelpStore } from '../../store/help'
 import {
-  detectFromConfig, detectByPort, checkInstance,
+  detectFromConfig, detectByPort, checkInstance, fetchEngineModels,
   type EngineInstance, type EngineStatus,
 } from '../../lib/localEngines'
 
@@ -90,12 +90,18 @@ function EngineRow({ inst, remote, override, nonce, onSave }: {
 }) {
   const [draft, setDraft] = useState(override ?? '')
   const [status, setStatus] = useState<RowStatus>('checking')
+  const [models, setModels] = useState<string[]>([])
+  const [modelsOpen, setModelsOpen] = useState(false)
 
   useEffect(() => { setDraft(override ?? '') }, [override])
 
   const probe = async (url?: string) => {
     setStatus('checking')
-    setStatus(await checkInstance(inst, !remote, (url ?? '').trim() || undefined))
+    const ov = (url ?? '').trim() || undefined
+    const s = await checkInstance(inst, !remote, ov)
+    setStatus(s)
+    // Only reachable engines have a model list worth fetching.
+    setModels(s === 'up' ? await fetchEngineModels(inst, !remote, ov) : [])
   }
 
   // Probe on mount, when the stored override changes, and on Re-check.
@@ -138,6 +144,29 @@ function EngineRow({ inst, remote, override, nonce, onSave }: {
           ? <>Override · config URL <code style={mono}>{inst.baseUrl}</code></>
           : <>Using config URL <code style={mono}>{inst.baseUrl}</code></>}
       </p>
+
+      {status === 'up' && models.length > 0 && (
+        <div className="mt-1.5">
+          <button
+            onClick={() => setModelsOpen(o => !o)}
+            className="flex items-center gap-1"
+            style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--text-secondary)' }}
+          >
+            <Boxes size={10} style={{ color: 'var(--accent)' }} />
+            <span style={{ fontSize: 9, fontWeight: 600 }}>{models.length} model{models.length > 1 ? 's' : ''}</span>
+            <ChevronDown size={10} style={{ transform: modelsOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
+          </button>
+          {modelsOpen && (
+            <div className="mt-1" style={{ maxHeight: 132, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 2 }}>
+              {models.map(m => (
+                <code key={m} className="truncate" style={{ ...mono, fontSize: 9, color: 'var(--text-primary)', padding: '1px 5px', borderRadius: 3, background: 'var(--bg-primary)', border: '1px solid var(--border)' }}>
+                  {m}
+                </code>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }

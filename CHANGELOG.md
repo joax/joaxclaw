@@ -7,6 +7,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Per-engine model lists in Settings → Local LLM.** Each reachable local engine now shows how many models it's serving, expandable to the full list. Works locally (via a new `ollama:fetch` main-process IPC, which isn't CORS-bound) and on a remote gateway (via the plugin's `engines.fetch`). Parses both Ollama (`/api/tags`) and OpenAI-compatible (`/models`) responses. New `fetchEngineModels()` / `parseModelIds()` in `lib/localEngines.ts`, with unit tests.
+
+### Removed
+
+- Dead Ollama-only helpers `checkOllama` / `resolveOllamaUrl` in `lib/ollamaHealth.ts` (which now only exports the widely-used `gatewayHost` / `isLocalGateway`).
+
 ## [0.7.1] - 2026-06-20
 
 ### Added

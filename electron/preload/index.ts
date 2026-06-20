@@ -77,6 +77,7 @@ contextBridge.exposeInMainWorld('api', {
   ollama: {
     watch: () => ipcRenderer.invoke('ollama:watch'),
     probe: (baseUrl: string) => ipcRenderer.invoke('ollama:probe', baseUrl),
+    fetch: (url: string) => ipcRenderer.invoke('ollama:fetch', url),
     onProgress: (cb: (p: { nTokens: number; progress: number; tps: number }) => void) => {
       const listener = (_: Electron.IpcRendererEvent, p: { nTokens: number; progress: number; tps: number }) => cb(p)
       ipcRenderer.on('ollama:progress', listener)
