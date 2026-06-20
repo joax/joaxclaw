@@ -31,7 +31,7 @@ Three detection sources (in [localEngines.ts](./localEngines.ts)):
 |---|---|---|
 | **Config** | `detectFromConfig(providers)` | Always. Reads `models.providers` (from `config.get`); keeps providers whose `baseUrl` host is local and whose `api` maps to a probe family (`ollama` or `openai`). |
 | **Default ports** | `detectByPort(existing)` | **Local gateway only.** Probes known engine default ports not already in config (LM Studio 1234, vLLM 8000, llama.cpp/LocalAI 8080, Jan 1337, KoboldCpp 5001). |
-| **Cron companion** | `detectByPort` → `CRON_COMPANIONS` | **Local gateway only.** Probes the Ollama `:11435` cron convention even when it isn't a declared provider. |
+| **Cron companion** | `detectByPort` → `CRON_COMPANIONS` | Probes each engine's `<default port>+1` (the Ollama `:11434→:11435` convention, generalized) for an isolated instance even when it isn't a declared provider. Runs locally and, via the plugin, against a remote host. |
 
 Engines are then `groupEngines()`'d into `{ main, cron }` pairs (cron = provider id
 ending in `-cron`, or a detected companion).
@@ -83,7 +83,7 @@ Both surfaces apply overrides:
 ## Status / TODO (resume here)
 
 Done:
-- Config + default-port + Ollama-cron-companion detection, generalized across engines.
+- Config + default-port + cron-companion detection, generalized across all known engines.
 - Generalized main-process probe (full URL, `/api/tags` vs `/v1/models`).
 - `LocalEnginesPanel` (crons) replacing the Ollama-only panel.
 - **Settings "Local LLM" tab** (was "Ollama") with `LocalEnginesCard`: per-engine URL overrides (`engineUrls` / `setEngineUrl`) + live probe feedback. Removed `OllamaEndpointsCard`/`OllamaUrlRow`/`WhyTwoOllamasOverlay` and `connection.ollamaUrls`/`setOllamaUrls`.
@@ -91,7 +91,8 @@ Done:
 - **Remote-gateway liveness via the `joaxclaw-fs` plugin.** `engines.probe` / `engines.fetch` (host-side, SSRF-guarded to local-engine hosts) let the app check liveness and read model lists for engines on a *remote* gateway's loopback/LAN. `checkInstance` / `detectByPort` route through them when the gateway is remote and no client-reachable override is set (`probeStatus(url, viaGateway)` in [localEngines.ts](./localEngines.ts)); engines show `unknown` only when the plugin isn't installed. Default-port discovery also runs on the remote host. Verified end-to-end against a live gateway (probe up/down, SSRF rejects, real Ollama model list). See [../../plugins/joaxclaw-fs/README.md](../../plugins/joaxclaw-fs/README.md).
 - **Per-engine model lists in the Settings card.** Each reachable engine fetches and shows its served models (count + expandable list). `fetchEngineModels()` / `parseModelIds()` in `localEngines.ts` are gateway-aware: local engines use the `ollama:fetch` main-process IPC (not CORS-bound), remote engines use `engines.fetch`. Ollama `/api/tags` (`models[].name`) and OpenAI-compatible `/models` (`data[].id`) both parse. Covered by `__tests__/localEngines.test.ts`.
 - **Removed dead Ollama-only code** — `checkOllama`/`resolveOllamaUrl` are gone from `ollamaHealth.ts`, which now only holds `gatewayHost`/`isLocalGateway`.
+- **Model picker lists each engine's installed models.** `ModelPicker` merges live engine models (via `fetchEngineModels`, gateway-aware) with config-declared ones, so a pulled-but-undeclared model is still selectable (tagged `installed`); the provider routes by name.
+- **Cron-companion detection generalized to every engine.** `CRON_COMPANIONS` is now derived from `KNOWN_ENGINES` at `<default port>+1` (`CRON_PORT_OFFSET`), so isolated instances are auto-detected for LM Studio / vLLM / llama.cpp / Jan / KoboldCpp, not just Ollama. No offset collides with another engine's main port; unused ports just probe `down`.
 
 Deferred:
-- **Cron-companion ports** are hardcoded for Ollama only (`:11435`). Other engines rely on a declared `<engine>-cron` provider.
-- **Model picker** still reads only the local Ollama (`Ollama Models (local)` card, hidden when remote); it could reuse `fetchEngineModels` to list any engine's models.
+- (none specific to local engines — see the project roadmap for larger features like curated per-channel policy.)
