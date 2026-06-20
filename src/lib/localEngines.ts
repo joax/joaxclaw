@@ -204,11 +204,14 @@ export function detectFromConfig(providers: Record<string, GwModelProvider>): En
   return out
 }
 
-// Well-known isolated "cron" instances that run on a fixed companion port rather
-// than being declared as a separate provider (the Ollama :11435 convention).
-const CRON_COMPANIONS: { engineId: string; label: string; api: EngineApiKind; port: number; basePath: string }[] = [
-  { engineId: 'ollama', label: 'Ollama', api: 'ollama', port: 11435, basePath: '' },
-]
+// Isolated "cron" instances run on the main engine's default port + 1 — the Ollama
+// :11434→:11435 convention, generalized to every known engine. We probe these so the
+// panel can flag an isolated instance (and prompt for an <engine>-cron provider) even
+// when it isn't declared in config. None of these offsets collide with another
+// engine's main default port. Unused ports just probe `down` — no false positives.
+const CRON_PORT_OFFSET = 1
+const CRON_COMPANIONS: { engineId: string; label: string; api: EngineApiKind; port: number; basePath: string }[] =
+  KNOWN_ENGINES.map(e => ({ engineId: e.id, label: e.label, api: e.api, port: e.defaultPort + CRON_PORT_OFFSET, basePath: e.basePath }))
 
 // Probes default `localhost` ports for engines not already in config. Locally this
 // hits the client's own ports; with `viaGateway` (remote gateway + joaxclaw-fs plugin)
