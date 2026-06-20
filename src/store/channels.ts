@@ -32,6 +32,18 @@ async function patchConfig(patch: Record<string, unknown>, baseHash?: string, re
   })
 }
 
+// Collect dotted paths to every array nested under `obj`, prefixed. Used so that
+// deleting a channel/account block whose policy contains allowlists (or any array)
+// can pass those paths in replacePaths — the gateway treats removing a parent that
+// holds arrays as array-entry removal and rejects it otherwise.
+function collectArrayPaths(obj: unknown, prefix: string, out: string[] = []): string[] {
+  if (Array.isArray(obj)) { out.push(prefix); return out }
+  if (obj && typeof obj === 'object') {
+    for (const [k, v] of Object.entries(obj)) collectArrayPaths(v, `${prefix}.${k}`, out)
+  }
+  return out
+}
+
 // ── live status ───────────────────────────────────────────────────────────────
 
 interface ChannelsStatusSnapshot {
@@ -55,7 +67,7 @@ interface ChannelsState {
   // CRUD on channels.<id>
   createChannel: (channelId: string, settings: Record<string, unknown>) => Promise<void>
   setEnabled: (channelId: string, enabled: boolean) => Promise<void>
-  updateSettings: (channelId: string, patch: Record<string, unknown>) => Promise<void>
+  updateSettings: (channelId: string, patch: Record<string, unknown>, replacePaths?: string[]) => Promise<void>
   deleteChannel: (channelId: string) => Promise<void>
 
   // Agent assignment via the bindings array (scoped: channel / account / peer / team / guild)
@@ -117,18 +129,23 @@ export const useChannelsStore = create<ChannelsState>((set, get) => ({
     await get().fetch()
   },
 
-  async updateSettings(channelId, patch) {
+  async updateSettings(channelId, patch, replacePaths) {
     const snap = await getConfig()
-    await patchConfig({ channels: { [channelId]: patch } }, snap.hash)
+    // replacePaths is needed when a nested array (e.g. a policy allowlist) shrinks —
+    // the gateway rejects array-entry removal via a plain RFC-7396 merge otherwise.
+    await patchConfig({ channels: { [channelId]: patch } }, snap.hash, replacePaths)
     await get().fetch()
   },
 
   async deleteChannel(channelId) {
     const snap = await getConfig()
     // Drop the channel block (null = delete per RFC 7396) and any bindings to it.
-    // Removing bindings shrinks the array, so it must go through replacePaths.
+    // Removing bindings shrinks the array; so does nulling a channel that holds
+    // policy allowlists (or any array) — both need replacePaths.
     const remaining = get().bindings.filter(b => b.match?.channel !== channelId)
-    await patchConfig({ channels: { [channelId]: null }, bindings: remaining }, snap.hash, ['bindings'])
+    const ch = get().channels.find(c => c.id === channelId)
+    const arrayPaths = ch ? collectArrayPaths(ch.raw, `channels.${channelId}`) : []
+    await patchConfig({ channels: { [channelId]: null }, bindings: remaining }, snap.hash, ['bindings', ...arrayPaths])
     await get().fetch()
   },
 
@@ -166,11 +183,15 @@ export const useChannelsStore = create<ChannelsState>((set, get) => ({
     const ch = get().channels.find(c => c.id === channelId)
     const wasDefault = (ch?.raw as { defaultAccount?: string } | undefined)?.defaultAccount === accountId
     const remainingBindings = get().bindings.filter(b => !(b.match.channel === channelId && b.match.accountId === accountId))
+    // An account block can itself hold policy allowlists — include their paths so
+    // nulling the account doesn't trip the array-shrink guard.
+    const accBlock = (ch?.raw.accounts as Record<string, unknown> | undefined)?.[accountId]
+    const arrayPaths = accBlock ? collectArrayPaths(accBlock, `channels.${channelId}.accounts.${accountId}`) : []
     const patch: Record<string, unknown> = {
       channels: { [channelId]: { accounts: { [accountId]: null }, ...(wasDefault ? { defaultAccount: null } : {}) } },
       bindings: remainingBindings,
     }
-    await patchConfig(patch, snap.hash, ['bindings'])
+    await patchConfig(patch, snap.hash, ['bindings', ...arrayPaths])
     await get().fetch()
   },
 
