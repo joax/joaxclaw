@@ -13,6 +13,8 @@ import {
   scopesForChannel, buildMatch, bindingScopeLabel, bindingKey,
   type ChannelConfig, type ChannelDef, type BindingScopeKind,
 } from '../../lib/channels'
+import { channelPolicySpec } from '../../lib/channelPolicy'
+import { ChannelPolicyEditor } from './ChannelPolicyEditor'
 
 const DOCS_BASE = 'https://docs.openclaw.com/channels'
 
@@ -474,6 +476,11 @@ function ChannelCredentialForm({ def, existing, onBack, onClose, onSubmit }: {
   const curated = def.fields.length > 0
   const raw = existing?.raw ?? {}
 
+  // Policy editing is only meaningful for an already-configured channel that has a
+  // curated policy spec. Shown as a second tab next to the credential form.
+  const hasPolicy = !!existing && !!channelPolicySpec(def.id)
+  const [tab, setTab] = useState<'credentials' | 'policy'>('credentials')
+
   // Curated-field literal values.
   const [values, setValues] = useState<Record<string, string>>(() => {
     const init: Record<string, string> = {}
@@ -529,6 +536,31 @@ function ChannelCredentialForm({ def, existing, onBack, onClose, onSubmit }: {
 
   return (
     <Overlay onClose={onClose} title={`${existing ? 'Edit' : 'Add'} ${def.label}`} width={520} headerColor={def.color}>
+      {hasPolicy && (
+        <div className="flex gap-1 px-5 pt-3" style={{ borderBottom: '1px solid var(--border)' }}>
+          {(['credentials', 'policy'] as const).map(t => (
+            <button
+              key={t}
+              onClick={() => setTab(t)}
+              className="text-xs"
+              style={{
+                background: 'none', border: 'none', cursor: 'pointer', padding: '4px 8px 8px',
+                color: tab === t ? 'var(--text-primary)' : 'var(--text-secondary)',
+                fontWeight: tab === t ? 600 : 400,
+                borderBottom: `2px solid ${tab === t ? 'var(--accent)' : 'transparent'}`,
+                marginBottom: -1, textTransform: 'capitalize',
+              }}
+            >
+              {t}
+            </button>
+          ))}
+        </div>
+      )}
+      {tab === 'policy' && hasPolicy ? (
+        <div className="overflow-y-auto px-5 py-4" style={{ maxHeight: '60vh' }}>
+          <ChannelPolicyEditor channelId={def.id} />
+        </div>
+      ) : (
       <div className="overflow-y-auto px-5 py-4 space-y-3" style={{ maxHeight: '60vh' }}>
         <p className="text-xs" style={{ color: 'var(--text-secondary)', lineHeight: 1.5 }}>{def.blurb}</p>
         {def.needsPlugin && (
@@ -597,13 +629,18 @@ function ChannelCredentialForm({ def, existing, onBack, onClose, onSubmit }: {
 
         {err && <p className="text-xs" style={{ color: 'var(--danger)' }}>{err}</p>}
       </div>
+      )}
 
       <div className="flex items-center justify-between gap-2 px-5 py-3.5 shrink-0" style={{ borderTop: '1px solid var(--border)' }}>
         {onBack ? <Btn variant="ghost" size="sm" onClick={onBack}>← Channels</Btn> : <span />}
-        <span className="flex items-center gap-2">
-          <Btn variant="outline" size="sm" onClick={onClose}>Cancel</Btn>
-          <Btn size="sm" loading={saving} onClick={submit}>{existing ? 'Save' : 'Create channel'}</Btn>
-        </span>
+        {tab === 'policy' ? (
+          <Btn size="sm" onClick={onClose}>Done</Btn>
+        ) : (
+          <span className="flex items-center gap-2">
+            <Btn variant="outline" size="sm" onClick={onClose}>Cancel</Btn>
+            <Btn size="sm" loading={saving} onClick={submit}>{existing ? 'Save' : 'Create channel'}</Btn>
+          </span>
+        )}
       </div>
     </Overlay>
   )
