@@ -903,4 +903,23 @@ ipcMain.handle('ollama:probe', async (_event, url: string) => {
   }
 })
 
+// Like ollama:probe, but returns the response body (capped) — for listing a local
+// engine's models (Ollama /api/tags, OpenAI-compatible /models) from the main
+// process, where it isn't CORS-bound. The renderer parses the body.
+ipcMain.handle('ollama:fetch', async (_event, url: string) => {
+  if (typeof url !== 'string' || !url.trim()) return { ok: false, body: '' }
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 4000)
+  try {
+    const res = await fetch(url, { signal: controller.signal, headers: { accept: 'application/json' } })
+    const raw = await res.text()
+    const body = raw.length > (1 << 20) ? raw.slice(0, 1 << 20) : raw
+    return { ok: res.ok, status: res.status, body }
+  } catch {
+    return { ok: false, body: '' }
+  } finally {
+    clearTimeout(timer)
+  }
+})
+
 app.on('before-quit', () => { ollamaStop?.(); ollamaStop = null })

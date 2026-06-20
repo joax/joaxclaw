@@ -121,6 +121,57 @@ async function probeStatus(url: string, viaGateway: boolean): Promise<EngineStat
   }
 }
 
+// ── Model listing ───────────────────────────────────────────────────────────
+// Fetch the model URL's raw body. Local → main-process fetch (not CORS-bound,
+// reaches localhost); remote → engines.fetch on the gateway host. null on failure
+// or when the remote plugin is absent.
+async function fetchBody(url: string, viaGateway: boolean): Promise<string | null> {
+  if (viaGateway) {
+    try {
+      const r = await gatewayClient.request<{ ok: boolean; body?: string }>('engines.fetch', { url })
+      return r.ok ? (r.body ?? '') : null
+    } catch {
+      return null
+    }
+  }
+  const api = (window as unknown as { api?: { ollama?: { fetch?: (u: string) => Promise<{ ok: boolean; body?: string }> } } })?.api?.ollama
+  if (api?.fetch) {
+    try { const r = await api.fetch(url); return r.ok ? (r.body ?? '') : null } catch { return null }
+  }
+  try { const r = await fetch(url); return r.ok ? await r.text() : null } catch { return null }
+}
+
+// Extract model ids from a health/models response body. Ollama `/api/tags` returns
+// { models: [{ name }] }; OpenAI-compatible `/models` returns { data: [{ id }] }.
+export function parseModelIds(api: EngineApiKind, body: string): string[] {
+  try {
+    const j = JSON.parse(body) as Record<string, unknown>
+    const pick = (arr: unknown): string[] =>
+      Array.isArray(arr)
+        ? arr.map(m => (m && typeof m === 'object' ? ((m as Record<string, unknown>).id ?? (m as Record<string, unknown>).name) : null))
+            .filter((s): s is string => typeof s === 'string' && s.length > 0)
+        : []
+    if (api === 'ollama') return pick(j.models)
+    return pick(j.data).length ? pick(j.data) : pick(j.models)
+  } catch {
+    return []
+  }
+}
+
+// List the model ids a reachable engine is serving. Gateway-aware, mirroring
+// checkInstance's routing (local/override → direct; remote → via the plugin).
+export async function fetchEngineModels(
+  inst: EngineInstance,
+  gatewayIsLocal: boolean,
+  overrideUrl?: string
+): Promise<string[]> {
+  const override = overrideUrl?.trim()
+  const baseUrl = override || inst.baseUrl
+  const viaGateway = !gatewayIsLocal && !override
+  const body = await fetchBody(healthUrl(inst.api, baseUrl), viaGateway)
+  return body == null ? [] : parseModelIds(inst.api, body)
+}
+
 // Probes one instance. An override URL (reachable from this client, e.g. a tailnet
 // address) takes precedence over the config baseUrl. Routing:
 //   - local gateway, or an explicit override → probe directly from this client

@@ -57,8 +57,8 @@ Probing runs in the **Electron main process** (`ollama:probe` IPC, [electron/mai
 | [localEngines.ts](./localEngines.ts) | Engine registry, local-host classification, detection (config / port / cron companion), grouping, probing. |
 | [../components/crons/LocalEnginesPanel.tsx](../components/crons/LocalEnginesPanel.tsx) | The generalized cron isolation panel (one card per engine: Main/CRON health, isolation status, setup hints). Polls every 6s. |
 | [../components/crons/CronsView.tsx](../components/crons/CronsView.tsx) | Mounts `<LocalEnginesPanel jobs={jobs} />` in the cron sidebar. |
-| [ollamaHealth.ts](./ollamaHealth.ts) | Older Ollama-specific helpers — still exports `gatewayHost`/`isLocalGateway` (generic, reused widely) and the Ollama `resolveOllamaUrl` used by Settings. `checkOllama` is now unused (dead, safe to remove later). |
-| [electron/main/index.ts](../../electron/main/index.ts) | `ollama:probe` IPC (full-URL probe). |
+| [ollamaHealth.ts](./ollamaHealth.ts) | Now just `gatewayHost`/`isLocalGateway` (generic, reused widely). The old Ollama-specific `checkOllama`/`resolveOllamaUrl` were removed — probing lives in `localEngines.ts`. |
+| [electron/main/index.ts](../../electron/main/index.ts) | `ollama:probe` IPC (full-URL probe) and `ollama:fetch` IPC (full-URL GET returning the body, capped) — the local, non-CORS-bound side of liveness + model listing. |
 
 ## Job isolation logic (in `LocalEnginesPanel`)
 
@@ -89,8 +89,9 @@ Done:
 - **Settings "Local LLM" tab** (was "Ollama") with `LocalEnginesCard`: per-engine URL overrides (`engineUrls` / `setEngineUrl`) + live probe feedback. Removed `OllamaEndpointsCard`/`OllamaUrlRow`/`WhyTwoOllamasOverlay` and `connection.ollamaUrls`/`setOllamaUrls`.
 - Validated on a local gateway (only Ollama up → shown correctly; other engines absent → no false positives).
 - **Remote-gateway liveness via the `joaxclaw-fs` plugin.** `engines.probe` / `engines.fetch` (host-side, SSRF-guarded to local-engine hosts) let the app check liveness and read model lists for engines on a *remote* gateway's loopback/LAN. `checkInstance` / `detectByPort` route through them when the gateway is remote and no client-reachable override is set (`probeStatus(url, viaGateway)` in [localEngines.ts](./localEngines.ts)); engines show `unknown` only when the plugin isn't installed. Default-port discovery also runs on the remote host. Verified end-to-end against a live gateway (probe up/down, SSRF rejects, real Ollama model list). See [../../plugins/joaxclaw-fs/README.md](../../plugins/joaxclaw-fs/README.md).
+- **Per-engine model lists in the Settings card.** Each reachable engine fetches and shows its served models (count + expandable list). `fetchEngineModels()` / `parseModelIds()` in `localEngines.ts` are gateway-aware: local engines use the `ollama:fetch` main-process IPC (not CORS-bound), remote engines use `engines.fetch`. Ollama `/api/tags` (`models[].name`) and OpenAI-compatible `/models` (`data[].id`) both parse. Covered by `__tests__/localEngines.test.ts`.
+- **Removed dead Ollama-only code** — `checkOllama`/`resolveOllamaUrl` are gone from `ollamaHealth.ts`, which now only holds `gatewayHost`/`isLocalGateway`.
 
 Deferred:
 - **Cron-companion ports** are hardcoded for Ollama only (`:11435`). Other engines rely on a declared `<engine>-cron` provider.
-- **Per-engine model listing in the UI** — the `engines.fetch` primitive returns each engine's model list, but Settings still only renders *local* Ollama models (`Ollama Models (local)` card, hidden when remote). Surfacing per-engine `/models` in the UI is unimplemented.
-- `checkOllama`/`resolveOllamaUrl` in `ollamaHealth.ts` may now be dead — remove when convenient.
+- **Model picker** still reads only the local Ollama (`Ollama Models (local)` card, hidden when remote); it could reuse `fetchEngineModels` to list any engine's models.
