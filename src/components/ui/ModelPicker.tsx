@@ -2,6 +2,9 @@ import { useState, useEffect } from 'react'
 import { Loader2 } from 'lucide-react'
 import { useModelsStore } from '../../store/models'
 import { useMetricsStore } from '../../store/metrics'
+import { useConnectionStore } from '../../store/connection'
+import { gatewayHost, isLocalGateway } from '../../lib/ollamaHealth'
+import { detectFromConfig, fetchEngineModels } from '../../lib/localEngines'
 
 interface Props {
   value: string
@@ -10,28 +13,71 @@ interface Props {
   inputStyle?: React.CSSProperties
 }
 
+interface PickerModel {
+  fullId: string
+  displayId: string
+  name?: string
+  loaded: boolean
+  installedOnly: boolean   // served by the engine but not declared in the gateway config
+}
+
 export function ModelPicker({ value, onChange, placeholder, inputStyle }: Props) {
   const { providers, loading, load } = useModelsStore()
   const { ollamaModels } = useMetricsStore()
+  const connectionUrl = useConnectionStore(s => s.connection?.url)
+  const engineUrls = useConnectionStore(s => s.connection?.engineUrls)
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState(value)
+  // Live models actually served by each local engine (provider id → model ids).
+  // Lets you pick a pulled/installed model even if it isn't declared in config;
+  // gateway-aware, so it works on a remote gateway too.
+  const [liveByProvider, setLiveByProvider] = useState<Record<string, string[]>>({})
 
   // Always reload on mount so the picker reflects the same data as the Models panel
   useEffect(() => { load() }, [])
   useEffect(() => { setSearch(value) }, [value])
 
+  // Fetch each configured local engine's live model list (Ollama /api/tags,
+  // OpenAI-compatible /models), routed through the gateway when it's remote.
+  useEffect(() => {
+    let cancelled = false
+    const local = isLocalGateway(gatewayHost(connectionUrl))
+    const engines = detectFromConfig(providers)
+    if (engines.length === 0) { setLiveByProvider({}); return }
+    ;(async () => {
+      const entries = await Promise.all(
+        engines.map(async e => [e.key, await fetchEngineModels(e, local, engineUrls?.[e.key])] as const)
+      )
+      if (!cancelled) setLiveByProvider(Object.fromEntries(entries))
+    })()
+    return () => { cancelled = true }
+  }, [providers, connectionUrl, engineUrls])
+
   const loadedSet = new Set(ollamaModels.filter(m => m.loaded).map(m => `ollama/${m.name}`))
 
   const groups = Object.entries(providers)
-    .map(([pid, p]) => ({
-      pid,
-      models: p.models.map(m => ({
+    .map(([pid, p]) => {
+      const configuredIds = new Set(p.models.map(m => m.id))
+      const live = liveByProvider[pid] ?? []
+      const configured: PickerModel[] = p.models.map(m => ({
         fullId: `${pid}/${m.id}`,
         displayId: m.id,
         name: m.name !== m.id ? m.name : undefined,
-        loaded: loadedSet.has(`${pid}/${m.id}`)
+        loaded: loadedSet.has(`${pid}/${m.id}`),
+        installedOnly: false,
       }))
-    }))
+      // Models the engine serves that aren't in config — still selectable (the
+      // provider routes by name), shown with an "installed" tag.
+      const installedOnly: PickerModel[] = live
+        .filter(id => !configuredIds.has(id))
+        .map(id => ({
+          fullId: `${pid}/${id}`,
+          displayId: id,
+          loaded: loadedSet.has(`${pid}/${id}`),
+          installedOnly: true,
+        }))
+      return { pid, models: [...configured, ...installedOnly] }
+    })
     .filter(g => g.models.length > 0)
 
   const q = search.toLowerCase()
@@ -107,6 +153,11 @@ export function ModelPicker({ value, onChange, placeholder, inputStyle }: Props)
                       : m.displayId}
                   </span>
                   {m.name && <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>{m.name}</span>}
+                  {m.installedOnly && (
+                    <span style={{ fontSize: 9, color: 'var(--text-secondary)', padding: '1px 5px', borderRadius: 3, background: 'var(--bg-primary)', border: '1px solid var(--border)' }}>
+                      installed
+                    </span>
+                  )}
                 </button>
               ))}
             </div>

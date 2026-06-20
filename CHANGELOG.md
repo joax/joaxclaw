@@ -9,6 +9,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **The model picker offers each engine's installed models.** Beyond the models declared in the gateway config, the picker now also lists models a local engine is actually serving (e.g. an Ollama model you pulled but never added to config), tagged `installed` and still selectable since the provider routes by name. Gateway-aware via `fetchEngineModels`, so it works on a remote gateway too. Used across the Agents, Agent editor, and CRON editor pickers.
 - **Per-engine model lists in Settings → Local LLM.** Each reachable local engine now shows how many models it's serving, expandable to the full list. Works locally (via a new `ollama:fetch` main-process IPC, which isn't CORS-bound) and on a remote gateway (via the plugin's `engines.fetch`). Parses both Ollama (`/api/tags`) and OpenAI-compatible (`/models`) responses. New `fetchEngineModels()` / `parseModelIds()` in `lib/localEngines.ts`, with unit tests.
 
 ### Removed
