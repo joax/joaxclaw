@@ -3,6 +3,7 @@ import { persist } from 'zustand/middleware'
 import type { ConnectionStatus, GatewayConnection } from '../lib/types'
 import { gatewayClient } from '../lib/gateway'
 import { gatewayHost, isLocalGateway } from '../lib/ollamaHealth'
+import { readLocalStore, patchLocalStore } from '../lib/localStore'
 
 interface HeartbeatEntry { time: number; ok: boolean }
 
@@ -159,6 +160,43 @@ export const useConnectionStore = create<ConnectionState>()(
     }
   )
 )
+
+// ── Durable connection backup ──────────────────────────────────────────────────
+// The persist target above is localStorage, which Electron can reset (origin
+// change, concurrent instances, profile corruption) — that's how a set of saved
+// connections was lost once. To make them resilient we ALSO mirror them to the
+// file-based localstore (~/.joaxclaw/store.json) and restore any missing on start.
+// Merge by url so neither source clobbers the other; the in-store (localStorage)
+// entry wins for a shared url, keeping the freshest token.
+
+let _backupWired = false
+
+function mirrorConnections(conns: GatewayConnection[]): void {
+  void patchLocalStore({ savedConnections: conns })
+}
+
+// Called once on app start (after localStorage has rehydrated). Restores any
+// connections present only in the file backup, then keeps the backup in sync.
+export async function restoreConnectionsFromBackup(): Promise<void> {
+  let backup: GatewayConnection[] = []
+  try { backup = (await readLocalStore()).savedConnections ?? [] } catch { backup = [] }
+
+  const byUrl = new Map(useConnectionStore.getState().savedConnections.map(c => [c.url, c]))
+  let restored = 0
+  for (const c of backup) {
+    if (c?.url && !byUrl.has(c.url)) { byUrl.set(c.url, c); restored++ }
+  }
+  const merged = [...byUrl.values()]
+  if (restored > 0) useConnectionStore.setState({ savedConnections: merged })
+  mirrorConnections(merged)
+
+  if (!_backupWired) {
+    _backupWired = true
+    useConnectionStore.subscribe((s, prev) => {
+      if (s.savedConnections !== prev.savedConnections) mirrorConnections(s.savedConnections)
+    })
+  }
+}
 
 // Schedule a single reconnect attempt with exponential backoff (1→2→4→5s cap).
 // A failed attempt re-fires onStatusChange('disconnected'), which calls this

@@ -1,8 +1,13 @@
 // ~/.joaxclaw/store.json — app-local persistence for data that can't go to the gateway.
 // All data is namespaced under top-level keys to avoid collisions between features.
 
+import type { GatewayConnection } from './types'
+
 export interface LocalStore {
   modelPricing?: Record<string, Record<string, { input: number; output: number; cacheRead: number; cacheWrite: number }>>
+  // Durable backup of saved gateway connections — a file copy of the zustand
+  // localStorage state, so a localStorage reset can't lose them. See store/connection.ts.
+  savedConnections?: GatewayConnection[]
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
