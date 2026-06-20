@@ -4,7 +4,8 @@ import { useModelsStore } from '../../store/models'
 import { useSessionsStore } from '../../store/sessions'
 import { useCronsStore } from '../../store/crons'
 import { gatewayClient } from '../../lib/gateway'
-import type { GwModelDef, GwModelProvider } from '../../lib/types'
+import type { GwModelDef, GwModelProvider, SecretRef } from '../../lib/types'
+import { isSecretRef } from '../../lib/channels'
 import { Btn } from '../ui/Btn'
 import { Input } from '../ui/Input'
 
@@ -256,12 +257,27 @@ function AddModelForm({ providerId, onDone }: { providerId: string; onDone: () =
 // ── Inline editable config field ──────────────────────────────────────────────
 
 function ConfigField({ icon, label, value, onSave, placeholder }: {
-  icon: React.ReactNode; label: string; value?: string; onSave: (v: string) => void; placeholder?: string
+  icon: React.ReactNode; label: string; value?: string | SecretRef; onSave: (v: string) => void; placeholder?: string
 }) {
+  const isRef = isSecretRef(value)
+  const literal = typeof value === 'string' ? value : ''
   const [editing, setEditing] = useState(false)
-  const [draft, setDraft] = useState(value ?? '')
+  const [draft, setDraft] = useState(literal)
 
   const commit = () => { onSave(draft.trim()); setEditing(false) }
+
+  // SecretRef indirections are surfaced read-only — edit them in the raw config.
+  if (isRef) {
+    return (
+      <div className="flex items-center gap-3">
+        <span style={{ color: 'var(--text-secondary)', flexShrink: 0 }}>{icon}</span>
+        <span className="text-xs w-20 shrink-0" style={{ color: 'var(--text-secondary)' }}>{label}</span>
+        <span className="font-mono text-xs flex-1 truncate" style={{ color: 'var(--text-secondary)' }}>
+          secret ref → {value.id} (edit in raw config to change)
+        </span>
+      </div>
+    )
+  }
 
   return (
     <div className="flex items-center gap-3">
@@ -276,10 +292,10 @@ function ConfigField({ icon, label, value, onSave, placeholder }: {
         </div>
       ) : (
         <div className="flex items-center gap-2 flex-1">
-          <span className="font-mono text-xs flex-1 truncate" style={{ color: value ? 'var(--text-primary)' : 'var(--text-secondary)' }}>
-            {value || 'Not set'}
+          <span className="font-mono text-xs flex-1 truncate" style={{ color: literal ? 'var(--text-primary)' : 'var(--text-secondary)' }}>
+            {literal || 'Not set'}
           </span>
-          <button onClick={() => { setDraft(value ?? ''); setEditing(true) }} style={iconBtnStyle} title="Edit"
+          <button onClick={() => { setDraft(literal); setEditing(true) }} style={iconBtnStyle} title="Edit"
             onMouseEnter={e => ((e.currentTarget as HTMLElement).style.color = 'var(--text-primary)')}
             onMouseLeave={e => ((e.currentTarget as HTMLElement).style.color = 'var(--text-secondary)')}
           ><Pencil size={13} /></button>

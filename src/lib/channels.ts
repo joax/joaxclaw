@@ -17,7 +17,9 @@
 // A credential may be a literal string or a SecretRef indirection
 // ({ source: 'env', provider, id }). The curated forms edit literal strings;
 // SecretRef values are preserved untouched and surfaced read-only.
-export type SecretRef = { source: string; provider?: string; id: string }
+// SecretRef is defined canonically in ./types and re-exported here.
+import type { SecretRef } from './types'
+export type { SecretRef }
 export type CredentialValue = string | SecretRef | undefined
 
 export interface ChannelAccountCfg {

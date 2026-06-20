@@ -7,6 +7,7 @@ import { useSessionsStore } from '../../store/sessions'
 import { useModelsStore } from '../../store/models'
 import { MessageThread } from './MessageThread'
 import { MessageInput } from './MessageInput'
+import logoUrl from '../../assets/logo-dark.png'
 import { ModelSelect, ThinkingSelect } from './ChatHeaderControls'
 import { Btn } from '../ui/Btn'
 import { formatRelativeDate } from '../../lib/dateUtils'
@@ -267,7 +268,7 @@ export function ChatView() {
           </>
         ) : (
           <div className="flex flex-1 flex-col items-center justify-center gap-3">
-            <span className="text-5xl">🦞</span>
+            <img src={logoUrl} alt="JoaxClaw" style={{ height: 56, width: 'auto', opacity: 0.9 }} />
             <h2 className="text-lg font-semibold" style={{ color: 'var(--text-primary)' }}>Start a conversation</h2>
             <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
               Select a chat or click + to start with an agent

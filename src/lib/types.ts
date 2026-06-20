@@ -297,10 +297,14 @@ export interface GwModelDef {
   params?: Record<string, unknown>
 }
 
+// A credential may be a literal string or a SecretRef indirection
+// ({ source: 'env', provider, id }) that points the gateway at a stored secret.
+export interface SecretRef { source: string; provider?: string; id: string }
+
 export interface GwModelProvider {
   baseUrl?: string
   api?: string
-  apiKey?: string
+  apiKey?: string | SecretRef
   models: GwModelDef[]
 }
 
