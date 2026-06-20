@@ -7,10 +7,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-06-20
+
 ### Added
 
 - **Remote-gateway local-engine health & model listing.** The `joaxclaw-fs` plugin now exposes `engines.probe` and `engines.fetch` — host-side GETs that check a local LLM engine's liveness and read its model list **from the gateway host**. Previously, engines on a remote gateway's loopback/LAN showed as *unknown* because the app can only reach `localhost` on the client machine. The Local LLM Engines panel (Crons) and Settings card now route their probes through the plugin when the gateway is remote, and also discover engines on the host's default ports. Requested URLs are guarded to local-engine hosts only (loopback / `*.local` / private IPv4), so the methods can't be used as a general request proxy. New `probeStatus()` routing in `lib/localEngines.ts`; verified end-to-end against a live gateway.
 - **Saved connections survive a `localStorage` reset.** Gateway connections are now mirrored to the file-based localstore (`~/.openclaw`-adjacent `~/.joaxclaw/store.json`) in addition to `localStorage`, and any missing ones are restored on startup (merged by URL). Previously an Electron `localStorage` reset (origin change, concurrent instances, profile corruption) could silently wipe them. New `restoreConnectionsFromBackup()` in `store/connection.ts`.
+
+### Notes
+
+- The `engines.*` probing requires the **updated `joaxclaw-fs` plugin** on the gateway host. Existing installs need to re-run **Install via agent** (remote Teams/Processes screen) or `openclaw plugins install --link ./plugins/joaxclaw-fs` + a gateway restart to pick up the new methods; until then remote engines stay *unknown* (no regression).
 
 ## [0.6.0] - 2026-06-19
 
