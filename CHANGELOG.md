@@ -7,6 +7,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-06-20
+
 ### Added
 
 - **`joaxclaw-fs` plugin is published to npm** as [`openclaw-joaxclaw-fs`](https://www.npmjs.com/package/openclaw-joaxclaw-fs), so installing it on a gateway host is one command: `openclaw plugins install openclaw-joaxclaw-fs && openclaw plugins allow joaxclaw-fs`. A new CI workflow (`.github/workflows/publish-plugin.yml`) publishes the package automatically whenever its `package.json` version changes on `main`, version-guarded so unrelated pushes are a no-op (requires an `NPM_TOKEN` repo secret). The in-app Help → Remote Teams steps and the plugin README now lead with the npm install.
