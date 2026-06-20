@@ -7,6 +7,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Saved connections survive a `localStorage` reset.** Gateway connections are now mirrored to the file-based localstore (`~/.openclaw`-adjacent `~/.joaxclaw/store.json`) in addition to `localStorage`, and any missing ones are restored on startup (merged by URL). Previously an Electron `localStorage` reset (origin change, concurrent instances, profile corruption) could silently wipe them. New `restoreConnectionsFromBackup()` in `store/connection.ts`.
+
 ## [0.6.0] - 2026-06-19
 
 ### Added

@@ -17,7 +17,7 @@ import { ModelsView } from './components/models/ModelsView'
 import { SystemMonitorHUD } from './components/monitor/SystemMonitorHUD'
 import { ConnectScreen } from './components/layout/ConnectScreen'
 import { ReconnectOverlay } from './components/layout/ReconnectOverlay'
-import { useConnectionStore } from './store/connection'
+import { useConnectionStore, restoreConnectionsFromBackup } from './store/connection'
 import { useMetricsStore } from './store/metrics'
 import { useSettingsStore } from './store/settings'
 import { useExtensionsStore } from './store/extensions'
@@ -37,6 +37,9 @@ export default function App() {
 
   useEffect(() => {
     startMetrics()
+    // Restore saved connections from the file backup (resilient to localStorage
+    // resets) and keep the backup in sync going forward.
+    restoreConnectionsFromBackup()
     return () => stopMetrics()
   }, [])
 
