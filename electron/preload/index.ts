@@ -57,11 +57,6 @@ contextBridge.exposeInMainWorld('api', {
     buildArchive: (slug: string) => ipcRenderer.invoke('skills:buildArchive', slug)
   },
 
-  // Teams helpers (e.g. the remote "install the teams-fs plugin via an agent" flow)
-  teams: {
-    installScript: () => ipcRenderer.invoke('teams:installScript')
-  },
-
   // JoaxClaw local persistent store (~/.joaxclaw/store.json)
   localstore: {
     read: () => ipcRenderer.invoke('localstore:read'),
