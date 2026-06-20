@@ -7,6 +7,7 @@
 // and, on a local gateway, by probing well-known default ports.
 
 import type { GwModelProvider } from './types'
+import { gatewayClient } from './gateway'
 
 export type EngineApiKind = 'ollama' | 'openai'
 export type EngineStatus = 'up' | 'down' | 'unknown'
@@ -72,12 +73,6 @@ export function isLocalHost(host: string | null): boolean {
     host.endsWith('.local') || isPrivateIpv4(host)
 }
 
-// True for hosts a loopback/0.0.0.0 address — reachable only on the gateway's own host.
-function isLoopback(host: string | null): boolean {
-  return host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0' ||
-    host === '::1' || host === '::ffff:7f00:1' || host === '::ffff:127.0.0.1'
-}
-
 export function healthUrl(api: EngineApiKind, baseUrl: string): string {
   const b = baseUrl.replace(/\/+$/, '')
   return api === 'ollama' ? `${b}/api/tags` : `${b}/models`
@@ -108,19 +103,38 @@ async function probeUrl(url: string): Promise<boolean> {
   try { const r = await fetch(url); return r.ok } catch { return false }
 }
 
+function isUnknownMethod(e: unknown): boolean {
+  return /unknown method/i.test(e instanceof Error ? e.message : String(e))
+}
+
+// Probe a health URL and classify the result. When `viaGateway`, the probe runs on
+// the gateway HOST via the joaxclaw-fs `engines.probe` method — that's how loopback
+// engines on a remote gateway (unreachable from this client) get a real up/down.
+// 'unknown' means we couldn't tell: the plugin isn't installed on the host.
+async function probeStatus(url: string, viaGateway: boolean): Promise<EngineStatus> {
+  if (!viaGateway) return (await probeUrl(url)) ? 'up' : 'down'
+  try {
+    const r = await gatewayClient.request<{ ok: boolean }>('engines.probe', { url })
+    return r.ok ? 'up' : 'down'
+  } catch (e) {
+    return isUnknownMethod(e) ? 'unknown' : 'down'
+  }
+}
+
 // Probes one instance. An override URL (reachable from this client, e.g. a tailnet
-// address) takes precedence over the config baseUrl. Reachability:
-//   - local gateway, or target on a non-loopback host → probe (up/down)
-//   - remote gateway + loopback target → unreachable from here → unknown
+// address) takes precedence over the config baseUrl. Routing:
+//   - local gateway, or an explicit override → probe directly from this client
+//   - remote gateway, no override → probe on the host via engines.probe (plugin);
+//     'unknown' if the plugin isn't installed
 export async function checkInstance(
   inst: EngineInstance,
   gatewayIsLocal: boolean,
   overrideUrl?: string
 ): Promise<EngineStatus> {
-  const baseUrl = overrideUrl?.trim() || inst.baseUrl
-  const reachable = gatewayIsLocal || !isLoopback(hostOf(baseUrl))
-  if (!reachable) return 'unknown'
-  return (await probeUrl(healthUrl(inst.api, baseUrl))) ? 'up' : 'down'
+  const override = overrideUrl?.trim()
+  const baseUrl = override || inst.baseUrl
+  const viaGateway = !gatewayIsLocal && !override
+  return probeStatus(healthUrl(inst.api, baseUrl), viaGateway)
 }
 
 // ── Detection ─────────────────────────────────────────────────────────────────
@@ -145,15 +159,17 @@ const CRON_COMPANIONS: { engineId: string; label: string; api: EngineApiKind; po
   { engineId: 'ollama', label: 'Ollama', api: 'ollama', port: 11435, basePath: '' },
 ]
 
-// Probes default ports for engines not already represented in config (local gateway only).
-export async function detectByPort(existing: EngineInstance[]): Promise<EngineInstance[]> {
+// Probes default `localhost` ports for engines not already in config. Locally this
+// hits the client's own ports; with `viaGateway` (remote gateway + joaxclaw-fs plugin)
+// it probes the gateway HOST's loopback ports, discovering engines running there.
+export async function detectByPort(existing: EngineInstance[], viaGateway = false): Promise<EngineInstance[]> {
   const usedPorts = new Set(existing.map(e => { try { return new URL(e.baseUrl).port } catch { return '' } }))
   const found: EngineInstance[] = []
 
   await Promise.all(KNOWN_ENGINES.map(async e => {
     if (usedPorts.has(String(e.defaultPort))) return
     const baseUrl = `http://localhost:${e.defaultPort}${e.basePath}`
-    if (await probeUrl(healthUrl(e.api, baseUrl))) {
+    if (await probeStatus(healthUrl(e.api, baseUrl), viaGateway) === 'up') {
       found.push({ key: `${e.id}:${e.defaultPort}`, engineId: e.id, label: e.label, baseUrl, api: e.api, source: 'detected', isCron: false })
     }
   }))
@@ -161,7 +177,7 @@ export async function detectByPort(existing: EngineInstance[]): Promise<EngineIn
   await Promise.all(CRON_COMPANIONS.map(async c => {
     if (usedPorts.has(String(c.port))) return
     const baseUrl = `http://localhost:${c.port}${c.basePath}`
-    if (await probeUrl(healthUrl(c.api, baseUrl))) {
+    if (await probeStatus(healthUrl(c.api, baseUrl), viaGateway) === 'up') {
       found.push({ key: `${c.engineId}-cron:${c.port}`, engineId: c.engineId, label: c.label, baseUrl, api: c.api, source: 'detected', isCron: true })
     }
   }))

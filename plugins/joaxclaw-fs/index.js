@@ -43,6 +43,60 @@ function teamsDir() { return path.join(resolveStateDir(), 'teams') }
 function processesDir() { return path.join(resolveStateDir(), 'processes') }
 function runsDir() { return path.join(processesDir(), '.runs') }
 
+// ── engines.* host classification + guarded fetch ───────────────────────────────
+// engines.* lets the app probe local LLM engines that live on the GATEWAY host's
+// loopback/LAN — unreachable from a remote client, but reachable from here. To keep
+// this from being a general-purpose request proxy (SSRF), we only ever fetch hosts
+// that classify as a local engine host: loopback, *.local, or a private IPv4 range.
+function isLocalEngineHost(host) {
+  if (!host) return false
+  let h = String(host).toLowerCase()
+  if (h.startsWith('[') && h.endsWith(']')) h = h.slice(1, -1)
+  if (h === 'localhost' || h === '127.0.0.1' || h === '0.0.0.0' ||
+      h === '::1' || h === '::ffff:7f00:1' || h === '::ffff:127.0.0.1') return true
+  if (h.endsWith('.local')) return true
+  const m = /^(\d+)\.(\d+)\.\d+\.\d+$/.exec(h)
+  if (m) {
+    const a = parseInt(m[1], 10), b = parseInt(m[2], 10)
+    return a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168)
+  }
+  return false
+}
+
+// Validate + classify a requested engine URL. Responds with INVALID_REQUEST and
+// returns null on anything we won't fetch; returns the URL string otherwise.
+function guardEngineUrl(url, respond) {
+  let u
+  try { u = new URL(url) } catch {
+    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, `invalid url ${JSON.stringify(url)}`))
+    return null
+  }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') {
+    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, `unsupported protocol ${JSON.stringify(u.protocol)}`))
+    return null
+  }
+  if (!isLocalEngineHost(u.hostname)) {
+    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, 'engines.* only proxies local-engine hosts (loopback / .local / private IPv4)'))
+    return null
+  }
+  return u.toString()
+}
+
+// Cap on the body we return from engines.fetch (model lists are small; this guards
+// against an unexpectedly large response). 1 MiB is plenty for /api/tags or /models.
+const ENGINE_BODY_CAP = 1 << 20
+
+async function engineFetch(url, timeoutMs) {
+  const ctrl = new AbortController()
+  const ms = Number.isFinite(timeoutMs) && timeoutMs > 0 ? Math.min(timeoutMs, 30000) : 4000
+  const timer = setTimeout(() => ctrl.abort(), ms)
+  try {
+    return await fetch(url, { signal: ctrl.signal, headers: { accept: 'application/json' } })
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 async function readTextOrNull(filePath) {
   try {
     return await fs.readFile(filePath, 'utf8')
@@ -81,7 +135,7 @@ function failed(respond, err) {
 export default definePluginEntry({
   id: 'joaxclaw-fs',
   name: 'JoaxClaw FS',
-  description: 'teams.* and processes.* gateway methods backed by <stateDir>/teams and <stateDir>/processes.',
+  description: 'teams.* / processes.* (backed by <stateDir>) and engines.* (host-side local-LLM probing) gateway methods.',
   register(api) {
     // ── teams.* ────────────────────────────────────────────────────────────────
     api.registerGatewayMethod('teams.list', async ({ respond }) => {
@@ -196,5 +250,40 @@ export default definePluginEntry({
         respond(true, { ok: true, id })
       } catch (err) { failed(respond, err) }
     }, { scope: WRITE_SCOPE })
+
+    // ── engines.* ────────────────────────────────────────────────────────────────
+    // Probe / read local LLM engines on the gateway host. The desktop app can only
+    // reach `localhost` on the CLIENT machine, so loopback engines on a remote
+    // gateway host were always "unknown". These methods run the probe HERE (on the
+    // host), so a remote app can check liveness and list models of the host's engines.
+
+    // Liveness: GET the given health URL, report whether it responded ok.
+    api.registerGatewayMethod('engines.probe', async ({ params, respond }) => {
+      const url = guardEngineUrl(params?.url, respond)
+      if (url == null) return
+      try {
+        const res = await engineFetch(url, params?.timeoutMs)
+        respond(true, { ok: res.ok, status: res.status })
+      } catch {
+        // Network error / timeout / connection refused → engine is down, not an error.
+        respond(true, { ok: false, status: 0 })
+      }
+    }, { scope: READ_SCOPE })
+
+    // Read: GET the given URL and return its body (capped). Used for model listing
+    // (e.g. Ollama /api/tags, OpenAI-compatible /models). Body is returned verbatim;
+    // the app owns parsing, exactly like the local-fetch path.
+    api.registerGatewayMethod('engines.fetch', async ({ params, respond }) => {
+      const url = guardEngineUrl(params?.url, respond)
+      if (url == null) return
+      try {
+        const res = await engineFetch(url, params?.timeoutMs)
+        const raw = await res.text()
+        const body = raw.length > ENGINE_BODY_CAP ? raw.slice(0, ENGINE_BODY_CAP) : raw
+        respond(true, { ok: res.ok, status: res.status, body })
+      } catch (err) {
+        respond(true, { ok: false, status: 0, body: '', error: err?.message ?? String(err) })
+      }
+    }, { scope: READ_SCOPE })
   },
 })
