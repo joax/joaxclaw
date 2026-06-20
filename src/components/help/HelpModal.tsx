@@ -316,29 +316,25 @@ function RemoteTeams() {
         </p>
       </div>
 
-      <Step n={1} title="Get the plugin onto the gateway host">
-        The plugin ships with JoaxClaw at <Code>plugins/joaxclaw-fs</Code>. On the machine running the gateway,
-        place that folder anywhere (it's already there if you cloned the repo on the host). For a host you only
-        reach over SSH, copy it up — e.g. <Code>scp -r plugins/joaxclaw-fs you@host:~/joaxclaw-fs</Code>.
-      </Step>
-
-      <Step n={2} title="Install it on the host">
-        Register the plugin from that path:
+      <Step n={1} title="Install it on the gateway host">
+        If the host has internet, install from npm — one line:
         <span style={{ display: 'block', marginTop: 8 }}>
-          <Code>openclaw plugins install --link ~/joaxclaw-fs</Code>
+          <Code>openclaw plugins install openclaw-joaxclaw-fs && openclaw plugins allow joaxclaw-fs</Code>
         </span>
         <span style={{ display: 'block', marginTop: 6, opacity: 0.8 }}>
-          (A packed tarball works too: <Code>openclaw plugins install npm-pack:./openclaw-joaxclaw-fs-0.1.0.tgz</Code>.
-          No npm/ClawHub publishing is required.)
+          Offline / from source: the plugin ships at <Code>plugins/joaxclaw-fs</Code> (copy it up with{' '}
+          <Code>scp -r plugins/joaxclaw-fs you@host:~/joaxclaw-fs</Code> if needed), then{' '}
+          <Code>openclaw plugins install --link ~/joaxclaw-fs</Code> — a packed tarball works too
+          (<Code>openclaw plugins install npm-pack:./openclaw-joaxclaw-fs-0.2.0.tgz</Code>).
         </span>
       </Step>
 
-      <Step n={3} title="Restart the gateway">
+      <Step n={2} title="Restart the gateway">
         Load the new plugin with <Code>openclaw gateway restart</Code>. Confirm it's active with{' '}
         <Code>openclaw plugins list</Code> — you should see <b style={{ color: 'var(--text-primary)' }}>joaxclaw-fs · enabled</b>.
       </Step>
 
-      <Step n={4} title="Back in JoaxClaw">
+      <Step n={3} title="Back in JoaxClaw">
         Reconnect (or press <b style={{ color: 'var(--text-primary)' }}>Retry</b> on the Teams/Processes screen).
         Both now load over the WebSocket and behave exactly as on a local gateway — create, edit, delete, and view
         agent-authored teams and processes. No app update needed; JoaxClaw uses the plugin automatically when present.

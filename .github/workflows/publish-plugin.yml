@@ -1,0 +1,71 @@
+name: Publish joaxclaw-fs plugin
+
+# Publishes plugins/joaxclaw-fs to npm (as openclaw-joaxclaw-fs) whenever its
+# package.json version changes on main. Guarded against re-publishing a version
+# that already exists, mirroring the app's Build & Release workflow — so a normal
+# push that doesn't bump the plugin version is a no-op.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "plugins/joaxclaw-fs/**"
+      - ".github/workflows/publish-plugin.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: plugins/joaxclaw-fs
+
+jobs:
+  # ── Decide whether this version still needs publishing ──────────────────────
+  check:
+    runs-on: ubuntu-22.04
+    outputs:
+      version: ${{ steps.pkg.outputs.version }}
+      should_publish: ${{ steps.guard.outputs.should_publish }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read plugin version
+        id: pkg
+        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Check if openclaw-joaxclaw-fs@${{ steps.pkg.outputs.version }} is already on npm
+        id: guard
+        run: |
+          VERSION="${{ steps.pkg.outputs.version }}"
+          if npm view "openclaw-joaxclaw-fs@${VERSION}" version >/dev/null 2>&1; then
+            echo "openclaw-joaxclaw-fs@${VERSION} already published — skipping."
+            echo "should_publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "openclaw-joaxclaw-fs@${VERSION} not on npm — will publish."
+            echo "should_publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  # ── Publish to the public npm registry ──────────────────────────────────────
+  publish:
+    needs: check
+    if: needs.check.outputs.should_publish == 'true'
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Sanity-check the plugin entry parses
+        run: node --check index.js
+
+      - name: Show package contents
+        run: npm pack --dry-run
+
+      - name: Publish
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

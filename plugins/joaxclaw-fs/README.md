@@ -46,6 +46,14 @@ the returned body at 1 MiB; the app parses it (Ollama `/api/tags`, OpenAI `/mode
 
 ## Install
 
+From npm (recommended — works on any gateway host with internet):
+
+```bash
+openclaw plugins install openclaw-joaxclaw-fs
+openclaw plugins allow joaxclaw-fs
+openclaw gateway restart
+```
+
 Local gateway (dev — symlink so edits reload):
 
 ```bash
@@ -53,7 +61,14 @@ openclaw plugins install --link ./plugins/joaxclaw-fs
 openclaw gateway restart
 ```
 
-Remote gateway: JoaxClaw's **Install via agent** flow (on the remote Teams or Processes
-screen) installs this on the host for you. Or get the folder onto the host once and
-`openclaw plugins install <path>` there. The app uses these methods automatically when
-the plugin is present.
+Remote gateway, no shell access: JoaxClaw's **Install via agent** flow (on the remote
+Teams or Processes screen) installs this on the host for you (it embeds the plugin
+files in a chat message, so it works even air-gapped). The app uses these methods
+automatically when the plugin is present.
+
+### Publishing
+
+CI publishes this package to npm automatically when its `package.json` version
+changes on `main` (`.github/workflows/publish-plugin.yml`). Bump the `version`, update
+this README / the app's CHANGELOG, and push — the workflow is a no-op for any version
+already on npm. Requires an `NPM_TOKEN` repository secret with publish rights.
