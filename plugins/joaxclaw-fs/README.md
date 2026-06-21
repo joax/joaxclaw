@@ -46,11 +46,13 @@ the returned body at 1 MiB; the app parses it (Ollama `/api/tags`, OpenAI `/mode
 
 ## Install
 
-From npm (recommended — works on any gateway host with internet):
+From npm (recommended — works on any gateway host with internet). `--force` makes
+this same command upgrade an existing install:
 
 ```bash
-openclaw plugins install openclaw-joaxclaw-fs
-openclaw plugins allow joaxclaw-fs
+openclaw plugins install --force openclaw-joaxclaw-fs
+openclaw plugins enable joaxclaw-fs
+openclaw plugins inspect joaxclaw-fs   # verify it registered (exits non-zero if not)
 openclaw gateway restart
 ```
 
