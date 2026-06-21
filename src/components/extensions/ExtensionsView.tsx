@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
-import { Puzzle, RefreshCw, Plus, Trash2, Check, Loader2, LayoutGrid, List, FileText, X, ChevronRight, SlidersHorizontal } from 'lucide-react'
+import { Puzzle, RefreshCw, Plus, Trash2, Check, Loader2, LayoutGrid, List, FileText, X, ChevronRight, SlidersHorizontal, CheckCircle2, KeyRound } from 'lucide-react'
 import { useExtensionsStore } from '../../store/extensions'
 import type { Plugin, Skill } from '../../store/extensions'
+import type { PluginKeyStatus } from '../../lib/pluginConfig'
 import { Btn } from '../ui/Btn'
 import { Input } from '../ui/Input'
 import { PluginConfigModal } from './PluginConfigModal'
@@ -515,6 +516,26 @@ function SkillMdModal({ skill, onClose }: { skill: Skill; onClose: () => void })
   )
 }
 
+// ── Plugin API-key status badge ───────────────────────────────────────────────
+
+function KeyStatusBadge({ status }: { status?: PluginKeyStatus }) {
+  if (status === 'set') {
+    return (
+      <span title="API key configured" className="flex items-center gap-1 shrink-0" style={{ fontSize: 10, fontWeight: 600, color: 'var(--success)', background: 'color-mix(in srgb, var(--success) 13%, transparent)', padding: '1px 6px', borderRadius: 999 }}>
+        <CheckCircle2 size={11} /> Configured
+      </span>
+    )
+  }
+  if (status === 'missing') {
+    return (
+      <span title="This plugin needs an API key" className="flex items-center gap-1 shrink-0" style={{ fontSize: 10, fontWeight: 600, color: 'var(--warning)', background: 'color-mix(in srgb, var(--warning) 13%, transparent)', padding: '1px 6px', borderRadius: 999 }}>
+        <KeyRound size={10} /> Needs key
+      </span>
+    )
+  }
+  return null
+}
+
 // ── Plugin card ───────────────────────────────────────────────────────────────
 
 interface PluginCardProps {
@@ -550,9 +571,12 @@ function PluginCard({ plugin, onToggle, onConfigure, onRemove, confirmingDelete,
           <Puzzle size={18} style={{ color: 'var(--accent)' }} />
         </div>
         <div className="flex-1 min-w-0">
-          <p className="font-semibold text-sm truncate" style={{ color: 'var(--text-primary)' }}>
-            {plugin.name ?? plugin.id}
-          </p>
+          <div className="flex items-center gap-1.5">
+            <p className="font-semibold text-sm truncate" style={{ color: 'var(--text-primary)' }}>
+              {plugin.name ?? plugin.id}
+            </p>
+            <KeyStatusBadge status={plugin.keyStatus} />
+          </div>
           {plugin.name && plugin.name !== plugin.id && (
             <p className="text-xs font-mono truncate" style={{ color: 'var(--text-secondary)' }}>{plugin.id}</p>
           )}
@@ -618,6 +642,7 @@ function PluginRow({ plugin, onToggle, onConfigure, onRemove, confirmingDelete, 
             <p className="font-medium text-sm" style={{ color: 'var(--text-primary)' }}>
               {plugin.name ?? plugin.id}
             </p>
+            <KeyStatusBadge status={plugin.keyStatus} />
             {plugin.origin && (
               <span className="text-xs" style={{ color: 'var(--text-secondary)', opacity: 0.5 }}>
                 {plugin.origin}{plugin.version ? ` · ${plugin.version}` : ''}

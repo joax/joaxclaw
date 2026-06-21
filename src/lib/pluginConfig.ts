@@ -50,6 +50,21 @@ export function pluginConfigSpec(pluginId: string): PluginConfigSpec | null {
   return null
 }
 
+// Whether a plugin's required API key is set in the config.
+//   'set'     — a literal key or a SecretRef is present
+//   'missing' — the plugin needs a key but none is configured
+//   'n/a'     — the plugin doesn't take a curated API key (nothing to complete)
+export type PluginKeyStatus = 'set' | 'missing' | 'n/a'
+
+export function pluginKeyStatus(config: Record<string, unknown> | undefined, pluginId: string): PluginKeyStatus {
+  const spec = pluginConfigSpec(pluginId)
+  if (!spec?.apiKey) return 'n/a'
+  const v = readPath(config, apiKeyPath(pluginId, spec.apiKey))
+  // A non-empty string literal, or a SecretRef object ({ source, id }), counts as set.
+  const set = (typeof v === 'string' && v.trim().length > 0) || (!!v && typeof v === 'object')
+  return set ? 'set' : 'missing'
+}
+
 // Where a plugin's API key lives in the config tree.
 export function apiKeyPath(pluginId: string, kind: ApiKeyKind): string {
   switch (kind) {

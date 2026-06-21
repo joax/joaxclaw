@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { gatewayClient } from '../lib/gateway'
+import { pluginKeyStatus, type PluginKeyStatus } from '../lib/pluginConfig'
 
 export interface Plugin {
   id: string
@@ -10,6 +11,8 @@ export interface Plugin {
   source?: string
   version?: string
   origin?: string
+  // API-key completeness: 'set' (configured), 'missing' (needs a key), 'n/a' (no key needed).
+  keyStatus?: PluginKeyStatus
   [key: string]: unknown
 }
 
@@ -121,8 +124,11 @@ export const useExtensionsStore = create<ExtensionsState>((set, get) => ({
   async load() {
     set({ loading: true, error: null })
     try {
-      const snapshot = await gatewayClient.request<{ config?: Record<string, unknown>; hash?: string }>('config.get', {})
+      const snapshot = await gatewayClient.request<{ config?: Record<string, unknown>; parsed?: Record<string, unknown>; hash?: string }>('config.get', {})
       const config = snapshot.config ?? {}
+      // Parsed (raw) view keeps SecretRefs intact, so a key set as an env ref still
+      // counts as configured when we compute per-plugin completeness below.
+      const fullCfg = (snapshot.parsed ?? snapshot.config ?? {}) as Record<string, unknown>
       const pluginsSection = config.plugins as Record<string, unknown> | undefined
       const skillsSection = config.skills as Record<string, unknown> | undefined
       const pluginEntries = (pluginsSection?.entries ?? {}) as EntriesMap
@@ -197,10 +203,12 @@ export const useExtensionsStore = create<ExtensionsState>((set, get) => ({
       } catch { /* non-critical */ }
 
       const plugins = normalizePlugins(pluginEntries).map(p => {
+        const keyStatus = pluginKeyStatus(fullCfg, p.id)
         const meta = pluginMetaMap[p.id]
-        if (!meta) return p
+        if (!meta) return { ...p, keyStatus }
         return {
           ...p,
+          keyStatus,
           description: p.description ?? meta.description,
           name: p.name !== p.id ? p.name : (meta.name ?? p.name),
           version: meta.version,
