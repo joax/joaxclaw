@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { pluginConfigSpec, apiKeyPath, readPath, nestedPatch, mergeDeep } from '../pluginConfig'
+import { pluginConfigSpec, apiKeyPath, readPath, nestedPatch, mergeDeep, pluginKeyStatus } from '../pluginConfig'
 
 describe('pluginConfigSpec / apiKeyPath', () => {
   it('routes model providers to models.providers.<id>.apiKey', () => {
@@ -37,5 +37,21 @@ describe('nestedPatch / readPath / mergeDeep', () => {
     const a = nestedPatch('tools.web.search.apiKey', 'k')
     mergeDeep(a, nestedPatch('tools.web.search.provider', 'exa'))
     expect(a).toEqual({ tools: { web: { search: { apiKey: 'k', provider: 'exa' } } } })
+  })
+})
+
+describe('pluginKeyStatus', () => {
+  it('is "set" for a literal or SecretRef key', () => {
+    expect(pluginKeyStatus({ models: { providers: { openai: { apiKey: 'sk-x' } } } }, 'openai')).toBe('set')
+    expect(pluginKeyStatus({ models: { providers: { openai: { apiKey: { source: 'env', id: 'OPENAI_KEY' } } } } }, 'openai')).toBe('set')
+    expect(pluginKeyStatus({ messages: { tts: { providers: { elevenlabs: { apiKey: 'k' } } } } }, 'elevenlabs')).toBe('set')
+  })
+  it('is "missing" when a key-needing plugin has no key', () => {
+    expect(pluginKeyStatus({}, 'openai')).toBe('missing')
+    expect(pluginKeyStatus({ models: { providers: { openai: { apiKey: '  ' } } } }, 'openai')).toBe('missing')
+  })
+  it('is "n/a" for plugins that take no curated key', () => {
+    expect(pluginKeyStatus({}, 'joaxclaw-fs')).toBe('n/a')
+    expect(pluginKeyStatus({}, 'browser')).toBe('n/a')
   })
 })
