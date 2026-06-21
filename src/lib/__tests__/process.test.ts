@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { parseProcessFile, serializeProcess, processTemplate } from '../processParser'
-import { compileProcessToJob, buildLaunchPrompt } from '../processCompiler'
+import { compileProcessToJob, buildLaunchPrompt, launchPromptProcessId } from '../processCompiler'
 import type { ProcessDef, ProcessGraph } from '../processParser'
 
 // ── Shared fixture ────────────────────────────────────────────────────────────
@@ -421,5 +421,19 @@ describe('buildLaunchPrompt', () => {
     const prompt = buildLaunchPrompt(def, job)
     expect(prompt).toContain('TEAM BLUEPRINT')
     expect(prompt).toContain('"processId"')
+  })
+})
+
+// ── launchPromptProcessId (round-trip with buildLaunchPrompt) ──────────────────
+
+describe('launchPromptProcessId', () => {
+  it('recovers the process id from a launch prompt', () => {
+    const def = makeDef()
+    const prompt = buildLaunchPrompt(def, compileProcessToJob(def))
+    expect(launchPromptProcessId(prompt)).toBe('test-proc')
+  })
+  it('returns null for a non-launch-prompt message', () => {
+    expect(launchPromptProcessId('Check for new tasks and update the status.')).toBeNull()
+    expect(launchPromptProcessId('')).toBeNull()
   })
 })
