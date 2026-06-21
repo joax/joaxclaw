@@ -319,7 +319,7 @@ function RemoteTeams() {
       <Step n={1} title="Install it on the gateway host">
         If the host has internet, install from npm — one line:
         <span style={{ display: 'block', marginTop: 8 }}>
-          <Code>openclaw plugins install openclaw-joaxclaw-fs && openclaw plugins allow joaxclaw-fs</Code>
+          <Code>openclaw plugins install --force openclaw-joaxclaw-fs && openclaw plugins enable joaxclaw-fs</Code>
         </span>
         <span style={{ display: 'block', marginTop: 6, opacity: 0.8 }}>
           Offline / from source: the plugin ships at <Code>plugins/joaxclaw-fs</Code> (copy it up with{' '}

@@ -5,17 +5,22 @@
 // engines.* probes), so one install makes Teams AND Processes work over a remote
 // connection. Offline hosts can use the manual --link steps in Help → Remote Teams.
 
-// The script the agent runs on the gateway host. `set -e` aborts on a failed
-// install so the agent reports the real error instead of "restarting" a no-op.
-// The gateway restart is detached + delayed so the agent's turn finishes cleanly
-// first (otherwise the restart kills the session mid-call and it hangs "running").
+// The script the agent runs on the gateway host. `set -e` aborts on any failed
+// step (install, enable, or the inspect guard) so the agent reports the real error
+// instead of "restarting" a broken install. Step output stays visible so failures
+// are diagnosable; only the restart is detached + delayed so the agent's turn
+// finishes cleanly first (otherwise the restart kills the session mid-call and it
+// hangs "running"). `--force` makes this double as the upgrade path.
 const INSTALL_SCRIPT = [
-  '# Install the JoaxClaw joaxclaw-fs gateway plugin from npm.',
+  '# Install or upgrade the JoaxClaw joaxclaw-fs gateway plugin from npm.',
   'set -e',
-  'openclaw plugins install openclaw-joaxclaw-fs',
-  'openclaw plugins allow joaxclaw-fs >/dev/null 2>&1 || true',
-  'openclaw plugins list | grep -i joaxclaw-fs || true',
-  'echo "joaxclaw-fs installed. Restarting the gateway in a few seconds to load it."',
+  'openclaw plugins install --force openclaw-joaxclaw-fs',
+  'openclaw plugins enable joaxclaw-fs',
+  '# Hard guard: inspect exits non-zero if the plugin did not register. Abort',
+  '# (do NOT restart) so a failed install surfaces instead of a misleading "done".',
+  'openclaw plugins inspect joaxclaw-fs',
+  'openclaw plugins doctor || true',
+  'echo "joaxclaw-fs installed and enabled. Restarting the gateway in a few seconds to load it."',
   "nohup sh -c 'sleep 4; openclaw gateway restart' >/dev/null 2>&1 &",
 ].join('\n')
 
