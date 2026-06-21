@@ -22,6 +22,14 @@ export function compileProcessToJob(def: ProcessDef): ControllerJob {
   }
 }
 
+// Inverse of buildLaunchPrompt's header: recover the process id from a launch
+// prompt, or null if the text isn't a Team Lead launch prompt. Used to recognise a
+// team-launch cron job and pre-select its team when editing.
+export function launchPromptProcessId(message: string): string | null {
+  if (!/You are the Team Lead/.test(message)) return null
+  return /PROCESS:[^(]*\(([^)]+)\)/.exec(message)?.[1] ?? null
+}
+
 export function buildLaunchPrompt(def: ProcessDef, job: ControllerJob): string {
   const startNode = job.nodes.find(n => n.type === 'start')
   const firstEdge = job.edges.find(e => e.from === startNode?.id)

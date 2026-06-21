@@ -1,9 +1,18 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { X, Check, AlertCircle, ChevronDown } from 'lucide-react'
 import type { CronJob, CronSchedule, CronPayload, CronDelivery } from '../../lib/types'
 import { useCronsStore } from '../../store/crons'
+import { useTeamsStore } from '../../store/teams'
+import { compileProcessToJob, buildLaunchPrompt, launchPromptProcessId } from '../../lib/processCompiler'
 import { Btn } from '../ui/Btn'
 import { ModelPicker } from '../ui/ModelPicker'
+
+// A team-launch cron is a normal agentTurn whose message is the Team Lead launch
+// prompt; the team id is recoverable from the prompt header, so an existing job can
+// be recognised as a team launch and pre-select its team on edit.
+function detectTeamLaunch(payload: CronJob['payload']): string | null {
+  return payload?.kind === 'agentTurn' ? launchPromptProcessId(payload.message ?? '') : null
+}
 
 // ── Duration helpers ──────────────────────────────────────────────────────────
 
@@ -159,7 +168,17 @@ export function CronEditor({ job, onClose }: Props) {
 
   // ── Payload ──
   const initPayload = job.payload
-  const [payloadKind, setPayloadKind] = useState<'systemEvent' | 'agentTurn'>(initPayload?.kind ?? 'agentTurn')
+  // 'team' is a UI-only payload mode — it saves as an agentTurn whose message is the
+  // team's launch prompt, with agentId set to the team's controller.
+  type PayloadMode = 'systemEvent' | 'agentTurn' | 'team'
+  const initTeamId = detectTeamLaunch(initPayload)
+  const [payloadKind, setPayloadKind] = useState<PayloadMode>(initTeamId ? 'team' : (initPayload?.kind ?? 'agentTurn'))
+  const [teamId, setTeamId] = useState(initTeamId ?? '')
+
+  const teamBlueprints = useTeamsStore(s => s.blueprints)
+  const teamDefs = useTeamsStore(s => s.compiledDefs)
+  const loadTeams = useTeamsStore(s => s.load)
+  useEffect(() => { if (teamBlueprints.length === 0) loadTeams() }, [])  // eslint-disable-line react-hooks/exhaustive-deps
   const [eventText, setEventText] = useState(initPayload?.kind === 'systemEvent' ? (initPayload.text ?? '') : '')
   const [agentMessage, setAgentMessage] = useState(initPayload?.kind === 'agentTurn' ? (initPayload.message ?? '') : '')
   const [payloadModel, setPayloadModel] = useState(initPayload?.kind === 'agentTurn' ? (initPayload.model ?? '') : '')
@@ -193,6 +212,12 @@ export function CronEditor({ job, onClose }: Props) {
 
   function buildPayload(): CronPayload {
     if (payloadKind === 'systemEvent') return { kind: 'systemEvent', text: eventText }
+    if (payloadKind === 'team') {
+      const def = teamDefs[teamId]
+      // The Team Lead orchestrates by spawning sub-agents, so we deliberately leave
+      // toolsAllow unset (full default toolset) rather than restricting it.
+      return { kind: 'agentTurn', message: def ? buildLaunchPrompt(def, compileProcessToJob(def)) : '' }
+    }
     const p: CronPayload = { kind: 'agentTurn', message: agentMessage }
     if (payloadModel.trim()) (p as { model?: string }).model = payloadModel.trim()
     if (lightContext) (p as { lightContext?: boolean }).lightContext = true
@@ -219,13 +244,22 @@ export function CronEditor({ job, onClose }: Props) {
 
   async function handleSave() {
     setSaving(true); setError(null); setSaved(false)
+    // Team mode: require a selected team, and route the job to its controller agent.
+    let effectiveAgentId = agentId.trim() || null
+    if (payloadKind === 'team') {
+      const def = teamDefs[teamId]
+      if (!def) { setError('Select a team to run.'); setSaving(false); return }
+      const controller = teamBlueprints.find(b => b.id === teamId)?.controllerAgentId || def.controllerAgentId
+      if (!controller) { setError('This team has no controller agent set.'); setSaving(false); return }
+      effectiveAgentId = controller
+    }
     const resolvedSessionTarget = sessionTargetSelect === '__custom__' ? customSessionTarget.trim() : sessionTarget
     const patch: Record<string, unknown> = {
       name: name.trim(),
       description: description.trim(),
       enabled,
       deleteAfterRun,
-      agentId: agentId.trim() || null,
+      agentId: effectiveAgentId,
       schedule: buildSchedule(),
       payload: buildPayload(),
       sessionTarget: resolvedSessionTarget,
@@ -361,11 +395,34 @@ export function CronEditor({ job, onClose }: Props) {
           {tab === 'payload' && (
             <>
               <Field label="Kind">
-                <SelectInput value={payloadKind} onChange={v => setPayloadKind(v as 'systemEvent' | 'agentTurn')}>
+                <SelectInput value={payloadKind} onChange={v => setPayloadKind(v as PayloadMode)}>
                   <option value="agentTurn">Agent turn — send a prompt to the agent</option>
+                  <option value="team">Run a team — launch a multi-agent team flow</option>
                   <option value="systemEvent">System event — inject an event into the session</option>
                 </SelectInput>
               </Field>
+
+              {payloadKind === 'team' && (
+                <Field label="Team" hint="The team runs on schedule on the gateway — its controller agent orchestrates the members, no app needed. Editing the team later? Re-save this job to refresh the launch prompt.">
+                  {teamBlueprints.length === 0 ? (
+                    <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>No teams found. Create one in the Teams tab first.</p>
+                  ) : (
+                    <SelectInput value={teamId} onChange={setTeamId}>
+                      <option value="">Select a team…</option>
+                      {teamBlueprints.map(b => (
+                        <option key={b.id} value={b.id} disabled={!teamDefs[b.id]}>
+                          {b.name}{teamDefs[b.id] ? '' : ' (not compiled)'}
+                        </option>
+                      ))}
+                    </SelectInput>
+                  )}
+                  {teamId && teamBlueprints.find(b => b.id === teamId) && (
+                    <p className="text-xs mt-1.5" style={{ color: 'var(--text-secondary)', opacity: 0.8 }}>
+                      Runs as agent <code style={{ fontFamily: 'monospace' }}>{teamBlueprints.find(b => b.id === teamId)?.controllerAgentId || '(no controller)'}</code> (the team's controller). The Target tab's agent is set automatically.
+                    </p>
+                  )}
+                </Field>
+              )}
 
               {payloadKind === 'systemEvent' && (
                 <Field label="Event text" hint="The text injected as a system event into the agent session.">
