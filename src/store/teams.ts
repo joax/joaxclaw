@@ -48,7 +48,7 @@ export function teamsDir(): string {
 // ── Storage backends ───────────────────────────────────────────────────────────
 //
 // Teams live as files in the gateway host's ~/.openclaw/teams. We reach them two
-// ways: the `teams-fs` gateway plugin (teams.* RPC over the WS — works local AND
+// ways: the `joaxclaw-fs` gateway plugin (teams.* RPC over the WS — works local AND
 // remote, and sees agent-authored teams), or, when that plugin isn't installed on
 // a LOCAL gateway, direct Electron file I/O. On a REMOTE gateway with no plugin
 // there's no path to the host's files, so the view shows install instructions.
@@ -158,7 +158,7 @@ interface TeamsState {
   revisions: Record<string, TeamRevision[]>  // id → revision log (newest last, max 20)
   loading: boolean
   error: string | null
-  // True on a remote gateway when the teams-fs plugin isn't installed → the view
+  // True on a remote gateway when the joaxclaw-fs plugin isn't installed → the view
   // shows install instructions instead of the (unreachable) team list.
   needsPlugin: boolean
   backend: TeamsBackend | null
