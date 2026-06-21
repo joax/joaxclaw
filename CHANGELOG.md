@@ -7,6 +7,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Hardened the "Install via agent" script.** It used `openclaw plugins allow` — not a real subcommand, so it was a silent no-op (enabling relied entirely on `enabledByDefault`). The script now uses `openclaw plugins enable`, runs `install --force` so re-runs upgrade instead of failing, and adds an `openclaw plugins inspect` guard that aborts *before* the gateway restart if the plugin didn't register (so a failed install surfaces instead of a misleading "done"). Step output is kept visible for diagnosis. Same corrections applied to the plugin README and Help → Remote Teams. Verified end-to-end; covered by a regression test.
+
 ## [0.8.0] - 2026-06-21
 
 ### Added
