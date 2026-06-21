@@ -7,6 +7,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Configure plugins from the app (incl. API keys).** The Extensions view previously only enabled/disabled plugins; each plugin now has a **Configure** action that opens a settings dialog. It surfaces the plugin's **API key** routed to the correct place in the gateway config — model providers → `models.providers.<id>.apiKey` (with an optional base-URL override), TTS providers → `messages.tts.providers.<id>.apiKey`, web-search plugins → `tools.web.search.apiKey` — plus an **Advanced** tab for the raw `plugins.entries.<id>` config (behaviour/`llm` gating). Keys can be literals or env-var `SecretRef`s (preserved read-only). All writes go through `config.patch`, so it works on **local and remote** gateways. New `lib/pluginConfig.ts` (curated key routing) + `PluginConfigModal`; curated paths validated against the gateway config schema, with unit tests.
+
 ### Fixed
 
 - **Hardened the "Install via agent" script.** It used `openclaw plugins allow` — not a real subcommand, so it was a silent no-op (enabling relied entirely on `enabledByDefault`). The script now uses `openclaw plugins enable`, runs `install --force` so re-runs upgrade instead of failing, and adds an `openclaw plugins inspect` guard that aborts *before* the gateway restart if the plugin didn't register (so a failed install surfaces instead of a misleading "done"). Step output is kept visible for diagnosis. Same corrections applied to the plugin README and Help → Remote Teams. Verified end-to-end; covered by a regression test.

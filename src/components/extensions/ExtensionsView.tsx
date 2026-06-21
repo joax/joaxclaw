@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
-import { Puzzle, RefreshCw, Plus, Trash2, Check, Loader2, LayoutGrid, List, FileText, X, ChevronRight } from 'lucide-react'
+import { Puzzle, RefreshCw, Plus, Trash2, Check, Loader2, LayoutGrid, List, FileText, X, ChevronRight, SlidersHorizontal } from 'lucide-react'
 import { useExtensionsStore } from '../../store/extensions'
 import type { Plugin, Skill } from '../../store/extensions'
 import { Btn } from '../ui/Btn'
 import { Input } from '../ui/Input'
+import { PluginConfigModal } from './PluginConfigModal'
 
 type Tab = 'skills' | 'plugins'
 type Layout = 'card' | 'list'
@@ -24,6 +25,7 @@ export function ExtensionsView() {
   const [showAddSkill, setShowAddSkill] = useState(false)
   const [showAddPlugin, setShowAddPlugin] = useState(false)
   const [mdModal, setMdModal] = useState<{ skill: Skill } | null>(null)
+  const [configPlugin, setConfigPlugin] = useState<Plugin | null>(null)
 
   useEffect(() => { load() }, [])
 
@@ -207,6 +209,7 @@ export function ExtensionsView() {
                 <PluginCard
                   key={plugin.id} plugin={plugin}
                   onToggle={enabled => setPluginEnabled(plugin.id, enabled)}
+                  onConfigure={() => setConfigPlugin(plugin)}
                   onRemove={() => setConfirmDelete(plugin.id)}
                   confirmingDelete={confirmDelete === plugin.id}
                   onConfirmDelete={() => { removePlugin(plugin.id); setConfirmDelete(null) }}
@@ -220,6 +223,7 @@ export function ExtensionsView() {
                 <PluginRow
                   key={plugin.id} plugin={plugin}
                   onToggle={enabled => setPluginEnabled(plugin.id, enabled)}
+                  onConfigure={() => setConfigPlugin(plugin)}
                   onRemove={() => setConfirmDelete(plugin.id)}
                   confirmingDelete={confirmDelete === plugin.id}
                   onConfirmDelete={() => { removePlugin(plugin.id); setConfirmDelete(null) }}
@@ -244,6 +248,11 @@ export function ExtensionsView() {
       {/* Skill MD modal */}
       {mdModal && (
         <SkillMdModal skill={mdModal.skill} onClose={() => setMdModal(null)} />
+      )}
+
+      {/* Plugin configure modal */}
+      {configPlugin && (
+        <PluginConfigModal plugin={configPlugin} onClose={() => setConfigPlugin(null)} onSaved={load} />
       )}
     </div>
   )
@@ -511,13 +520,14 @@ function SkillMdModal({ skill, onClose }: { skill: Skill; onClose: () => void })
 interface PluginCardProps {
   plugin: Plugin
   onToggle: (enabled: boolean) => void
+  onConfigure: () => void
   onRemove: () => void
   confirmingDelete: boolean
   onConfirmDelete: () => void
   onCancelDelete: () => void
 }
 
-function PluginCard({ plugin, onToggle, onRemove, confirmingDelete, onConfirmDelete, onCancelDelete }: PluginCardProps) {
+function PluginCard({ plugin, onToggle, onConfigure, onRemove, confirmingDelete, onConfirmDelete, onCancelDelete }: PluginCardProps) {
   const [hovered, setHovered] = useState(false)
 
   return (
@@ -573,7 +583,8 @@ function PluginCard({ plugin, onToggle, onRemove, confirmingDelete, onConfirmDel
           <Btn size="sm" variant="outline" onClick={onCancelDelete} style={{ flex: 1 }}>Cancel</Btn>
         </div>
       ) : (
-        <div className="flex justify-end mt-auto">
+        <div className="flex justify-end items-center gap-1 mt-auto">
+          <Btn size="sm" variant="ghost" icon={<SlidersHorizontal size={12} />} onClick={onConfigure}>Configure</Btn>
           <Btn size="sm" variant="ghost" icon={<Trash2 size={12} />} onClick={onRemove} style={{ color: 'var(--danger)' }} />
         </div>
       )}
@@ -583,7 +594,7 @@ function PluginCard({ plugin, onToggle, onRemove, confirmingDelete, onConfirmDel
 
 // ── Plugin list row ───────────────────────────────────────────────────────────
 
-function PluginRow({ plugin, onToggle, onRemove, confirmingDelete, onConfirmDelete, onCancelDelete }: PluginCardProps) {
+function PluginRow({ plugin, onToggle, onConfigure, onRemove, confirmingDelete, onConfirmDelete, onCancelDelete }: PluginCardProps) {
   const [expanded, setExpanded] = useState(false)
 
   return (
@@ -650,7 +661,10 @@ function PluginRow({ plugin, onToggle, onRemove, confirmingDelete, onConfirmDele
               <Btn size="sm" variant="outline" onClick={onCancelDelete} style={{ flex: 1 }}>Cancel</Btn>
             </div>
           ) : (
-            <Btn size="sm" variant="ghost" icon={<Trash2 size={12} />} onClick={onRemove} style={{ color: 'var(--danger)' }} />
+            <div className="flex items-center gap-1">
+              <Btn size="sm" variant="ghost" icon={<SlidersHorizontal size={12} />} onClick={onConfigure}>Configure</Btn>
+              <Btn size="sm" variant="ghost" icon={<Trash2 size={12} />} onClick={onRemove} style={{ color: 'var(--danger)' }} />
+            </div>
           )}
         </div>
       )}
