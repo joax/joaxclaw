@@ -106,13 +106,9 @@ jobs:
       - name: Package DEB
         run: npx electron-builder --linux deb --x64 --publish never
 
-      - name: Upload DEB as artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: joaxclaw-${{ needs.check.outputs.version }}-linux-x64
-          path: dist/*.deb
-          retention-days: 90
-
+      # No upload-artifact: the installer is attached to the GitHub Release below
+      # (durable, and separate from the Actions storage quota). Keeping a 90-day
+      # artifact copy too just burned through the account's Actions storage.
       - name: Add DEB to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -147,13 +143,7 @@ jobs:
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: false
 
-      - name: Upload DMG as artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: joaxclaw-${{ needs.check.outputs.version }}-mac-universal
-          path: dist/*.dmg
-          retention-days: 90
-
+      # No upload-artifact (see the DEB job) — the DMG is attached to the Release.
       - name: Add DMG to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
