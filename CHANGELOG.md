@@ -7,14 +7,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-06-22
+
 ### Added
 
+- **Open-sourced under MIT.** Added a `LICENSE` (MIT), a public [ROADMAP.md](ROADMAP.md), `CONTRIBUTING.md`, a `SECURITY.md`, and GitHub issue/PR templates; refreshed the README. Internal `docs/` architecture notes were removed (code-adjacent `src/lib/*.md` notes stay).
 - **Schedule a team to run on a CRON job.** The CRON editor's Payload tab has a new **"Run a team"** kind — pick a configured team and the job fires its **Team Lead launch prompt** to the team's controller agent on schedule. Because the gateway runs the schedule and the agents, the team executes **unattended — no app needed**. Reuses the existing `buildLaunchPrompt` (same path as the manual Run button); the job is a normal `agentTurn` under the hood, with the team recognised again on edit so it pre-selects. (Note: the polished per-node run timeline only records while the app is watching, but the team runs fully either way and the controller/sub-agent sessions are logged on the gateway.)
 - **Configure plugins from the app (incl. API keys).** The Extensions view previously only enabled/disabled plugins; each plugin now has a **Configure** action that opens a settings dialog. It surfaces the plugin's **API key** routed to the correct place in the gateway config — model providers → `models.providers.<id>.apiKey` (with an optional base-URL override), TTS providers → `messages.tts.providers.<id>.apiKey`, web-search plugins → `tools.web.search.apiKey` — plus an **Advanced** tab for the raw `plugins.entries.<id>` config (behaviour/`llm` gating). Keys can be literals or env-var `SecretRef`s (preserved read-only). All writes go through `config.patch`, so it works on **local and remote** gateways. Each plugin also shows a status badge — a green **Configured** check when its API key is set (literal or env `SecretRef`), or an amber **Needs key** when one is required but missing. New `lib/pluginConfig.ts` (curated key routing + completeness) + `PluginConfigModal`; curated paths validated against the gateway config schema, with unit tests.
 
 ### Fixed
 
 - **Hardened the "Install via agent" script.** It used `openclaw plugins allow` — not a real subcommand, so it was a silent no-op (enabling relied entirely on `enabledByDefault`). The script now uses `openclaw plugins enable`, runs `install --force` so re-runs upgrade instead of failing, and adds an `openclaw plugins inspect` guard that aborts *before* the gateway restart if the plugin didn't register (so a failed install surfaces instead of a misleading "done"). Step output is kept visible for diagnosis. Same corrections applied to the plugin README and Help → Remote Teams. Verified end-to-end; covered by a regression test.
+
+### Changed
+
+- Release CI no longer uploads the `.deb`/`.dmg` as 90-day Actions artifacts — they're attached to the GitHub Release (separate storage), so the duplicate copies just consumed the account's Actions-storage quota.
 
 ## [0.8.0] - 2026-06-21
 
