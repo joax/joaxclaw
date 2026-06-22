@@ -2,6 +2,7 @@
   "name": "joaxclaw",
   "version": "0.8.0",
   "description": "Electron UI for Openclaw Gateway",
+  "license": "MIT",
   "author": {
     "name": "Joaquin Ayuso",
     "email": "joaxap@gmail.com"
