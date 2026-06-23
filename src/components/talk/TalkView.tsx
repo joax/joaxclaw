@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { Mic, MicOff, PhoneOff, Phone, Settings2, Captions, AlertCircle, Wrench, KeyRound, Bot } from 'lucide-react'
-import { useTalkStore, providersForMode, type TalkPhase } from '../../store/talk'
+import { useTalkStore, providersForMode, type TalkPhase, type VisualizerStyle } from '../../store/talk'
 import { useConnectionStore } from '../../store/connection'
 import { useAgentsStore } from '../../store/agents'
+import { Visualizer, type VizSource } from './Visualizer'
 
 // Talk mode (Phase 1): a click-to-start voice conversation with your agent over the
 // gateway's Talk API. The gateway owns VAD/barge-in/turn-taking; this renders the
@@ -31,27 +32,17 @@ function phaseColor(phase: TalkPhase): string {
   }
 }
 
-function usePrefersReducedMotion(): boolean {
-  const [reduced, setReduced] = useState(false)
-  useEffect(() => {
-    const m = window.matchMedia('(prefers-reduced-motion: reduce)')
-    const on = () => setReduced(m.matches)
-    on(); m.addEventListener('change', on)
-    return () => m.removeEventListener('change', on)
-  }, [])
-  return reduced
-}
+const VIZ_LABEL: Record<VisualizerStyle, string> = { orb: 'Orb', bars: 'Bars', radial: 'Radial', blob: 'Blob' }
 
 export function TalkView() {
   const {
-    phase, muted, micLevel, agentLevel, transcript, toolActivity, error, catalog, config,
-    loadCatalog, setConfig, start, stop, toggleMute, interrupt,
+    phase, muted, micLevel, agentLevel, transcript, toolActivity, error, catalog, config, visualizer,
+    loadCatalog, setConfig, setVisualizer, start, stop, toggleMute, interrupt,
   } = useTalkStore()
   const connected = useConnectionStore(s => s.status === 'connected')
   const { agents, defaultId, fetch: fetchAgents } = useAgentsStore()
   const [showSettings, setShowSettings] = useState(false)
   const [showCaptions, setShowCaptions] = useState(true)
-  const reduced = usePrefersReducedMotion()
 
   useEffect(() => { if (connected && !catalog) loadCatalog() }, [connected])  // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (connected && agents.length === 0) fetchAgents() }, [connected])  // eslint-disable-line react-hooks/exhaustive-deps
@@ -63,6 +54,8 @@ export function TalkView() {
   // The orb reacts to the mic while listening, to the agent while it speaks.
   const level = phase === 'speaking' || phase === 'tool_running' ? agentLevel
     : (phase === 'listening' || phase === 'user_speaking') ? micLevel : 0
+  const source: VizSource = phase === 'speaking' || phase === 'tool_running' ? 'agent'
+    : (phase === 'listening' || phase === 'user_speaking') ? 'mic' : 'idle'
 
   // Phase 1 talks over the realtime path; providers come from the mode's provider list.
   const modeProviders = providersForMode(catalog, config.mode)
@@ -79,6 +72,10 @@ export function TalkView() {
       <div className="flex items-center gap-2 px-5 py-3 shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
         <Mic size={16} style={{ color: 'var(--accent)' }} />
         <span className="font-semibold text-sm flex-1" style={{ color: 'var(--text-primary)' }}>Talk</span>
+        <select value={visualizer} onChange={e => setVisualizer(e.target.value as VisualizerStyle)} title="Visualizer"
+          style={{ fontSize: 11, padding: '3px 7px', borderRadius: 'var(--radius)', border: '1px solid var(--border)', background: 'var(--bg-elevated)', color: 'var(--text-secondary)', outline: 'none', cursor: 'pointer' }}>
+          {(['orb', 'bars', 'radial', 'blob'] as VisualizerStyle[]).map(v => <option key={v} value={v}>{VIZ_LABEL[v]}</option>)}
+        </select>
         <IconBtn title="Captions" active={showCaptions} onClick={() => setShowCaptions(v => !v)}><Captions size={15} /></IconBtn>
         <IconBtn title="Settings" active={showSettings} onClick={() => setShowSettings(v => !v)}><Settings2 size={15} /></IconBtn>
       </div>
@@ -105,8 +102,10 @@ export function TalkView() {
       )}
 
       {/* Stage */}
-      <div className="flex-1 min-h-0 flex flex-col items-center justify-center gap-6 px-6">
-        <Orb phase={phase} level={level} reduced={reduced} onClick={() => phase === 'speaking' && interrupt()} />
+      <div className="flex-1 min-h-0 flex flex-col items-center justify-center gap-6 px-6" style={{ minHeight: 230 }}>
+        <div style={{ width: 230, height: 230, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <Visualizer style={visualizer} phase={phase} level={level} source={source} onInterrupt={interrupt} />
+        </div>
 
         <div className="text-center" style={{ minHeight: 24 }}>
           <p className="text-sm font-medium" style={{ color: phaseColor(phase) }}>
@@ -155,40 +154,6 @@ export function TalkView() {
         )}
       </div>
     </div>
-  )
-}
-
-// ── Orb ─────────────────────────────────────────────────────────────────────────
-
-function Orb({ phase, level, reduced, onClick }: { phase: TalkPhase; level: number; reduced: boolean; onClick: () => void }) {
-  // Smooth the level so the orb doesn't jitter; idle "breathes" unless reduced-motion.
-  const smooth = useRef(0)
-  const [, force] = useState(0)
-  useEffect(() => {
-    let raf = 0
-    const tick = () => { smooth.current += (level - smooth.current) * 0.25; force(n => (n + 1) & 1023); raf = requestAnimationFrame(tick) }
-    raf = requestAnimationFrame(tick)
-    return () => cancelAnimationFrame(raf)
-  }, [level])
-  const breathing = reduced || phase === 'idle' ? 0 : (Math.sin(Date.now() / 700) + 1) / 2 * 0.06
-  const scale = 1 + smooth.current * 0.5 + (phase === 'thinking' || phase === 'tool_running' ? breathing * 2 : breathing)
-  const color = phaseColor(phase)
-  const glow = 12 + smooth.current * 60
-
-  return (
-    <button
-      onClick={onClick}
-      title={phase === 'speaking' ? 'Tap to interrupt' : undefined}
-      style={{ background: 'none', border: 'none', cursor: phase === 'speaking' ? 'pointer' : 'default', padding: 0 }}
-    >
-      <div style={{
-        width: 160, height: 160, borderRadius: '50%',
-        transform: `scale(${scale})`, transition: 'transform 0.05s linear',
-        background: `radial-gradient(circle at 35% 30%, color-mix(in srgb, ${color} 85%, white), ${color} 60%, color-mix(in srgb, ${color} 60%, transparent))`,
-        boxShadow: `0 0 ${glow}px color-mix(in srgb, ${color} 70%, transparent)`,
-        opacity: phase === 'idle' ? 0.5 : 1,
-      }} />
-    </button>
   )
 }
 
