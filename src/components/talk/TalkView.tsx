@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Mic, MicOff, PhoneOff, Phone, Settings2, Captions, AlertCircle, Wrench } from 'lucide-react'
-import { useTalkStore, type TalkPhase } from '../../store/talk'
+import { useTalkStore, providersForMode, type TalkPhase } from '../../store/talk'
 import { useConnectionStore } from '../../store/connection'
 
 // Talk mode (Phase 1): a click-to-start voice conversation with your agent over the
@@ -61,8 +61,10 @@ export function TalkView() {
   const level = phase === 'speaking' || phase === 'tool_running' ? agentLevel
     : (phase === 'listening' || phase === 'user_speaking') ? micLevel : 0
 
-  const provider = catalog?.speech.providers.find(p => p.id === config.provider)
-  const needsKey = !!config.provider && provider && !provider.configured
+  // Phase 1 talks over the realtime path; providers come from the mode's provider list.
+  const modeProviders = providersForMode(catalog, config.mode)
+  const hasConfiguredProvider = modeProviders.some(p => p.configured)
+  const needsKey = !!catalog && !hasConfiguredProvider
 
   return (
     <div className="flex flex-col h-full" style={{ background: 'var(--bg-primary)' }}>
@@ -98,8 +100,10 @@ export function TalkView() {
         )}
         {connected && needsKey && (
           <Notice icon={<AlertCircle size={14} />}>
-            <b style={{ color: 'var(--text-primary)' }}>{provider?.label}</b> has no API key — set one in
-            Plugins → Configure (or pick a configured provider in Settings) before starting.
+            Talk needs a configured <b style={{ color: 'var(--text-primary)' }}>{config.mode === 'realtime' ? 'realtime voice' : config.mode}</b> provider
+            {modeProviders.length > 0 && <> — available: {modeProviders.map(p => p.label).join(', ')}</>}.
+            Set its key on the gateway at <code style={{ fontFamily: 'monospace' }}>talk.providers.&lt;id&gt;.apiKey</code>
+            {config.mode === 'realtime' && <> (ElevenLabs is transcription-only and can&apos;t drive realtime Talk)</>}.
           </Notice>
         )}
       </div>
@@ -112,7 +116,7 @@ export function TalkView() {
       {/* Controls */}
       <div className="flex items-center justify-center gap-3 px-5 py-4 shrink-0" style={{ borderTop: '1px solid var(--border)' }}>
         {!active ? (
-          <BigBtn color="var(--accent)" disabled={!connected} onClick={() => start()}>
+          <BigBtn color="var(--accent)" disabled={!connected || needsKey} onClick={() => start()}>
             <Phone size={16} /> Start
           </BigBtn>
         ) : (
@@ -187,12 +191,16 @@ function SettingsBar({ catalog, config, setConfig, disabled }: {
   setConfig: (p: Partial<ReturnType<typeof useTalkStore.getState>['config']>) => void
   disabled: boolean
 }) {
-  const provider = catalog?.speech.providers.find(p => p.id === config.provider)
+  const modeProviders = providersForMode(catalog, config.mode)
+  const provider = modeProviders.find(p => p.id === config.provider)
+  // Phase 1 supports the realtime path (gateway-relay). stt-tts needs a managed-room
+  // client we haven't built; offer it only if the gateway lists it, but it'll explain itself.
+  const PHASE1_MODES = (catalog?.modes ?? ['realtime']).filter(m => m === 'realtime')
   return (
     <div className="flex flex-wrap items-center gap-2 px-5 py-2.5 shrink-0" style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-elevated)' }}>
-      <Select label="Mode" value={config.mode} disabled={disabled} onChange={v => setConfig({ mode: v })} options={catalog?.modes ?? ['realtime']} />
+      <Select label="Mode" value={config.mode} disabled={disabled || PHASE1_MODES.length <= 1} onChange={v => setConfig({ mode: v, provider: undefined, voice: undefined })} options={PHASE1_MODES} />
       <Select label="Provider" value={config.provider ?? ''} disabled={disabled} onChange={v => setConfig({ provider: v, voice: undefined })}
-        options={(catalog?.speech.providers ?? []).map(p => ({ value: p.id, label: `${p.label}${p.configured ? '' : ' (no key)'}` }))} placeholder="default" />
+        options={modeProviders.map(p => ({ value: p.id, label: `${p.label}${p.configured ? '' : ' (no key)'}` }))} placeholder="default" />
       {provider?.voices?.length ? (
         <Select label="Voice" value={config.voice ?? ''} disabled={disabled} onChange={v => setConfig({ voice: v })} options={provider.voices} placeholder="default" />
       ) : null}
