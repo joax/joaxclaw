@@ -41,7 +41,26 @@ export interface TalkCatalog {
   modes: string[]
   transports: string[]
   brains: string[]
-  speech: { providers: TalkProvider[] }
+  // Providers are split by role: realtime (speech-to-speech), speech (TTS for stt-tts),
+  // and transcription (STT). A provider's key lives at talk.providers.<id>.apiKey.
+  realtime?: { providers: TalkProvider[] }
+  speech?: { providers: TalkProvider[] }
+  transcription?: { providers: TalkProvider[] }
+}
+
+// Providers usable for a given mode. Phase 1 supports `realtime` (gateway-relay).
+export function providersForMode(catalog: TalkCatalog | null, mode: string): TalkProvider[] {
+  if (!catalog) return []
+  if (mode === 'realtime') return catalog.realtime?.providers ?? []
+  if (mode === 'stt-tts') return catalog.speech?.providers ?? []
+  if (mode === 'transcription') return catalog.transcription?.providers ?? []
+  return []
+}
+
+// Each mode needs a specific transport (confirmed against the live gateway):
+// realtime → gateway-relay (browser session); stt-tts → managed-room (not in Phase 1).
+export function transportForMode(mode: string): string {
+  return mode === 'stt-tts' ? 'managed-room' : 'gateway-relay'
 }
 
 export interface TalkTranscriptLine { id: string; role: 'user' | 'assistant'; text: string; final: boolean }
@@ -75,6 +94,17 @@ interface TalkState {
 }
 
 const DEFAULT_CONFIG: TalkConfig = { mode: 'realtime', transport: 'gateway-relay', brain: 'agent-consult' }
+
+// The gateway wraps request errors as Error(JSON.stringify({code,message,details})). Pull
+// out the human-readable talkIssue/message so the UI shows "… provider not configured"
+// instead of a JSON blob.
+export function talkErrorMessage(e: unknown): string {
+  const raw = e instanceof Error ? e.message : String(e)
+  try {
+    const obj = JSON.parse(raw.replace(/^Error:\s*/, ''))
+    return String(obj?.details?.talkIssue?.message ?? obj?.message ?? raw)
+  } catch { return raw }
+}
 
 // Audio engine + event unsubscribe live outside the store (not React/serializable state).
 let audio: TalkAudio | null = null
@@ -113,10 +143,11 @@ export const useTalkStore = create<TalkState>((set, get) => ({
     try {
       const cat = await gatewayClient.request<TalkCatalog>('talk.catalog', {})
       set({ catalog: cat })
-      // Default the provider to the first configured one, if any.
-      const configured = cat.speech?.providers?.find(p => p.configured)
-      if (configured && !get().config.provider) {
-        set(s => ({ config: { ...s.config, provider: configured.id, voice: configured.voices?.[0] } }))
+      // Default to the first configured provider for the current mode (prefer one with a key).
+      const forMode = providersForMode(cat, get().config.mode)
+      const pick = forMode.find(p => p.configured) ?? forMode[0]
+      if (pick && !get().config.provider) {
+        set(s => ({ config: { ...s.config, provider: pick.id, voice: pick.voices?.[0] } }))
       }
     } catch (e) { set({ error: String(e) }) }
   },
@@ -138,7 +169,7 @@ export const useTalkStore = create<TalkState>((set, get) => ({
       const { config } = get()
       const res = await gatewayClient.request<{ sessionId: string }>('talk.session.create', {
         mode: config.mode,
-        transport: config.transport,
+        transport: transportForMode(config.mode),
         brain: config.brain,
         ...(config.provider ? { provider: config.provider } : {}),
         ...(config.voice ? { voice: config.voice } : {}),
@@ -158,7 +189,7 @@ export const useTalkStore = create<TalkState>((set, get) => ({
       set({ phase: 'listening' })
     } catch (e) {
       unsubEvents?.(); unsubEvents = null
-      set({ phase: 'error', error: String(e) })
+      set({ phase: 'error', error: talkErrorMessage(e) })
     }
   },
 
