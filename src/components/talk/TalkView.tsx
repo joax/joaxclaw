@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
-import { Mic, MicOff, PhoneOff, Phone, Settings2, Captions, AlertCircle, Wrench } from 'lucide-react'
+import { Mic, MicOff, PhoneOff, Phone, Settings2, Captions, AlertCircle, Wrench, KeyRound, Bot } from 'lucide-react'
 import { useTalkStore, providersForMode, type TalkPhase } from '../../store/talk'
 import { useConnectionStore } from '../../store/connection'
+import { useAgentsStore } from '../../store/agents'
 
 // Talk mode (Phase 1): a click-to-start voice conversation with your agent over the
 // gateway's Talk API. The gateway owns VAD/barge-in/turn-taking; this renders the
@@ -47,11 +48,13 @@ export function TalkView() {
     loadCatalog, setConfig, start, stop, toggleMute, interrupt,
   } = useTalkStore()
   const connected = useConnectionStore(s => s.status === 'connected')
+  const { agents, defaultId, fetch: fetchAgents } = useAgentsStore()
   const [showSettings, setShowSettings] = useState(false)
   const [showCaptions, setShowCaptions] = useState(true)
   const reduced = usePrefersReducedMotion()
 
   useEffect(() => { if (connected && !catalog) loadCatalog() }, [connected])  // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (connected && agents.length === 0) fetchAgents() }, [connected])  // eslint-disable-line react-hooks/exhaustive-deps
   // End the session if we leave the view / disconnect.
   useEffect(() => () => { void useTalkStore.getState().stop() }, [])
   useEffect(() => { if (!connected && phase !== 'idle') void stop() }, [connected])  // eslint-disable-line react-hooks/exhaustive-deps
@@ -65,6 +68,10 @@ export function TalkView() {
   const modeProviders = providersForMode(catalog, config.mode)
   const hasConfiguredProvider = modeProviders.some(p => p.configured)
   const needsKey = !!catalog && !hasConfiguredProvider
+  const providerLabel = modeProviders.find(p => p.id === config.provider)?.label ?? config.provider
+  const brainIsAgent = config.brain === 'agent-consult'
+  const effectiveAgentId = config.agentId ?? defaultId ?? undefined
+  const agent = agents.find(a => a.id === effectiveAgentId)
 
   return (
     <div className="flex flex-col h-full" style={{ background: 'var(--bg-primary)' }}>
@@ -76,8 +83,25 @@ export function TalkView() {
         <IconBtn title="Settings" active={showSettings} onClick={() => setShowSettings(v => !v)}><Settings2 size={15} /></IconBtn>
       </div>
 
+      {/* Who answers + how */}
+      {connected && (
+        <div className="flex items-center flex-wrap gap-x-2 gap-y-0.5 px-5 py-1.5 shrink-0 text-xs" style={{ borderBottom: '1px solid var(--border)', color: 'var(--text-secondary)' }}>
+          <Bot size={12} style={{ color: 'var(--accent)' }} />
+          {brainIsAgent ? (
+            <span>Talking to <b style={{ color: 'var(--text-primary)' }}>{agent?.id ?? effectiveAgentId ?? 'default agent'}</b>{agent?.model?.primary && <> (<code style={{ fontFamily: 'monospace' }}>{agent.model.primary}</code>)</>}</span>
+          ) : (
+            <span>Talking to the <b style={{ color: 'var(--text-primary)' }}>{providerLabel ?? 'realtime'}</b> model directly</span>
+          )}
+          <span style={{ opacity: 0.5 }}>·</span>
+          <span>voice: {providerLabel ?? '—'}</span>
+          <span style={{ opacity: 0.5 }}>·</span>
+          <span>brain: {config.brain}</span>
+        </div>
+      )}
+
       {showSettings && (
-        <SettingsBar catalog={catalog} config={config} setConfig={setConfig} disabled={active} />
+        <SettingsBar catalog={catalog} config={config} setConfig={setConfig} disabled={active}
+          agents={agents} defaultId={defaultId} setProviderKey={useTalkStore.getState().setProviderKey} />
       )}
 
       {/* Stage */}
@@ -185,11 +209,14 @@ function Captionsfeed({ lines }: { lines: { id: string; role: 'user' | 'assistan
   )
 }
 
-function SettingsBar({ catalog, config, setConfig, disabled }: {
+function SettingsBar({ catalog, config, setConfig, disabled, agents, defaultId, setProviderKey }: {
   catalog: ReturnType<typeof useTalkStore.getState>['catalog']
   config: ReturnType<typeof useTalkStore.getState>['config']
   setConfig: (p: Partial<ReturnType<typeof useTalkStore.getState>['config']>) => void
   disabled: boolean
+  agents: ReturnType<typeof useAgentsStore.getState>['agents']
+  defaultId: string | null
+  setProviderKey: (id: string, key: string) => Promise<boolean>
 }) {
   const modeProviders = providersForMode(catalog, config.mode)
   const provider = modeProviders.find(p => p.id === config.provider)
@@ -197,14 +224,43 @@ function SettingsBar({ catalog, config, setConfig, disabled }: {
   // client we haven't built; offer it only if the gateway lists it, but it'll explain itself.
   const PHASE1_MODES = (catalog?.modes ?? ['realtime']).filter(m => m === 'realtime')
   return (
-    <div className="flex flex-wrap items-center gap-2 px-5 py-2.5 shrink-0" style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-elevated)' }}>
-      <Select label="Mode" value={config.mode} disabled={disabled || PHASE1_MODES.length <= 1} onChange={v => setConfig({ mode: v, provider: undefined, voice: undefined })} options={PHASE1_MODES} />
-      <Select label="Provider" value={config.provider ?? ''} disabled={disabled} onChange={v => setConfig({ provider: v, voice: undefined })}
-        options={modeProviders.map(p => ({ value: p.id, label: `${p.label}${p.configured ? '' : ' (no key)'}` }))} placeholder="default" />
-      {provider?.voices?.length ? (
-        <Select label="Voice" value={config.voice ?? ''} disabled={disabled} onChange={v => setConfig({ voice: v })} options={provider.voices} placeholder="default" />
-      ) : null}
-      <span className="text-xs" style={{ color: 'var(--text-secondary)', opacity: 0.7 }}>brain: {config.brain}</span>
+    <div className="flex flex-col gap-2 px-5 py-2.5 shrink-0" style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-elevated)' }}>
+      <div className="flex flex-wrap items-center gap-2">
+        <Select label="Mode" value={config.mode} disabled={disabled || PHASE1_MODES.length <= 1} onChange={v => setConfig({ mode: v, provider: undefined, voice: undefined })} options={PHASE1_MODES} />
+        <Select label="Provider" value={config.provider ?? ''} disabled={disabled} onChange={v => setConfig({ provider: v, voice: undefined })}
+          options={modeProviders.map(p => ({ value: p.id, label: `${p.label}${p.configured ? '' : ' (no key)'}` }))} placeholder="default" />
+        {provider?.voices?.length ? (
+          <Select label="Voice" value={config.voice ?? ''} disabled={disabled} onChange={v => setConfig({ voice: v })} options={provider.voices} placeholder="default" />
+        ) : null}
+        <Select label="Brain" value={config.brain} disabled={disabled} onChange={v => setConfig({ brain: v })} options={catalog?.brains ?? ['agent-consult']} />
+        {config.brain === 'agent-consult' && (
+          <Select label="Agent" value={config.agentId ?? ''} disabled={disabled} onChange={v => setConfig({ agentId: v || undefined })}
+            options={agents.map(a => ({ value: a.id, label: a.id }))} placeholder={`default${defaultId ? ` (${defaultId})` : ''}`} />
+        )}
+      </div>
+      {/* Set the realtime provider's key (talk.providers.<id>.apiKey) right here. */}
+      {provider && !provider.configured && !disabled && (
+        <ProviderKeyField providerId={provider.id} label={provider.label} onSave={setProviderKey} />
+      )}
+    </div>
+  )
+}
+
+function ProviderKeyField({ providerId, label, onSave }: { providerId: string; label: string; onSave: (id: string, key: string) => Promise<boolean> }) {
+  const [key, setKey] = useState('')
+  const [reveal, setReveal] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const save = async () => { if (!key.trim()) return; setSaving(true); await onSave(providerId, key); setSaving(false); setKey('') }
+  return (
+    <div className="flex items-center gap-1.5">
+      <KeyRound size={12} style={{ color: 'var(--warning)', flexShrink: 0 }} />
+      <span className="text-xs" style={{ color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>{label} key</span>
+      <input value={key} onChange={e => setKey(e.target.value)} type={reveal ? 'text' : 'password'} placeholder="paste API key" disabled={saving}
+        onKeyDown={e => { if (e.key === 'Enter') void save() }}
+        style={{ flex: 1, minWidth: 140, fontSize: 11, fontFamily: 'monospace', padding: '4px 8px', borderRadius: 'var(--radius)', border: '1px solid var(--border)', background: 'var(--bg-surface)', color: 'var(--text-primary)', outline: 'none' }} />
+      <button onClick={() => setReveal(r => !r)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)', fontSize: 10 }}>{reveal ? 'hide' : 'show'}</button>
+      <button onClick={save} disabled={saving || !key.trim()} style={{ fontSize: 11, padding: '4px 10px', borderRadius: 'var(--radius)', border: 'none', cursor: 'pointer', color: 'white', background: 'var(--accent)', opacity: saving || !key.trim() ? 0.5 : 1 }}>{saving ? '…' : 'Save'}</button>
+      <span className="text-xs" style={{ color: 'var(--text-secondary)', opacity: 0.6, whiteSpace: 'nowrap' }}>→ talk.providers.{providerId}.apiKey</span>
     </div>
   )
 }
