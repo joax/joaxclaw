@@ -29,6 +29,17 @@ gateway. Major areas already in place:
 
 ## Next / under consideration
 
+- **Voice conversation with a 3D avatar** — a "Talk" mode for real-time spoken
+  conversation: speak to the agent and hear it reply through an expressive 3D avatar
+  that lip-syncs and shows body language (listening / thinking / speaking, emotion from
+  sentence sentiment or agent-emitted cues). The hard part is **latency** — the design
+  streams and pipelines every stage (VAD endpointing → streaming STT → streaming LLM →
+  sentence-chunked streaming TTS → avatar), starting speech on the first clause and
+  supporting barge-in, targeting sub-second time-to-first-word. Reuses the gateway's
+  existing STT (whisper) and TTS (ElevenLabs/Deepgram/Azure/sherpa) providers; avatar via
+  `three.js`/`react-three-fiber` with VRM/Ready Player Me models. Phased: voice loop MVP
+  (with a waveform fallback) → avatar + lip-sync → expressions → full-duplex/barge-in →
+  local-vs-cloud options + a latency HUD.
 - **Per-engine model listing in the model picker** for remote engines (the
   `engines.fetch` primitive exists; surface it more widely).
 - **Richer plugin config forms** — schema-driven fields beyond the curated API-key
