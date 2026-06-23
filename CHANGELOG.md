@@ -7,6 +7,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Talk mode (Phase 1) — voice conversation with your agent.** A new **Talk** tab: click to start, speak hands-free, and hear the agent reply, with a reactive **orb** (no avatar yet), live two-sided captions, mute, tap-to-interrupt (barge-in), and a tool-activity indicator. Built on the gateway's realtime **Talk** API — it owns VAD, barge-in, turn-taking and the agent "brain", so JoaxClaw is the client: mic → PCM16 (AudioWorklet, echo-cancelled) → `talk.session.appendAudio`, and `talk.event` (`speechStart` / `transcript.*` / `audio` / `tool.*`) drives an interaction state machine. Uses the `gateway-relay` transport (works local *and* remote). Requires a configured Talk provider (set its key via Plugins → Configure, or pick a configured provider in Talk settings). New `store/talk.ts`, `lib/talkAudio.ts`, `components/talk/TalkView.tsx`; design + roadmap in [src/lib/TALK.md](src/lib/TALK.md). Avatar, expressions, and a WebRTC transport are later phases.
+
 ## [0.9.0] - 2026-06-22
 
 ### Added

@@ -1,7 +1,9 @@
 # Talk mode — voice conversation + (later) a 3D avatar
 
 Design notes for a real-time spoken-conversation mode: speak to your agent and hear it
-reply, eventually through an expressive 3D avatar. **Status: planned** (not built yet).
+reply, eventually through an expressive 3D avatar. **Status: Phase 1 built** (voice loop +
+reactive orb; no avatar yet). Code: `store/talk.ts`, `lib/talkAudio.ts`,
+`components/talk/TalkView.tsx`. Phases 2–4 (avatar, expressions, WebRTC) are planned.
 
 ## The key insight: the gateway already owns the pipeline
 

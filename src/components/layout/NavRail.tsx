@@ -1,4 +1,4 @@
-import { MessageSquare, Bot, ClipboardList, Settings, Palette, HelpCircle, Puzzle, Timer, Brain, Cpu, GitBranch, LayoutDashboard, UsersRound } from 'lucide-react'
+import { MessageSquare, Bot, ClipboardList, Settings, Palette, HelpCircle, Puzzle, Timer, Brain, Cpu, GitBranch, LayoutDashboard, UsersRound, Mic } from 'lucide-react'
 import type { NavSection } from '../../App'
 import { HelpModal } from '../help/HelpModal'
 import { useHelpStore } from '../../store/help'
@@ -8,6 +8,7 @@ interface NavItem { id: NavSection; icon: React.ReactNode; label: string; disabl
 const GROUP_1: NavItem[] = [
   { id: 'dashboard', icon: <LayoutDashboard size={20} />, label: 'Dashboard' },
   { id: 'chat',      icon: <MessageSquare size={20} />,   label: 'Chats' },
+  { id: 'talk',      icon: <Mic size={20} />,             label: 'Talk' },
   { id: 'sessions',  icon: <ClipboardList size={20} />,   label: 'Sessions' },
   { id: 'obsidian',  icon: <Brain size={20} />,           label: 'Memory' },
 ]

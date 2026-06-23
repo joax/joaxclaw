@@ -3,6 +3,7 @@ import { NavRail } from './components/layout/NavRail'
 import { StatusBar } from './components/layout/StatusBar'
 import { TitleBar } from './components/layout/TitleBar'
 import { ChatView } from './components/chat/ChatView'
+import { TalkView } from './components/talk/TalkView'
 import { AgentsView } from './components/agents/AgentsView'
 import { SessionsView } from './components/sessions/SessionsView'
 import { GatewayView } from './components/gateway/GatewayView'
@@ -23,7 +24,7 @@ import { useSettingsStore } from './store/settings'
 import { useExtensionsStore } from './store/extensions'
 import { useSkillsStore } from './store/skills'
 
-export type NavSection = 'dashboard' | 'chat' | 'agents' | 'processes' | 'teams' | 'extensions' | 'sessions' | 'crons' | 'obsidian' | 'models' | 'gateway' | 'settings'
+export type NavSection = 'dashboard' | 'chat' | 'talk' | 'agents' | 'processes' | 'teams' | 'extensions' | 'sessions' | 'crons' | 'obsidian' | 'models' | 'gateway' | 'settings'
 
 export default function App() {
   const [section, setSection] = useState<NavSection>('dashboard')
@@ -59,7 +60,7 @@ export default function App() {
   }, [status, connection?.url])
 
   const notConnected = status !== 'connected'
-  const ALL_GATEWAY_SECTIONS: NavSection[] = ['dashboard', 'chat', 'agents', 'processes', 'teams', 'extensions', 'sessions', 'crons', 'obsidian', 'models', 'gateway']
+  const ALL_GATEWAY_SECTIONS: NavSection[] = ['dashboard', 'chat', 'talk', 'agents', 'processes', 'teams', 'extensions', 'sessions', 'crons', 'obsidian', 'models', 'gateway']
   const disabledSections: NavSection[] = notConnected
     ? ALL_GATEWAY_SECTIONS
     : obsidianEnabled ? [] : ['obsidian']
@@ -82,6 +83,7 @@ export default function App() {
             <>
               {section === 'dashboard' && <DashboardView onNavigate={setSection} />}
               {section === 'chat' && <ChatView />}
+              {section === 'talk' && <TalkView />}
               {section === 'agents' && <AgentsView onOpenChat={() => setSection('chat')} />}
               {section === 'extensions' && <ExtensionsView />}
               {section === 'sessions' && <SessionsView onOpenChat={() => setSection('chat')} />}
