@@ -8,6 +8,13 @@ import { create } from 'zustand'
 import { gatewayClient } from '../lib/gateway'
 import { TalkAudio } from '../lib/talkAudio'
 
+export type VisualizerStyle = 'orb' | 'bars' | 'radial' | 'blob'
+const VIZ_KEY = 'joaxclaw-talk-visualizer'
+function loadViz(): VisualizerStyle {
+  const v = typeof localStorage !== 'undefined' ? localStorage.getItem(VIZ_KEY) : null
+  return v === 'bars' || v === 'radial' || v === 'blob' ? v : 'orb'
+}
+
 export type TalkPhase =
   | 'idle' | 'connecting' | 'listening' | 'user_speaking'
   | 'thinking' | 'speaking' | 'tool_running' | 'error'
@@ -85,7 +92,10 @@ interface TalkState {
   toolActivity: string | null
   catalog: TalkCatalog | null
   config: TalkConfig
+  visualizer: VisualizerStyle
 
+  setVisualizer: (v: VisualizerStyle) => void
+  fillFrequencies: (kind: 'mic' | 'agent', out: Uint8Array) => boolean
   loadCatalog: () => Promise<void>
   setConfig: (patch: Partial<TalkConfig>) => void
   setProviderKey: (providerId: string, key: string) => Promise<boolean>
@@ -140,6 +150,16 @@ export const useTalkStore = create<TalkState>((set, get) => ({
   toolActivity: null,
   catalog: null,
   config: DEFAULT_CONFIG,
+  visualizer: loadViz(),
+
+  setVisualizer(v) {
+    try { localStorage.setItem(VIZ_KEY, v) } catch { /* ignore */ }
+    set({ visualizer: v })
+  },
+
+  // Read the live FFT bins for the orb/bars/radial visualizers (called per frame by
+  // the visualizer, not stored — avoids 60fps setState).
+  fillFrequencies(kind, out) { return audio?.readFrequencies(kind, out) ?? false },
 
   async loadCatalog() {
     try {

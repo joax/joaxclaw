@@ -7,6 +7,8 @@
 // 24 kHz is the OpenAI-realtime convention and our default.
 
 export const TALK_SAMPLE_RATE = 24000
+// AnalyserNode bins exposed for the FFT visualizers (fftSize 128 → 64 bins).
+export const FREQ_BINS = 64
 
 // ── pure conversion helpers (unit-tested) ──────────────────────────────────────
 
@@ -93,6 +95,9 @@ export class TalkAudio {
   private ctx: AudioContext | null = null
   private stream: MediaStream | null = null
   private worklet: AudioWorkletNode | null = null
+  // FFT taps for the visualizers — mic-input side and agent-playback side.
+  private micAnalyser: AnalyserNode | null = null
+  private agentAnalyser: AnalyserNode | null = null
   private muted = false
   // capture batching — coalesce the worklet's ~3ms frames into ~100ms chunks
   private pending: Int16Array[] = []
@@ -115,6 +120,10 @@ export class TalkAudio {
     URL.revokeObjectURL(blobUrl)
 
     const src = this.ctx.createMediaStreamSource(this.stream)
+    // Analysers for the FFT visualizers (mic from the input, agent from playback).
+    this.micAnalyser = this.ctx.createAnalyser(); this.micAnalyser.fftSize = 128; this.micAnalyser.smoothingTimeConstant = 0.7
+    this.agentAnalyser = this.ctx.createAnalyser(); this.agentAnalyser.fftSize = 128; this.agentAnalyser.smoothingTimeConstant = 0.7
+    src.connect(this.micAnalyser)
     this.worklet = new AudioWorkletNode(this.ctx, 'talk-capture')
     const inRate = this.ctx.sampleRate
     this.worklet.port.onmessage = (e: MessageEvent<Float32Array>) => {
@@ -144,6 +153,15 @@ export class TalkAudio {
 
   setMuted(m: boolean): void { this.muted = m; if (m) { this.pending = []; this.pendingLen = 0 } }
 
+  // Fill `out` (length FREQ_BINS) with the current byte-frequency data for the mic
+  // input or the agent playback. Returns false if that analyser isn't ready.
+  readFrequencies(kind: 'mic' | 'agent', out: Uint8Array): boolean {
+    const a = kind === 'agent' ? this.agentAnalyser : this.micAnalyser
+    if (!a) return false
+    a.getByteFrequencyData(out)
+    return true
+  }
+
   // Queue an agent PCM16 chunk for gapless playback.
   enqueue(base64: string): void {
     if (!this.ctx) return
@@ -156,6 +174,7 @@ export class TalkAudio {
     const node = this.ctx.createBufferSource()
     node.buffer = buf
     node.connect(this.ctx.destination)
+    if (this.agentAnalyser) node.connect(this.agentAnalyser)   // tap for the visualizer
     const now = this.ctx.currentTime
     if (this.playHead < now) this.playHead = now
     node.start(this.playHead)
@@ -179,5 +198,6 @@ export class TalkAudio {
     this.stream?.getTracks().forEach(t => t.stop())
     await this.ctx?.close().catch(() => {})
     this.ctx = null; this.stream = null; this.worklet = null
+    this.micAnalyser = null; this.agentAnalyser = null
   }
 }
