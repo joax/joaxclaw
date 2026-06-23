@@ -71,6 +71,7 @@ export interface TalkConfig {
   brain: string
   provider?: string
   voice?: string
+  agentId?: string   // which agent answers (agent-consult); undefined = gateway default
 }
 
 interface TalkState {
@@ -87,6 +88,7 @@ interface TalkState {
 
   loadCatalog: () => Promise<void>
   setConfig: (patch: Partial<TalkConfig>) => void
+  setProviderKey: (providerId: string, key: string) => Promise<boolean>
   start: () => Promise<void>
   stop: () => Promise<void>
   toggleMute: () => void
@@ -154,6 +156,21 @@ export const useTalkStore = create<TalkState>((set, get) => ({
 
   setConfig(patch) { set(s => ({ config: { ...s.config, ...patch } })) },
 
+  // Write a realtime provider's API key to talk.providers.<id>.apiKey (a distinct
+  // namespace from messages.tts.providers), then refresh the catalog so `configured`
+  // flips. Works local + remote via config.patch.
+  async setProviderKey(providerId, key) {
+    try {
+      const snap = await gatewayClient.request<{ hash?: string }>('config.get', {})
+      await gatewayClient.request('config.patch', {
+        raw: JSON.stringify({ talk: { providers: { [providerId]: { apiKey: key.trim() || null } } } }),
+        ...(snap.hash ? { baseHash: snap.hash } : {}),
+      })
+      await get().loadCatalog()
+      return true
+    } catch (e) { set({ error: talkErrorMessage(e) }); return false }
+  },
+
   async start() {
     if (get().phase !== 'idle' && get().phase !== 'error') return
     set({ phase: 'connecting', error: null, transcript: [], toolActivity: null })
@@ -167,10 +184,18 @@ export const useTalkStore = create<TalkState>((set, get) => ({
 
     try {
       const { config } = get()
+      // To talk to a specific agent (agent-consult), attach the Talk session to a
+      // session for that agent; omit for the gateway default agent.
+      let sessionKey: string | undefined
+      if (config.agentId) {
+        const s = await gatewayClient.request<{ key: string }>('sessions.create', { agentId: config.agentId })
+        sessionKey = s.key
+      }
       const res = await gatewayClient.request<{ sessionId: string }>('talk.session.create', {
         mode: config.mode,
         transport: transportForMode(config.mode),
         brain: config.brain,
+        ...(sessionKey ? { sessionKey } : {}),
         ...(config.provider ? { provider: config.provider } : {}),
         ...(config.voice ? { voice: config.voice } : {}),
       })
