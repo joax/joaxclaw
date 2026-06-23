@@ -19,15 +19,14 @@ export function applyTheme(theme: ThemeSettings): void {
   root.style.setProperty('--font-size', `${theme.fontSize}px`)
   root.style.setProperty('--font-family', theme.fontFamily)
 
-  // Dark/light class for Tailwind
-  if (theme.base === 'dark') {
-    root.classList.add('dark')
-  } else if (theme.base === 'light') {
-    root.classList.remove('dark')
-  } else {
-    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
-    root.classList.toggle('dark', prefersDark)
-  }
+  // Dark/light class for Tailwind, and color-scheme so Chromium renders native
+  // controls (e.g. <select> popups, scrollbars) in the matching scheme — otherwise a
+  // dark page shows a light/white native dropdown that flashes white on open.
+  const dark = theme.base === 'dark' ? true
+    : theme.base === 'light' ? false
+    : window.matchMedia('(prefers-color-scheme: dark)').matches
+  root.classList.toggle('dark', dark)
+  root.style.colorScheme = dark ? 'dark' : 'light'
 }
 
 export function hexToRgb(hex: string): string {

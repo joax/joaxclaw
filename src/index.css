@@ -3,6 +3,9 @@
 @tailwind utilities;
 
 :root {
+  /* Default scheme so native controls (select popups, scrollbars) render dark on
+     first paint; applyTheme() updates this to match the active theme. */
+  color-scheme: dark;
   --bg-primary: #0f1117;
   --bg-surface: #1a1d2e;
   --bg-elevated: #232640;
