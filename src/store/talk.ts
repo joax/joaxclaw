@@ -72,6 +72,19 @@ export function transportForMode(mode: string): string {
 
 export interface TalkTranscriptLine { id: string; role: 'user' | 'assistant'; text: string; final: boolean }
 
+// One action the agent took during the call (a tool call + its lifecycle) — the
+// transparency feed.
+export interface TalkActivity {
+  id: string
+  name: string
+  args?: string
+  status: 'running' | 'done' | 'error'
+  result?: string
+  error?: string
+  progress?: string
+  ts: number
+}
+
 export interface TalkConfig {
   mode: string
   transport: string
@@ -90,6 +103,7 @@ interface TalkState {
   agentLevel: number
   transcript: TalkTranscriptLine[]
   toolActivity: string | null
+  activity: TalkActivity[]
   catalog: TalkCatalog | null
   config: TalkConfig
   visualizer: VisualizerStyle
@@ -138,6 +152,15 @@ function evAudio(p: Record<string, unknown>): string | null {
 function evItemId(p: Record<string, unknown>): string {
   return String(p.itemId ?? p.id ?? p.turnId ?? 'live')
 }
+function toolId(p: Record<string, unknown>): string {
+  return String(p.callId ?? p.toolCallId ?? p.id ?? 'tool')
+}
+// Compact, display-safe rendering of tool args/results (objects → JSON, capped).
+export function summarize(v: unknown): string | undefined {
+  if (v == null) return undefined
+  const s = typeof v === 'string' ? v : (() => { try { return JSON.stringify(v) } catch { return String(v) } })()
+  return s.length > 600 ? s.slice(0, 600) + '…' : s
+}
 
 export const useTalkStore = create<TalkState>((set, get) => ({
   phase: 'idle',
@@ -148,6 +171,7 @@ export const useTalkStore = create<TalkState>((set, get) => ({
   agentLevel: 0,
   transcript: [],
   toolActivity: null,
+  activity: [],
   catalog: null,
   config: DEFAULT_CONFIG,
   visualizer: loadViz(),
@@ -193,7 +217,7 @@ export const useTalkStore = create<TalkState>((set, get) => ({
 
   async start() {
     if (get().phase !== 'idle' && get().phase !== 'error') return
-    set({ phase: 'connecting', error: null, transcript: [], toolActivity: null })
+    set({ phase: 'connecting', error: null, transcript: [], toolActivity: null, activity: [] })
 
     // Subscribe to the talk.event stream before creating the session.
     unsubEvents?.()
@@ -297,12 +321,34 @@ function handleTalkEvent(set: SetFn, get: GetFn, p: Record<string, unknown>) {
       })
       break
     }
-    case 'tool.call':
-      set({ toolActivity: String(p.name ?? p.tool ?? 'tool') })
+    case 'tool.call': {
+      const id = toolId(p)
+      const name = String(p.name ?? p.tool ?? p.toolName ?? 'tool')
+      const args = p.args ?? p.arguments ?? p.input
+      set(s => ({
+        toolActivity: name,
+        activity: [...s.activity, { id, name, args: summarize(args), status: 'running', ts: Date.now() }].slice(-40),
+      }))
       break
-    case 'tool.result':
-      set({ toolActivity: null })
+    }
+    case 'tool.progress': {
+      const id = toolId(p)
+      const msg = p.message ?? p.text ?? p.progress ?? p.status
+      set(s => ({ activity: s.activity.map(a => a.id === id ? { ...a, progress: msg != null ? String(msg) : a.progress } : a) }))
       break
+    }
+    case 'tool.result': {
+      const id = toolId(p)
+      const isErr = p.isError === true || p.error != null
+      const out = summarize(p.result ?? p.output ?? p.error)
+      set(s => ({
+        toolActivity: null,
+        activity: s.activity.map(a => a.id === id
+          ? { ...a, status: isErr ? 'error' : 'done', result: isErr ? undefined : out, error: isErr ? out : undefined }
+          : a),
+      }))
+      break
+    }
     case 'error':
       set({ error: String(p.message ?? p.error ?? 'Talk error') })
       break

@@ -1,5 +1,19 @@
 import { describe, it, expect } from 'vitest'
-import { nextPhase, providersForMode, transportForMode, talkErrorMessage, type TalkCatalog } from '../../store/talk'
+import { nextPhase, providersForMode, transportForMode, talkErrorMessage, summarize, type TalkCatalog } from '../../store/talk'
+
+describe('summarize (tool args/results for the activity feed)', () => {
+  it('passes strings through and JSON-stringifies objects', () => {
+    expect(summarize('hello')).toBe('hello')
+    expect(summarize({ q: 'weather', n: 3 })).toBe('{"q":"weather","n":3}')
+    expect(summarize(undefined)).toBeUndefined()
+    expect(summarize(null)).toBeUndefined()
+  })
+  it('caps very long values', () => {
+    const out = summarize('x'.repeat(1000))!
+    expect(out.length).toBe(601)
+    expect(out.endsWith('…')).toBe(true)
+  })
+})
 
 describe('nextPhase — Talk interaction state machine', () => {
   it('user speech (incl. barge-in) → user_speaking', () => {

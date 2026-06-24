@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { Mic, MicOff, PhoneOff, Phone, Settings2, Captions, AlertCircle, Wrench, KeyRound, Bot } from 'lucide-react'
+import { Mic, MicOff, PhoneOff, Phone, Settings2, Captions, AlertCircle, Wrench, KeyRound, Bot, ListTree, Loader2, CheckCircle2, XCircle } from 'lucide-react'
+import type { TalkActivity } from '../../store/talk'
 import { useTalkStore, providersForMode, type TalkPhase, type VisualizerStyle } from '../../store/talk'
 import { useConnectionStore } from '../../store/connection'
 import { useAgentsStore } from '../../store/agents'
@@ -36,13 +37,14 @@ const VIZ_LABEL: Record<VisualizerStyle, string> = { orb: 'Orb', bars: 'Bars', r
 
 export function TalkView() {
   const {
-    phase, muted, micLevel, agentLevel, transcript, toolActivity, error, catalog, config, visualizer,
+    phase, muted, micLevel, agentLevel, transcript, toolActivity, activity, error, catalog, config, visualizer,
     loadCatalog, setConfig, setVisualizer, start, stop, toggleMute, interrupt,
   } = useTalkStore()
   const connected = useConnectionStore(s => s.status === 'connected')
   const { agents, defaultId, fetch: fetchAgents } = useAgentsStore()
   const [showSettings, setShowSettings] = useState(false)
   const [showCaptions, setShowCaptions] = useState(true)
+  const [showActivity, setShowActivity] = useState(true)
 
   useEffect(() => { if (connected && !catalog) loadCatalog() }, [connected])  // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (connected && agents.length === 0) fetchAgents() }, [connected])  // eslint-disable-line react-hooks/exhaustive-deps
@@ -76,6 +78,7 @@ export function TalkView() {
           style={{ fontSize: 11, padding: '3px 7px', borderRadius: 'var(--radius)', border: '1px solid var(--border)', background: 'var(--bg-elevated)', color: 'var(--text-secondary)', outline: 'none', cursor: 'pointer' }}>
           {(['orb', 'bars', 'radial', 'blob'] as VisualizerStyle[]).map(v => <option key={v} value={v}>{VIZ_LABEL[v]}</option>)}
         </select>
+        <IconBtn title="Agent activity" active={showActivity} onClick={() => setShowActivity(v => !v)}><ListTree size={15} /></IconBtn>
         <IconBtn title="Captions" active={showCaptions} onClick={() => setShowCaptions(v => !v)}><Captions size={15} /></IconBtn>
         <IconBtn title="Settings" active={showSettings} onClick={() => setShowSettings(v => !v)}><Settings2 size={15} /></IconBtn>
       </div>
@@ -131,6 +134,11 @@ export function TalkView() {
         )}
       </div>
 
+      {/* Agent activity (tool calls) */}
+      {showActivity && activity.length > 0 && (
+        <ActivityFeed lines={activity} />
+      )}
+
       {/* Captions */}
       {showCaptions && transcript.length > 0 && (
         <Captionsfeed lines={transcript} />
@@ -170,6 +178,41 @@ function Captionsfeed({ lines }: { lines: { id: string; role: 'user' | 'assistan
           {l.text}
         </div>
       ))}
+    </div>
+  )
+}
+
+function ActivityFeed({ lines }: { lines: TalkActivity[] }) {
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => { ref.current?.scrollTo(0, ref.current.scrollHeight) }, [lines])
+  return (
+    <div ref={ref} className="overflow-y-auto px-5 py-2 shrink-0 space-y-1" style={{ maxHeight: 130, borderTop: '1px solid var(--border)' }}>
+      <p className="text-xs font-semibold" style={{ color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', opacity: 0.7 }}>Agent activity</p>
+      {lines.map(a => <ActivityRow key={a.id + a.ts} a={a} />)}
+    </div>
+  )
+}
+
+function ActivityRow({ a }: { a: TalkActivity }) {
+  const [open, setOpen] = useState(false)
+  const detail = a.error ?? a.result
+  const Icon = a.status === 'running' ? Loader2 : a.status === 'error' ? XCircle : CheckCircle2
+  const color = a.status === 'running' ? 'var(--text-secondary)' : a.status === 'error' ? 'var(--danger)' : 'var(--success)'
+  return (
+    <div>
+      <button onClick={() => (a.args || detail) && setOpen(o => !o)} className="flex items-center gap-1.5 w-full text-left"
+        style={{ background: 'none', border: 'none', padding: 0, cursor: a.args || detail ? 'pointer' : 'default' }}>
+        <Icon size={11} className={a.status === 'running' ? 'animate-spin' : ''} style={{ color, flexShrink: 0 }} />
+        <span style={{ fontSize: 11, fontFamily: 'monospace', color: 'var(--text-primary)' }}>{a.name}</span>
+        {a.progress && <span style={{ fontSize: 10, color: 'var(--text-secondary)' }}>· {a.progress}</span>}
+        {a.status === 'error' && <span style={{ fontSize: 10, color: 'var(--danger)' }}>· failed</span>}
+      </button>
+      {open && (a.args || detail) && (
+        <div className="mt-0.5 ml-4 space-y-0.5">
+          {a.args && <pre style={{ fontSize: 9.5, fontFamily: 'monospace', color: 'var(--text-secondary)', whiteSpace: 'pre-wrap', wordBreak: 'break-all', margin: 0 }}>args: {a.args}</pre>}
+          {detail && <pre style={{ fontSize: 9.5, fontFamily: 'monospace', color: a.error ? 'var(--danger)' : 'var(--text-secondary)', whiteSpace: 'pre-wrap', wordBreak: 'break-all', margin: 0 }}>{a.error ? 'error: ' : '→ '}{detail}</pre>}
+        </div>
+      )}
     </div>
   )
 }
