@@ -7,6 +7,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Talk mode shows the agent's activity.** During a voice call, a collapsible **Agent activity** panel lists the actions the agent takes — each tool call with a live status (running / done / failed), inline progress, and expandable args + result — so it's transparent what's happening while you talk (e.g. "🔍 searching the web…"). Driven by the `tool.call` / `tool.progress` / `tool.result` Talk events into a per-call timeline in `store/talk.ts`.
+
 ## [0.10.0] - 2026-06-23
 
 ### Added
