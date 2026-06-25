@@ -7,6 +7,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-06-25
+
 ### Added
 
 - **Local model management (Models → Local models).** A new tab to manage models on a local **Ollama** engine: see installed models (size · params · quant · loaded), **pull a new model by name** with live download progress, **delete**, and **"Add to provider"** to register a model into the gateway config so agents/the picker can use it. Works on a **local *and* remote** gateway — it's routed through the `joaxclaw-fs` plugin's new `engines.pull` / `engines.pullStatus` / `engines.delete` methods (the plugin runs on the engine's host). Requires `joaxclaw-fs` ≥ 0.3.0. A **Discover** browser presents a curated, searchable catalog of popular models (publisher, capability badges — tools / vision / reasoning / code / embedding — and a size-per-variant picker) so you can pull without knowing exact names; anything else is still pullable via the free-text field. Each installed model expands to show **details** (family, parameters, quantization, context length, license) and can be **loaded/unloaded** from memory; downloads show an **overall** progress %. New `lib/modelManager.ts`, `lib/modelCatalog.ts`, `store/modelManager.ts`, `components/models/LocalModelsPanel.tsx`. (LM Studio's API can't download models, so it's a later, list-only phase.)
