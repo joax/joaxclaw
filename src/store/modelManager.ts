@@ -5,7 +5,8 @@
 import { create } from 'zustand'
 import {
   listInstalled, listRunning, startPull, pullStatus, deleteModel, pullPercent, isUnknownMethod,
-  type InstalledModel,
+  showModel, setKeepAlive,
+  type InstalledModel, type ModelDetails,
 } from '../lib/modelManager'
 
 export interface DownloadState { model: string; status: string; percent: number | null; done: boolean; error?: string }
@@ -17,10 +18,13 @@ interface ModelManagerState {
   error: string | null
   needsPlugin: boolean
   downloads: Record<string, DownloadState>
+  details: Record<string, ModelDetails>
 
   load: (baseUrl: string) => Promise<void>
   pull: (baseUrl: string, model: string) => Promise<void>
   remove: (baseUrl: string, model: string) => Promise<boolean>
+  loadDetails: (baseUrl: string, model: string) => Promise<void>
+  setLoaded: (baseUrl: string, model: string, loaded: boolean) => Promise<void>
 }
 
 // Poll timers live outside the store (not serializable state).
@@ -33,6 +37,7 @@ export const useModelManagerStore = create<ModelManagerState>((set, get) => ({
   error: null,
   needsPlugin: false,
   downloads: {},
+  details: {},
 
   async load(baseUrl) {
     set({ loading: true, error: null })
@@ -81,5 +86,22 @@ export const useModelManagerStore = create<ModelManagerState>((set, get) => ({
       if (ok) await get().load(baseUrl)
       return ok
     } catch (e) { set({ error: String(e) }); return false }
+  },
+
+  async loadDetails(baseUrl, model) {
+    if (get().details[model]) return
+    try {
+      const d = await showModel(baseUrl, model)
+      if (d) set(s => ({ details: { ...s.details, [model]: d } }))
+    } catch { /* non-critical */ }
+  },
+
+  async setLoaded(baseUrl, model, loaded) {
+    // Optimistic: reflect the change, then re-check what's actually resident.
+    set(s => { const r = new Set(s.running); loaded ? r.add(model) : r.delete(model); return { running: r } })
+    try {
+      await setKeepAlive(baseUrl, model, loaded ? -1 : 0)
+      setTimeout(() => { void get().load(baseUrl) }, 500)
+    } catch (e) { set({ error: String(e) }); await get().load(baseUrl) }
   },
 }))

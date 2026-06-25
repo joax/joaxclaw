@@ -65,6 +65,32 @@ export async function deleteModel(baseUrl: string, model: string): Promise<boole
   return !!r.ok
 }
 
+export interface ModelDetails { family?: string; paramSize?: string; quant?: string; contextLength?: number; license?: string }
+
+export async function showModel(baseUrl: string, model: string): Promise<ModelDetails | null> {
+  const r = await gatewayClient.request<{ ok: boolean; body?: string }>('engines.show', { baseUrl, model })
+  if (!r.ok || !r.body) return null
+  let j: Record<string, unknown>
+  try { j = JSON.parse(r.body) } catch { return null }
+  const details = (j.details ?? {}) as { family?: string; parameter_size?: string; quantization_level?: string }
+  const info = (j.model_info ?? {}) as Record<string, unknown>
+  const ctxKey = Object.keys(info).find(k => k.endsWith('.context_length'))
+  const ctx = ctxKey ? Number(info[ctxKey]) : undefined
+  const license = typeof j.license === 'string' ? j.license.split('\n')[0].slice(0, 80) : undefined
+  return { family: details.family, paramSize: details.parameter_size, quant: details.quantization_level, contextLength: Number.isFinite(ctx) ? ctx : undefined, license }
+}
+
+// Load (keepAlive < 0, resident) or unload (0) a model.
+export async function setKeepAlive(baseUrl: string, model: string, keepAlive: number): Promise<boolean> {
+  const r = await gatewayClient.request<{ ok: boolean }>('engines.keepAlive', { baseUrl, model, keepAlive })
+  return !!r.ok
+}
+
+export function fmtContext(n?: number): string {
+  if (!n || n <= 0) return '—'
+  return n >= 1024 ? `${Math.round(n / 1024)}k` : String(n)
+}
+
 // Overall % for a pull (best-effort — Ollama reports per-layer bytes).
 export function pullPercent(p: PullProgress): number | null {
   if (p.done) return 100

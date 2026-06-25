@@ -106,6 +106,13 @@ const pulls = new Map()
 
 async function runPull(baseUrl, model, pullId) {
   const upd = (patch) => pulls.set(pullId, { ...(pulls.get(pullId) || {}), ...patch })
+  // Ollama reports per-layer (digest) bytes; track each so we can report an OVERALL %.
+  const layers = new Map()
+  const overall = () => {
+    let c = 0, t = 0
+    for (const l of layers.values()) { c += l.completed; t += l.total }
+    return { completed: c, total: t }
+  }
   try {
     const res = await fetch(baseUrl.replace(/\/+$/, '') + '/api/pull', {
       method: 'POST', headers: { 'content-type': 'application/json' },
@@ -125,11 +132,11 @@ async function runPull(baseUrl, model, pullId) {
         if (!line) continue
         let obj; try { obj = JSON.parse(line) } catch { continue }
         if (obj.error) { upd({ done: true, error: String(obj.error) }); return }
-        upd({
-          status: obj.status ?? pulls.get(pullId)?.status,
-          completed: typeof obj.completed === 'number' ? obj.completed : pulls.get(pullId)?.completed ?? 0,
-          total: typeof obj.total === 'number' ? obj.total : pulls.get(pullId)?.total ?? 0,
-        })
+        if (obj.digest && typeof obj.total === 'number') {
+          layers.set(obj.digest, { completed: typeof obj.completed === 'number' ? obj.completed : 0, total: obj.total })
+        }
+        const o = overall()
+        upd({ status: obj.status ?? pulls.get(pullId)?.status, completed: o.completed, total: o.total })
       }
     }
     upd({ done: true })
@@ -359,6 +366,38 @@ export default definePluginEntry({
         const res = await fetch(url.replace(/\/+$/, '') + '/api/delete', {
           method: 'DELETE', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: model }),
         })
+        respond(true, { ok: res.ok, status: res.status })
+      } catch (err) { failed(respond, err) }
+    }, { scope: WRITE_SCOPE })
+
+    // Model details (POST <baseUrl>/api/show) — license, context length, params, quant.
+    api.registerGatewayMethod('engines.show', async ({ params, respond }) => {
+      const url = guardEngineUrl(params?.baseUrl, respond)
+      if (url == null) return
+      const model = String(params?.model ?? '').trim()
+      if (!model) return respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, 'engines.show requires model'))
+      try {
+        const res = await fetch(url.replace(/\/+$/, '') + '/api/show', {
+          method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: model }),
+        })
+        const raw = await res.text()
+        respond(true, { ok: res.ok, status: res.status, body: raw.length > ENGINE_BODY_CAP ? raw.slice(0, ENGINE_BODY_CAP) : raw })
+      } catch (err) { failed(respond, err) }
+    }, { scope: READ_SCOPE })
+
+    // Load / unload a model by setting keep_alive (POST <baseUrl>/api/generate):
+    // keepAlive < 0 keeps it resident, 0 unloads it now.
+    api.registerGatewayMethod('engines.keepAlive', async ({ params, respond }) => {
+      const url = guardEngineUrl(params?.baseUrl, respond)
+      if (url == null) return
+      const model = String(params?.model ?? '').trim()
+      if (!model) return respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, 'engines.keepAlive requires model'))
+      const keepAlive = typeof params?.keepAlive === 'number' ? params.keepAlive : 0
+      try {
+        const res = await fetch(url.replace(/\/+$/, '') + '/api/generate', {
+          method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model, keep_alive: keepAlive }),
+        })
+        await res.text()
         respond(true, { ok: res.ok, status: res.status })
       } catch (err) { failed(respond, err) }
     }, { scope: WRITE_SCOPE })

@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
-import { HardDriveDownload, Trash2, RefreshCw, AlertCircle, Loader2, Check, Plus, Power, X, Search, Wrench, Eye, Brain, Code, Binary } from 'lucide-react'
+import { HardDriveDownload, Trash2, RefreshCw, AlertCircle, Loader2, Check, Plus, Power, X, Search, Wrench, Eye, Brain, Code, Binary, ChevronRight } from 'lucide-react'
 import { useModelsStore } from '../../store/models'
 import { useModelManagerStore } from '../../store/modelManager'
 import { detectFromConfig } from '../../lib/localEngines'
-import { fmtBytes } from '../../lib/modelManager'
+import { fmtBytes, fmtContext, type ModelDetails, type InstalledModel } from '../../lib/modelManager'
 import { searchCatalog, type CatalogModel, type ModelCapability } from '../../lib/modelCatalog'
 import type { GwModelDef } from '../../lib/types'
 
@@ -16,7 +16,7 @@ export function LocalModelsPanel() {
   const providers = useModelsStore(s => s.providers)
   const setModel = useModelsStore(s => s.setModel)
   const save = useModelsStore(s => s.save)
-  const { installed, running, loading, error, needsPlugin, downloads, load, pull, remove } = useModelManagerStore()
+  const { installed, running, loading, error, needsPlugin, downloads, details, load, pull, remove, loadDetails, setLoaded } = useModelManagerStore()
 
   // Ollama engines come from the configured providers (they carry the host baseUrl).
   const engines = useMemo(() => detectFromConfig(providers).filter(e => e.api === 'ollama'), [providers])
@@ -25,7 +25,6 @@ export function LocalModelsPanel() {
   const baseUrl = engine?.baseUrl
 
   const [pullName, setPullName] = useState('')
-  const [confirmDel, setConfirmDel] = useState<string | null>(null)
   const [discoverQuery, setDiscoverQuery] = useState('')
   const installedNames = useMemo(() => new Set(installed.map(m => m.name)), [installed])
   const downloading = (name: string) => !!downloads[name] && !downloads[name].done
@@ -135,44 +134,80 @@ export function LocalModelsPanel() {
             <label className="block text-xs font-semibold uppercase tracking-wider mb-1.5" style={{ color: 'var(--text-secondary)' }}>Installed ({installed.length})</label>
             {installed.length === 0 && !loading && <p className="text-xs" style={{ color: 'var(--text-secondary)', opacity: 0.7 }}>No models installed on this engine.</p>}
             <div className="space-y-1.5">
-              {installed.map(m => {
-                const isAdded = configured.has(m.name)
-                return (
-                  <div key={m.name} className="flex items-center gap-2 rounded px-3 py-2" style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)' }}>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm font-mono truncate" style={{ color: 'var(--text-primary)' }}>{m.name}</span>
-                        {running.has(m.name) && <span className="flex items-center gap-1" style={{ fontSize: 9, color: 'var(--success)' }}><Power size={9} /> loaded</span>}
-                      </div>
-                      <div className="text-xs" style={{ color: 'var(--text-secondary)' }}>
-                        {[fmtBytes(m.sizeBytes), m.paramSize, m.quant].filter(Boolean).join(' · ')}
-                      </div>
-                    </div>
-                    {isAdded ? (
-                      <span className="flex items-center gap-1 text-xs" style={{ color: 'var(--success)' }}><Check size={11} /> in provider</span>
-                    ) : (
-                      <button onClick={() => addToProvider(m.name)} title="Add to the gateway provider so agents can use it"
-                        className="flex items-center gap-1 text-xs" style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '3px 8px', cursor: 'pointer', color: 'var(--text-secondary)' }}>
-                        <Plus size={11} /> Add to provider
-                      </button>
-                    )}
-                    {confirmDel === m.name ? (
-                      <span className="flex items-center gap-1">
-                        <button onClick={async () => { setConfirmDel(null); await remove(baseUrl!, m.name) }} className="text-xs" style={{ color: 'var(--danger)', background: 'none', border: 'none', cursor: 'pointer' }}>Delete</button>
-                        <button onClick={() => setConfirmDel(null)} className="text-xs" style={{ color: 'var(--text-secondary)', background: 'none', border: 'none', cursor: 'pointer' }}>Cancel</button>
-                      </span>
-                    ) : (
-                      <button onClick={() => setConfirmDel(m.name)} title="Delete from engine" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)', padding: 2 }}><Trash2 size={13} /></button>
-                    )}
-                  </div>
-                )
-              })}
+              {installed.map(m => (
+                <InstalledRow key={m.name} m={m} isAdded={configured.has(m.name)} isRunning={running.has(m.name)} details={details[m.name]}
+                  onAdd={() => addToProvider(m.name)}
+                  onDetails={() => baseUrl && loadDetails(baseUrl, m.name)}
+                  onLoad={(v) => baseUrl && setLoaded(baseUrl, m.name, v)}
+                  onDelete={() => baseUrl && remove(baseUrl, m.name)} />
+              ))}
             </div>
           </div>
         </div>
       )}
     </div>
   )
+}
+
+function InstalledRow({ m, isAdded, isRunning, details, onAdd, onDetails, onLoad, onDelete }: {
+  m: InstalledModel; isAdded: boolean; isRunning: boolean; details?: ModelDetails
+  onAdd: () => void; onDetails: () => void; onLoad: (loaded: boolean) => void; onDelete: () => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [confirmDel, setConfirmDel] = useState(false)
+  const toggle = () => setOpen(o => { if (!o) onDetails(); return !o })
+  return (
+    <div className="rounded" style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)' }}>
+      <div className="flex items-center gap-2 px-3 py-2">
+        <button onClick={toggle} title="Details" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)', padding: 0, display: 'flex' }}>
+          <ChevronRight size={13} style={{ transform: open ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s' }} />
+        </button>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-mono truncate" style={{ color: 'var(--text-primary)' }}>{m.name}</span>
+            {isRunning && <span className="flex items-center gap-1" style={{ fontSize: 9, color: 'var(--success)' }}><Power size={9} /> loaded</span>}
+          </div>
+          <div className="text-xs" style={{ color: 'var(--text-secondary)' }}>{[fmtBytes(m.sizeBytes), m.paramSize, m.quant].filter(Boolean).join(' · ')}</div>
+        </div>
+        <button onClick={() => onLoad(!isRunning)} title={isRunning ? 'Unload from memory' : 'Load into memory'}
+          className="text-xs" style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '3px 8px', cursor: 'pointer', color: isRunning ? 'var(--warning)' : 'var(--text-secondary)' }}>
+          {isRunning ? 'Unload' : 'Load'}
+        </button>
+        {isAdded ? (
+          <span className="flex items-center gap-1 text-xs" style={{ color: 'var(--success)' }}><Check size={11} /> in provider</span>
+        ) : (
+          <button onClick={onAdd} title="Add to the gateway provider so agents can use it"
+            className="flex items-center gap-1 text-xs" style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '3px 8px', cursor: 'pointer', color: 'var(--text-secondary)' }}>
+            <Plus size={11} /> Add to provider
+          </button>
+        )}
+        {confirmDel ? (
+          <span className="flex items-center gap-1">
+            <button onClick={() => { setConfirmDel(false); onDelete() }} className="text-xs" style={{ color: 'var(--danger)', background: 'none', border: 'none', cursor: 'pointer' }}>Delete</button>
+            <button onClick={() => setConfirmDel(false)} className="text-xs" style={{ color: 'var(--text-secondary)', background: 'none', border: 'none', cursor: 'pointer' }}>Cancel</button>
+          </span>
+        ) : (
+          <button onClick={() => setConfirmDel(true)} title="Delete from engine" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)', padding: 2 }}><Trash2 size={13} /></button>
+        )}
+      </div>
+      {open && (
+        <div className="px-3 pb-2.5 pt-0.5 grid gap-x-4 gap-y-0.5" style={{ gridTemplateColumns: 'auto 1fr', borderTop: '1px dashed var(--border)', marginTop: 1 }}>
+          {!details ? <span className="text-xs" style={{ color: 'var(--text-secondary)', gridColumn: '1 / -1' }}><Loader2 size={10} className="animate-spin inline" /> loading…</span> : <>
+            <Detail k="Family" v={details.family} />
+            <Detail k="Parameters" v={details.paramSize} />
+            <Detail k="Quantization" v={details.quant} />
+            <Detail k="Context" v={fmtContext(details.contextLength)} />
+            {details.license && <Detail k="License" v={details.license} />}
+          </>}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function Detail({ k, v }: { k: string; v?: string }) {
+  if (!v || v === '—') return null
+  return <><span className="text-xs" style={{ color: 'var(--text-secondary)', opacity: 0.7 }}>{k}</span><span className="text-xs font-mono" style={{ color: 'var(--text-primary)' }}>{v}</span></>
 }
 
 const CAP_ICON: Record<ModelCapability, React.ReactNode> = {
