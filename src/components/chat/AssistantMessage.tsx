@@ -337,8 +337,12 @@ export function AssistantMessage({ message, showTools = true, showReasoning = tr
   // Stale streaming detection: if streaming but no content updates for STALE_THRESHOLD_MS, show waiting indicator
   const [isStale, setIsStale] = useState(false)
   const runningToolCount = message.toolCalls?.filter(tc => tc.status === 'running').length ?? 0
+  // Live prompt-token ingestion (Ollama). The model isn't stalled while this is
+  // advancing — it just hasn't emitted a token yet — so feed it into the activity key
+  // (resets the stale timer) and suppress the "model stopped" banner below.
+  const promptProgress = useOllamaProgress(s => s.progress)
   // Include running tool count so the timer resets on tool_start and tool_done transitions
-  const activityKey = `${message.content.length}:${message.reasoning?.length ?? 0}:${message.toolCalls?.length ?? 0}:${runningToolCount}`
+  const activityKey = `${message.content.length}:${message.reasoning?.length ?? 0}:${message.toolCalls?.length ?? 0}:${runningToolCount}:${promptProgress ?? ''}`
   const prevActivityKey = useRef(activityKey)
 
   useEffect(() => {
@@ -354,7 +358,7 @@ export function AssistantMessage({ message, showTools = true, showReasoning = tr
   // A running tool call is not "waiting" — suppress the indicator while tools are actively executing
   const hasRunningTool = runningToolCount > 0
   const isWaitingForSession = message.streaming && !hasRunningTool && !!message.waitingForSession
-  const isStalled = isStale && message.streaming && !hasRunningTool && !message.waitingForSession
+  const isStalled = isStale && message.streaming && !hasRunningTool && !message.waitingForSession && promptProgress == null
 
   return (
     <div className="flex justify-start animate-fade-in">
