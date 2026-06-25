@@ -609,7 +609,9 @@ function PluginCard({ plugin, onToggle, onConfigure, onRemove, confirmingDelete,
       ) : (
         <div className="flex justify-end items-center gap-1 mt-auto">
           <Btn size="sm" variant="ghost" icon={<SlidersHorizontal size={12} />} onClick={onConfigure}>Configure</Btn>
-          <Btn size="sm" variant="ghost" icon={<Trash2 size={12} />} onClick={onRemove} style={{ color: 'var(--danger)' }} />
+          {!plugin.discovered && (
+            <Btn size="sm" variant="ghost" icon={<Trash2 size={12} />} onClick={onRemove} style={{ color: 'var(--danger)' }} />
+          )}
         </div>
       )}
     </div>
@@ -688,7 +690,9 @@ function PluginRow({ plugin, onToggle, onConfigure, onRemove, confirmingDelete, 
           ) : (
             <div className="flex items-center gap-1">
               <Btn size="sm" variant="ghost" icon={<SlidersHorizontal size={12} />} onClick={onConfigure}>Configure</Btn>
-              <Btn size="sm" variant="ghost" icon={<Trash2 size={12} />} onClick={onRemove} style={{ color: 'var(--danger)' }} />
+              {!plugin.discovered && (
+                <Btn size="sm" variant="ghost" icon={<Trash2 size={12} />} onClick={onRemove} style={{ color: 'var(--danger)' }} />
+              )}
             </div>
           )}
         </div>

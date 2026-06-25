@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { gatewayClient } from '../lib/gateway'
 import { pluginKeyStatus, type PluginKeyStatus } from '../lib/pluginConfig'
+import { isRemoteGatewayState } from './connection'
 
 export interface Plugin {
   id: string
@@ -13,6 +14,9 @@ export interface Plugin {
   origin?: string
   // API-key completeness: 'set' (configured), 'missing' (needs a key), 'n/a' (no key needed).
   keyStatus?: PluginKeyStatus
+  // True for plugins surfaced from the gateway registry that have no config entry yet
+  // (so we don't persist all of them on save — only ones the user actually touches).
+  discovered?: boolean
   [key: string]: unknown
 }
 
@@ -51,6 +55,7 @@ export interface PluginMetaEntry {
   source?: string
   origin?: string
   status?: string
+  enabled?: boolean
   toolNames?: string[]
 }
 
@@ -178,22 +183,30 @@ export const useExtensionsStore = create<ExtensionsState>((set, get) => ({
 
       const skills = [...configSkills, ...discoveredSkills]
 
-      // Enrich plugins with metadata from `openclaw plugins list --json`
+      // Enrich plugins with metadata from `openclaw plugins list --json`. This is the
+      // LOCAL host's CLI, so it's authoritative only when the gateway is local (see the
+      // remote-gateway-localhost pitfall); for remote we fall back to the gateway's own
+      // plugins.list below.
       let pluginMetaMap: Record<string, PluginMetaEntry> = {}
+      let cliPlugins: PluginMetaEntry[] = []
       try {
         const api = (window as unknown as { api?: { plugins?: { list: () => Promise<{ ok: boolean; plugins?: PluginMetaEntry[] }> } } }).api
         const res = await api?.plugins?.list()
-        for (const p of res?.plugins ?? []) {
+        cliPlugins = res?.plugins ?? []
+        for (const p of cliPlugins) {
           if (p.id) pluginMetaMap[p.id] = p
         }
       } catch { /* non-critical */ }
 
-      // Build toolName → pluginId map from gateway plugins.list (includes toolNames per plugin)
+      // Build toolName → pluginId map from gateway plugins.list (includes toolNames per
+      // plugin) and keep the gateway's registry — it's correct for a remote gateway.
       const toolNameMap = new Map<string, string>()
+      let gwPlugins: PluginMetaEntry[] = []
       try {
         type GwPlugin = PluginMetaEntry & { toolNames?: string[] }
         const res = await gatewayClient.request<{ plugins?: GwPlugin[] }>('plugins.list', {})
-        for (const p of res?.plugins ?? []) {
+        gwPlugins = res?.plugins ?? []
+        for (const p of gwPlugins) {
           if (!p.id) continue
           for (const tn of p.toolNames ?? []) toolNameMap.set(tn, p.id)
           // Also merge toolNames into the meta map
@@ -202,7 +215,7 @@ export const useExtensionsStore = create<ExtensionsState>((set, get) => ({
         }
       } catch { /* non-critical */ }
 
-      const plugins = normalizePlugins(pluginEntries).map(p => {
+      const configPlugins = normalizePlugins(pluginEntries).map(p => {
         const keyStatus = pluginKeyStatus(fullCfg, p.id)
         const meta = pluginMetaMap[p.id]
         if (!meta) return { ...p, keyStatus }
@@ -216,6 +229,29 @@ export const useExtensionsStore = create<ExtensionsState>((set, get) => ({
           source: p.source ?? meta.source,
         }
       })
+
+      // Merge in plugins the gateway knows about that have no config entry yet, so the
+      // FULL registry is visible (not just configured ones) — mirrors discoveredSkills.
+      // Source: the local CLI when the gateway is local (lists every installed plugin,
+      // including disabled stock ones); the gateway's own plugins.list when remote.
+      const configPluginIds = new Set(configPlugins.map(p => p.id))
+      const registry = isRemoteGatewayState() ? gwPlugins : (cliPlugins.length ? cliPlugins : gwPlugins)
+      const seen = new Set(configPluginIds)
+      const discoveredPlugins: Plugin[] = registry
+        .filter(m => m.id && !seen.has(m.id) && (seen.add(m.id), true))
+        .map(m => ({
+          id: m.id,
+          enabled: Boolean(m.enabled ?? m.status === 'enabled'),
+          name: m.name ?? m.id,
+          description: m.description,
+          version: m.version,
+          origin: m.origin,
+          source: m.source,
+          keyStatus: pluginKeyStatus(fullCfg, m.id),
+          discovered: true,
+        }))
+
+      const plugins = [...configPlugins, ...discoveredPlugins]
 
       set({
         plugins,
@@ -232,7 +268,16 @@ export const useExtensionsStore = create<ExtensionsState>((set, get) => ({
   },
 
   setPluginEnabled(id, enabled) {
-    set(s => ({ plugins: s.plugins.map(p => p.id === id ? { ...p, enabled } : p), dirty: true }))
+    set(s => ({
+      plugins: s.plugins.map(p => {
+        if (p.id !== id) return p
+        // Adopting a registry-discovered plugin: reduce it to a minimal entry so save()
+        // writes just the enable state (no stale source path / version into config).
+        if (p.discovered) return { id: p.id, enabled, name: p.name, description: p.description, keyStatus: p.keyStatus }
+        return { ...p, enabled }
+      }),
+      dirty: true,
+    }))
   },
 
   setSkillEnabled(id, enabled) {
@@ -261,7 +306,12 @@ export const useExtensionsStore = create<ExtensionsState>((set, get) => ({
     try {
       const pluginEntries: Record<string, unknown> = {}
       for (const p of plugins) {
-        const { id, ...rest } = p
+        // Untouched registry-discovered plugins have no config intent — don't persist
+        // them (otherwise we'd write all ~90 stock plugins into the config).
+        if (p.discovered) continue
+        // Strip gateway-computed fields so they don't leak into the saved config.
+        const { id, discovered: _d, keyStatus: _k, version: _v, origin: _o, ...rest } = p
+        void _d; void _k; void _v; void _o
         pluginEntries[id] = rest
       }
       const skillEntries: Record<string, unknown> = {}
