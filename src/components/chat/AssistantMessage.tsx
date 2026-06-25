@@ -459,8 +459,13 @@ export function AssistantMessage({ message, showTools = true, showReasoning = tr
 function PromptProgress() {
   const { progress, nTokens, tps } = useOllamaProgress()
 
-  // Start the main-process log watcher on first appearance.
-  useEffect(() => { useOllamaProgress.getState().ensureStarted() }, [])
+  // Start the main-process log watcher on first appearance, and clear the bar when
+  // this prompt-processing phase ends (output starts / turn finishes) so it doesn't
+  // linger or carry into the next turn.
+  useEffect(() => {
+    useOllamaProgress.getState().ensureStarted()
+    return () => useOllamaProgress.getState().reset()
+  }, [])
 
   if (progress == null) {
     return <span className="streaming-cursor" style={{ color: 'var(--text-secondary)' }} />
