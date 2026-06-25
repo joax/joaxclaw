@@ -97,7 +97,11 @@ export function LocalModelsPanel() {
                   <div className="flex items-center gap-2 mb-1.5">
                     {d.error ? <X size={12} style={{ color: 'var(--danger)' }} /> : d.done ? <Check size={12} style={{ color: 'var(--success)' }} /> : <Loader2 size={12} className="animate-spin" style={{ color: 'var(--accent)' }} />}
                     <span className="text-xs font-mono flex-1" style={{ color: 'var(--text-primary)' }}>{d.model}</span>
-                    <span className="text-xs" style={{ color: d.error ? 'var(--danger)' : 'var(--text-secondary)' }}>{d.error ? 'failed' : d.status}{d.percent != null && !d.done ? ` · ${d.percent}%` : ''}</span>
+                    <span className="text-xs" style={{ color: d.error ? 'var(--danger)' : 'var(--text-secondary)' }}>
+                      {d.error ? 'failed' : d.status}
+                      {!d.done && d.percent != null ? ` · ${d.percent}%` : ''}
+                      {!d.done && d.total ? ` · ${fmtBytes(d.completed)} / ${fmtBytes(d.total)}` : ''}
+                    </span>
                   </div>
                   {!d.error && (
                     <div style={{ height: 4, borderRadius: 2, background: 'var(--bg-elevated)', overflow: 'hidden' }}>
