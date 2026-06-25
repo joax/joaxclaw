@@ -176,7 +176,10 @@ export class GatewayClient {
     this.pending.clear()
   }
 
-  async request<T = unknown>(method: string, params?: Record<string, unknown>): Promise<T> {
+  // timeoutMs <= 0 disables the timeout — for long-running calls (e.g. chat.send to a
+  // slow local model) whose completion is driven by the event stream, not the reply.
+  // A genuine disconnect still rejects pending requests, so these can't leak forever.
+  async request<T = unknown>(method: string, params?: Record<string, unknown>, timeoutMs = 30000): Promise<T> {
     if (!this._connected && method !== 'connect') {
       throw new Error('Not connected')
     }
@@ -195,12 +198,14 @@ export class GatewayClient {
         },
         reject
       })
-      setTimeout(() => {
-        if (this.pending.has(id)) {
-          this.pending.delete(id)
-          reject(new Error(`Request ${method} timed out`))
-        }
-      }, 30000)
+      if (timeoutMs > 0) {
+        setTimeout(() => {
+          if (this.pending.has(id)) {
+            this.pending.delete(id)
+            reject(new Error(`Request ${method} timed out`))
+          }
+        }, timeoutMs)
+      }
     })
   }
 

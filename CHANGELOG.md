@@ -9,6 +9,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Slow local models no longer make the chat go silent.** `chat.send` was awaited with the default 30 s request timeout, so a local model that took longer than 30 s to produce its first token tripped the timeout, the message was marked not-streaming, and every indicator vanished (no "thinking…", no prompt bar, no Stop button) while the model kept generating. The turn's lifecycle is driven by the event stream, not by `chat.send`'s reply, so `chat.send` is now sent without a timeout (and not awaited) — the indicators and Stop button stay until the stream actually ends. The composer also re-enables immediately instead of locking for the whole turn.
 - The chat **"Processing prompt…" bar no longer disappears** when Ollama goes a few seconds without printing a progress log line. It previously expired after a 4 s gap; it now persists through quiet gaps (the spinner keeps turning) and is cleared on the actual lifecycle — when prompt eval finishes or output starts — via a new `reset()` instead of a short idle timer.
 - Model-pull progress no longer jumps backward or blanks out. Ollama announces layers incrementally (so the raw overall % drops when a new layer is discovered, and disappears during the manifest/verify phases); the download bar is now clamped to move only forward and keeps its last value through those phases, with a live downloaded-bytes readout (e.g. `3.4 / 8.2 GB`) so there's always feedback.
 

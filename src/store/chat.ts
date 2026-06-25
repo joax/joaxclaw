@@ -573,7 +573,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
       attachChatStream(convId, sessionKey, updateAssistant)
 
-      await gatewayClient.request('chat.send', {
+      // The turn's lifecycle is driven entirely by the event stream (final / error /
+      // aborted), NOT by chat.send's reply. A slow local model can take far longer than
+      // any request timeout to produce its first token, so we send WITHOUT a timeout
+      // (timeoutMs=0) — otherwise the 30s default would fire, the catch below would set
+      // streaming:false, and the chat would go silent (no indicator, no stop button)
+      // while Ollama is still generating. Don't await it either: the UI updates live
+      // from events. Only a genuine send failure surfaces here, and only if the stream
+      // hasn't already moved on.
+      gatewayClient.request('chat.send', {
         sessionKey,
         message: text,
         ...(conv.thinkingLevel ? { thinking: conv.thinkingLevel } : {}),
@@ -586,6 +594,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
           }))
         } : {}),
         idempotencyKey: nanoid(16)
+      }, 0).catch(err => {
+        // A late event may have already finished the turn — don't clobber it.
+        updateAssistant(m => m.streaming
+          ? { ...m, content: m.content || `Error: ${String(err)}`, streaming: false, waitingForSession: undefined }
+          : m)
+        const entry = activeStreams.get(convId)
+        if (entry?.sessionKey === sessionKey) { entry.unsub(); activeStreams.delete(convId) }
       })
     } catch (err) {
       updateAssistant(m => ({ ...m, content: `Error: ${String(err)}`, streaming: false }))
