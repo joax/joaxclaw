@@ -57,7 +57,12 @@ export function PluginConfigModal({ plugin, onClose, onSaved }: { plugin: Plugin
     }
     if (baseUrlPath) {
       const v = baseUrlDraft.trim()
-      mergeDeep(p, nestedPatch(baseUrlPath, v === '' ? null : v))
+      // Base URL is an OPTIONAL endpoint override. Only write it when the user typed a
+      // value. An empty field must NEVER touch the stored endpoint: deleting it (or
+      // sending "") leaves the provider with the plugin's default "", which the gateway
+      // rejects ("Too small: expected string to have >=1 characters") — so just setting
+      // the API key would fail. To remove an override, use the Advanced (raw) tab.
+      if (v) mergeDeep(p, nestedPatch(baseUrlPath, v))
     }
     if (Object.keys(p).length === 0) { onClose(); return }
     if (await patch(p)) { onSaved?.(); onClose() }
