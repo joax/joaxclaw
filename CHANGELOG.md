@@ -9,6 +9,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Local model management (Models → Local models).** A new tab to manage models on a local **Ollama** engine: see installed models (size · params · quant · loaded), **pull a new model by name** with live download progress, **delete**, and **"Add to provider"** to register a model into the gateway config so agents/the picker can use it. Works on a **local *and* remote** gateway — it's routed through the `joaxclaw-fs` plugin's new `engines.pull` / `engines.pullStatus` / `engines.delete` methods (the plugin runs on the engine's host). Requires `joaxclaw-fs` ≥ 0.3.0. New `lib/modelManager.ts`, `store/modelManager.ts`, `components/models/LocalModelsPanel.tsx`. (Browsable online catalog + LM Studio are later phases.)
+- **`joaxclaw-fs` 0.3.0** adds `engines.pull` (streamed Ollama pull → `pullId`, polled via `engines.pullStatus`) and `engines.delete`.
 - **Talk mode shows the agent's activity.** During a voice call, a collapsible **Agent activity** panel lists the actions the agent takes — each tool call with a live status (running / done / failed), inline progress, and expandable args + result — so it's transparent what's happening while you talk (e.g. "🔍 searching the web…"). Driven by the `tool.call` / `tool.progress` / `tool.result` Talk events into a per-call timeline in `store/talk.ts`.
 
 ## [0.10.0] - 2026-06-23

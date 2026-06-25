@@ -33,6 +33,9 @@ gateway RPC methods that read/write those directories on the host.
 | `processes.runs.set` | write | `{ id, run }` | `{ ok, id }` |
 | `engines.probe` | read | `{ url, timeoutMs? }` | `{ ok, status }` |
 | `engines.fetch` | read | `{ url, timeoutMs? }` | `{ ok, status, body }` |
+| `engines.pull` | write | `{ baseUrl, model }` | `{ pullId }` (Ollama; streamed in background) |
+| `engines.pullStatus` | read | `{ pullId }` | `{ status, completed, total, done, error?, model }` |
+| `engines.delete` | write | `{ baseUrl, model }` | `{ ok, status }` (Ollama) |
 
 Artifacts are passed through verbatim as strings (or `null` when missing); the app
 owns (de)serialization. Ids are validated to stay inside the state directories.
