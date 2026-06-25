@@ -7,6 +7,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Model-pull progress no longer jumps backward or blanks out. Ollama announces layers incrementally (so the raw overall % drops when a new layer is discovered, and disappears during the manifest/verify phases); the download bar is now clamped to move only forward and keeps its last value through those phases, with a live downloaded-bytes readout (e.g. `3.4 / 8.2 GB`) so there's always feedback.
+
 ## [0.11.0] - 2026-06-25
 
 ### Added

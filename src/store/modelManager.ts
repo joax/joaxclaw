@@ -9,7 +9,7 @@ import {
   type InstalledModel, type ModelDetails,
 } from '../lib/modelManager'
 
-export interface DownloadState { model: string; status: string; percent: number | null; done: boolean; error?: string }
+export interface DownloadState { model: string; status: string; percent: number | null; completed?: number; total?: number; done: boolean; error?: string }
 
 interface ModelManagerState {
   installed: InstalledModel[]
@@ -60,7 +60,17 @@ export const useModelManagerStore = create<ModelManagerState>((set, get) => ({
       const poll = async () => {
         try {
           const p = await pullStatus(pullId)
-          setDl({ model, status: p.error ? 'error' : (p.status ?? '…'), percent: pullPercent(p), done: !!p.done, error: p.error })
+          // Ollama announces layers incrementally, so the raw % is non-monotonic and
+          // blanks out during manifest/verify phases. Clamp it to never go backward and
+          // keep the last value when a phase reports no total; bytes still tick up.
+          const prev = get().downloads[model]
+          const computed = pullPercent(p)
+          const percent = computed == null ? (prev?.percent ?? null) : Math.max(prev?.percent ?? 0, computed)
+          setDl({
+            model, status: p.error ? 'error' : (p.status ?? '…'), percent,
+            completed: p.completed ?? prev?.completed, total: p.total ?? prev?.total,
+            done: !!p.done, error: p.error,
+          })
           if (p.done) {
             const t = pollers.get(model); if (t) clearInterval(t); pollers.delete(model)
             if (!p.error) await get().load(baseUrl)
