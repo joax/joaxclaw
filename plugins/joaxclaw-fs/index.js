@@ -18,6 +18,7 @@
 
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
+import { randomUUID } from 'node:crypto'
 import { definePluginEntry } from 'openclaw/plugin-sdk/plugin-entry'
 import { resolveStateDir } from 'openclaw/plugin-sdk/state-paths'
 import { errorShape, ErrorCodes } from 'openclaw/plugin-sdk/gateway-runtime'
@@ -94,6 +95,46 @@ async function engineFetch(url, timeoutMs) {
     return await fetch(url, { signal: ctrl.signal, headers: { accept: 'application/json' } })
   } finally {
     clearTimeout(timer)
+  }
+}
+
+// ── Ollama model-pull tracking ──────────────────────────────────────────────────
+// A pull is a long streaming download; engines.pull starts it and returns a pullId,
+// the stream is consumed in the background into `pulls`, and the client polls
+// engines.pullStatus. Keyed by pullId; finished entries are GC'd after a minute.
+const pulls = new Map()
+
+async function runPull(baseUrl, model, pullId) {
+  const upd = (patch) => pulls.set(pullId, { ...(pulls.get(pullId) || {}), ...patch })
+  try {
+    const res = await fetch(baseUrl.replace(/\/+$/, '') + '/api/pull', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: model, stream: true }),
+    })
+    if (!res.ok || !res.body) { upd({ done: true, error: `HTTP ${res.status}` }); return }
+    const reader = res.body.getReader()
+    const dec = new TextDecoder()
+    let buf = ''
+    for (;;) {
+      const { value, done } = await reader.read()
+      if (done) break
+      buf += dec.decode(value, { stream: true })
+      let nl
+      while ((nl = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, nl).trim(); buf = buf.slice(nl + 1)
+        if (!line) continue
+        let obj; try { obj = JSON.parse(line) } catch { continue }
+        if (obj.error) { upd({ done: true, error: String(obj.error) }); return }
+        upd({
+          status: obj.status ?? pulls.get(pullId)?.status,
+          completed: typeof obj.completed === 'number' ? obj.completed : pulls.get(pullId)?.completed ?? 0,
+          total: typeof obj.total === 'number' ? obj.total : pulls.get(pullId)?.total ?? 0,
+        })
+      }
+    }
+    upd({ done: true })
+  } catch (err) {
+    upd({ done: true, error: err?.message ?? String(err) })
   }
 }
 
@@ -285,5 +326,41 @@ export default definePluginEntry({
         respond(true, { ok: false, status: 0, body: '', error: err?.message ?? String(err) })
       }
     }, { scope: READ_SCOPE })
+
+    // Pull an Ollama model on the host (POST <baseUrl>/api/pull, streamed). Returns a
+    // pullId immediately; the client polls engines.pullStatus for progress.
+    api.registerGatewayMethod('engines.pull', async ({ params, respond }) => {
+      const url = guardEngineUrl(params?.baseUrl, respond)
+      if (url == null) return
+      const model = String(params?.model ?? '').trim()
+      if (!model) return respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, 'engines.pull requires model'))
+      const pullId = randomUUID()
+      pulls.set(pullId, { status: 'starting', completed: 0, total: 0, done: false, model })
+      void runPull(url, model, pullId)   // background; don't await
+      respond(true, { pullId })
+    }, { scope: WRITE_SCOPE })
+
+    // Poll a pull's progress: { status, completed, total, done, error?, model }.
+    api.registerGatewayMethod('engines.pullStatus', async ({ params, respond }) => {
+      const id = String(params?.pullId ?? '')
+      const p = pulls.get(id)
+      if (!p) return respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, 'unknown pullId'))
+      respond(true, p)
+      if (p.done) setTimeout(() => pulls.delete(id), 60000)   // GC finished pulls
+    }, { scope: READ_SCOPE })
+
+    // Delete an Ollama model on the host (DELETE <baseUrl>/api/delete).
+    api.registerGatewayMethod('engines.delete', async ({ params, respond }) => {
+      const url = guardEngineUrl(params?.baseUrl, respond)
+      if (url == null) return
+      const model = String(params?.model ?? '').trim()
+      if (!model) return respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, 'engines.delete requires model'))
+      try {
+        const res = await fetch(url.replace(/\/+$/, '') + '/api/delete', {
+          method: 'DELETE', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: model }),
+        })
+        respond(true, { ok: res.ok, status: res.status })
+      } catch (err) { failed(respond, err) }
+    }, { scope: WRITE_SCOPE })
   },
 })

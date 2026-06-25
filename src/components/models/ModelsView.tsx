@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
-import { Plus, Trash2, ChevronRight, Cpu, KeyRound, Link, Pencil, Check, X, RefreshCw, AlertCircle, Save, BarChart2, Plug } from 'lucide-react'
+import { Plus, Trash2, ChevronRight, Cpu, KeyRound, Link, Pencil, Check, X, RefreshCw, AlertCircle, Save, BarChart2, Plug, HardDriveDownload } from 'lucide-react'
 import { useModelsStore } from '../../store/models'
+import { LocalModelsPanel } from './LocalModelsPanel'
 import { useSessionsStore } from '../../store/sessions'
 import { useCronsStore } from '../../store/crons'
 import { gatewayClient } from '../../lib/gateway'
@@ -569,7 +570,7 @@ function UsageTab() {
 export function ModelsView() {
   const { providers, pluginProviderIds, pluginEnabled, selectedId, loading, error, dirty, saving, load, selectProvider, setProviderEnabled, deleteProvider, save } = useModelsStore()
   const [addingProvider, setAddingProvider] = useState(false)
-  const [tab, setTab] = useState<'providers' | 'usage'>('providers')
+  const [tab, setTab] = useState<'providers' | 'local' | 'usage'>('providers')
 
   useEffect(() => { load() }, [])
 
@@ -601,9 +602,11 @@ export function ModelsView() {
       {/* Tab bar */}
       <div className="flex items-center px-2 shrink-0" style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-surface)' }}>
         {tabBtn('providers', 'Providers', <Cpu size={12} />)}
+        {tabBtn('local', 'Local models', <HardDriveDownload size={12} />)}
         {tabBtn('usage', 'Usage', <BarChart2 size={12} />)}
       </div>
 
+      {tab === 'local' && <LocalModelsPanel />}
       {tab === 'usage' && <UsageTab />}
       {tab === 'providers' && <>
       {/* Dirty / save bar */}
