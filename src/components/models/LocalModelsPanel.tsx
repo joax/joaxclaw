@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
-import { HardDriveDownload, Trash2, RefreshCw, AlertCircle, Loader2, Check, Plus, Power, X } from 'lucide-react'
+import { HardDriveDownload, Trash2, RefreshCw, AlertCircle, Loader2, Check, Plus, Power, X, Search, Wrench, Eye, Brain, Code, Binary } from 'lucide-react'
 import { useModelsStore } from '../../store/models'
 import { useModelManagerStore } from '../../store/modelManager'
 import { detectFromConfig } from '../../lib/localEngines'
 import { fmtBytes } from '../../lib/modelManager'
+import { searchCatalog, type CatalogModel, type ModelCapability } from '../../lib/modelCatalog'
 import type { GwModelDef } from '../../lib/types'
 
 // Local models manager (Models → Local models). Lists models installed on an Ollama
@@ -25,6 +26,9 @@ export function LocalModelsPanel() {
 
   const [pullName, setPullName] = useState('')
   const [confirmDel, setConfirmDel] = useState<string | null>(null)
+  const [discoverQuery, setDiscoverQuery] = useState('')
+  const installedNames = useMemo(() => new Set(installed.map(m => m.name)), [installed])
+  const downloading = (name: string) => !!downloads[name] && !downloads[name].done
 
   useEffect(() => { if (baseUrl) load(baseUrl) }, [baseUrl])  // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -107,6 +111,25 @@ export function LocalModelsPanel() {
             </div>
           )}
 
+          {/* Discover */}
+          <div>
+            <div className="flex items-center gap-2 mb-1.5">
+              <label className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--text-secondary)' }}>Discover</label>
+              <div className="relative flex-1 max-w-xs">
+                <Search size={12} style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-secondary)' }} />
+                <input value={discoverQuery} onChange={e => setDiscoverQuery(e.target.value)} placeholder="search models, e.g. vision, code, qwen…"
+                  style={{ width: '100%', fontSize: 11, padding: '4px 8px 4px 26px', borderRadius: 'var(--radius)', border: '1px solid var(--border)', background: 'var(--bg-elevated)', color: 'var(--text-primary)', outline: 'none' }} />
+              </div>
+            </div>
+            <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))' }}>
+              {searchCatalog(discoverQuery).map(m => (
+                <CatalogCard key={m.id} model={m} installedNames={installedNames} downloading={downloading}
+                  onPull={tag => baseUrl && pull(baseUrl, `${m.id}:${tag}`)} />
+              ))}
+              {searchCatalog(discoverQuery).length === 0 && <p className="text-xs" style={{ color: 'var(--text-secondary)', opacity: 0.7 }}>No catalog match — pull it by name above.</p>}
+            </div>
+          </div>
+
           {/* Installed */}
           <div>
             <label className="block text-xs font-semibold uppercase tracking-wider mb-1.5" style={{ color: 'var(--text-secondary)' }}>Installed ({installed.length})</label>
@@ -148,6 +171,54 @@ export function LocalModelsPanel() {
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+const CAP_ICON: Record<ModelCapability, React.ReactNode> = {
+  tools: <Wrench size={9} />, vision: <Eye size={9} />, reasoning: <Brain size={9} />, code: <Code size={9} />, embedding: <Binary size={9} />,
+}
+
+function CatalogCard({ model, installedNames, downloading, onPull }: {
+  model: CatalogModel; installedNames: Set<string>; downloading: (name: string) => boolean; onPull: (tag: string) => void
+}) {
+  const [tag, setTag] = useState(model.variants[0].tag)
+  const fullName = `${model.id}:${tag}`
+  const isInstalled = installedNames.has(fullName) || installedNames.has(`${model.id}:latest`) && tag === 'latest'
+  const isDownloading = downloading(fullName)
+  return (
+    <div className="flex flex-col rounded p-2.5" style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)' }}>
+      <div className="flex items-baseline gap-1.5">
+        <span className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>{model.name}</span>
+        <span className="text-xs" style={{ color: 'var(--text-secondary)', opacity: 0.7 }}>{model.publisher}</span>
+      </div>
+      <p className="text-xs mt-0.5 mb-1.5 line-clamp-2" style={{ color: 'var(--text-secondary)', lineHeight: 1.4, minHeight: 28 }}>{model.blurb}</p>
+      {model.capabilities.length > 0 && (
+        <div className="flex flex-wrap gap-1 mb-2">
+          {model.capabilities.map(c => (
+            <span key={c} className="flex items-center gap-0.5" style={{ fontSize: 9, color: 'var(--accent)', background: 'color-mix(in srgb, var(--accent) 12%, transparent)', padding: '1px 5px', borderRadius: 999 }}>
+              {CAP_ICON[c]} {c}
+            </span>
+          ))}
+        </div>
+      )}
+      <div className="flex items-center gap-1.5 mt-auto">
+        <select value={tag} onChange={e => setTag(e.target.value)}
+          style={{ fontSize: 11, padding: '3px 5px', borderRadius: 'var(--radius)', border: '1px solid var(--border)', background: 'var(--bg-elevated)', color: 'var(--text-primary)', outline: 'none' }}>
+          {model.variants.map(v => <option key={v.tag} value={v.tag}>{v.params} · {v.sizeGB} GB</option>)}
+        </select>
+        <div className="flex-1" />
+        {isInstalled ? (
+          <span className="flex items-center gap-1 text-xs" style={{ color: 'var(--success)' }}><Check size={11} /> installed</span>
+        ) : isDownloading ? (
+          <span className="flex items-center gap-1 text-xs" style={{ color: 'var(--text-secondary)' }}><Loader2 size={11} className="animate-spin" /> pulling</span>
+        ) : (
+          <button onClick={() => onPull(tag)} title={`Pull ${fullName}`} className="flex items-center gap-1 text-xs"
+            style={{ background: 'var(--accent)', color: 'white', border: 'none', borderRadius: 'var(--radius)', padding: '4px 9px', cursor: 'pointer', fontWeight: 500 }}>
+            <HardDriveDownload size={11} /> Pull
+          </button>
+        )}
+      </div>
     </div>
   )
 }
