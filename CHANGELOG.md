@@ -7,6 +7,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Extensions → Plugins now lists the gateway's full plugin registry**, not just plugins that already have a config entry. Previously a plugin that was enabled by default but unconfigured (e.g. `browser`, `canvas`, `openai`) was invisible; now every installed plugin shows with its enabled/disabled state and the all/enabled/disabled filter. Toggling or configuring a registry plugin adopts it into config; untouched ones are never written back (so the config isn't polluted with all ~90 stock plugins). The registry is read from the local CLI for a local gateway and from the gateway's own `plugins.list` when remote.
+
 ### Fixed
 
 - The **"model stopped — send a message to continue"** banner no longer appears while the model is still ingesting the prompt. The staleness detector only watched content/reasoning/tool activity, so a long prompt ingest (which emits no output yet) tripped it even at, e.g., 84% / 481 tok/s; it now treats live prompt-token progress as activity and suppresses the banner while ingestion is advancing.
