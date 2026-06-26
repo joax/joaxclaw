@@ -257,23 +257,20 @@ export function ChatView() {
                     >{m}</button>
                   ))}
                 </div>
-                {/* Advanced-only toggles */}
-                {chatMode === 'advanced' && (
-                  <>
-                    <ToggleBtn
-                      active={showReasoning}
-                      onClick={() => setShowReasoning(v => !v)}
-                      icon={<Brain size={12} />}
-                      label="Reasoning"
-                    />
-                    <ToggleBtn
-                      active={showTools}
-                      onClick={() => setShowTools(v => !v)}
-                      icon={<Wrench size={12} />}
-                      label="Actions"
-                    />
-                  </>
-                )}
+                {/* Always mounted so the toggle row never reflows when switching modes.
+                    In Basic mode these govern what the per-message "Details" panel shows. */}
+                <ToggleBtn
+                  active={showReasoning}
+                  onClick={() => setShowReasoning(v => !v)}
+                  icon={<Brain size={12} />}
+                  label="Reasoning"
+                />
+                <ToggleBtn
+                  active={showTools}
+                  onClick={() => setShowTools(v => !v)}
+                  icon={<Wrench size={12} />}
+                  label="Actions"
+                />
                 <ToggleBtn
                   active={showContext}
                   onClick={() => setShowContext(v => !v)}

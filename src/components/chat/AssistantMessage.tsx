@@ -450,7 +450,7 @@ export function AssistantMessage({ message, showTools = true, showReasoning = tr
                 <div className="mt-2">
                   {hasReasoning && showReasoning && <ReasoningBlock text={allReasoning} streaming={false} />}
                   {gatewayActions.length > 0 && <GatewayActionBlock actions={gatewayActions} />}
-                  {hasTools && <ToolCallsBlock calls={message.toolCalls!} />}
+                  {hasTools && showTools && <ToolCallsBlock calls={message.toolCalls!} />}
                 </div>
               )}
             </div>
