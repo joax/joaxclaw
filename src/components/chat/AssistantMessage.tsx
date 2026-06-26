@@ -3,6 +3,8 @@ import { ChevronDown, ChevronRight, BrainCircuit, CheckCircle2, XCircle, Loader2
 import type { ChatMessage, ContextOverflowInfo, ToolCall } from '../../lib/types'
 import { useExtensionsStore } from '../../store/extensions'
 import { useOllamaProgress } from '../../store/ollamaProgress'
+import { useSettingsStore } from '../../store/settings'
+import { currentActivity, completedSteps } from '../../lib/activityLabels'
 import { formatTimestamp } from '../../lib/dateUtils'
 import { MarkdownContent } from './MarkdownContent'
 import { AudioPlayer } from './AudioPlayer'
@@ -359,6 +361,103 @@ export function AssistantMessage({ message, showTools = true, showReasoning = tr
   const hasRunningTool = runningToolCount > 0
   const isWaitingForSession = message.streaming && !hasRunningTool && !!message.waitingForSession
   const isStalled = isStale && message.streaming && !hasRunningTool && !message.waitingForSession && promptProgress == null
+
+  const chatMode = useSettingsStore(s => s.chatMode)
+  const [showDetails, setShowDetails] = useState(false)
+
+  // ── Basic mode: a calm, plain-language activity trail instead of tool/reasoning cards ──
+  if (chatMode === 'basic') {
+    const cur = currentActivity(message, promptProgress)
+    const steps = completedSteps(message)
+    const hasDetails = hasReasoning || hasTools || gatewayActions.length > 0
+    return (
+      <div className="flex justify-start animate-fade-in">
+        <div className="max-w-[85%] min-w-0 w-full">
+          <div className="flex items-center gap-2 mb-2">
+            <span className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>Assistant</span>
+            <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>{formatTimestamp(message.createdAt)}</span>
+          </div>
+
+          {/* Activity trail while working: completed steps + the current action, live */}
+          {message.streaming && !isStalled && (cur || steps.length > 0) && (
+            <div className="mb-2 flex flex-col gap-1.5">
+              {steps.map((s, i) => (
+                <div key={i} className="flex items-center gap-2 text-xs" style={{ color: 'var(--text-secondary)' }}>
+                  <CheckCircle2 size={13} style={{ color: 'var(--success)', flexShrink: 0 }} />
+                  <span>{s.label}{s.count > 1 ? ` · ${s.count}×` : ''}</span>
+                </div>
+              ))}
+              {cur && (
+                <div className="flex items-center gap-2 text-xs" style={{ color: 'var(--accent)' }}>
+                  <cur.Icon size={13} className="animate-pulse-dot" style={{ flexShrink: 0 }} />
+                  <span>{cur.label}…</span>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Gentle stall notice */}
+          {isStalled && (
+            <div className="mb-2 text-xs" style={{ color: 'var(--text-secondary)' }}>
+              Paused — send a message to continue.
+            </div>
+          )}
+
+          {/* The answer */}
+          {(cleanContent || (message.streaming && !cur && !isStalled) || message.attachments?.length) && (
+            <div className="px-4 py-3 text-sm" style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', lineHeight: 1.7 }}>
+              {cleanContent ? (
+                <MarkdownContent text={cleanContent} streaming={message.streaming} />
+              ) : message.streaming ? (
+                <span className="streaming-cursor" style={{ color: 'var(--text-secondary)' }} />
+              ) : null}
+              {message.attachments?.filter(a => a.type === 'image').map((a, i) => (
+                <WorkspaceImage key={i} src={a.url ?? `data:${a.mediaType ?? 'image/png'};base64,${a.data}`} alt={a.name} />
+              ))}
+              {message.attachments?.filter(a => a.type === 'video').map((a, i) => (
+                <VideoPlayer key={i} src={a.url ?? ''} name={a.name} />
+              ))}
+              {message.attachments?.filter(a => a.type === 'audio').map((a, i) => (
+                <AudioPlayer key={i} attachment={a} />
+              ))}
+            </div>
+          )}
+
+          {/* Completed-steps recap + opt-in Details (full advanced view for this message) */}
+          {!message.streaming && hasDetails && (
+            <div className="mt-1.5">
+              {steps.length > 0 && !showDetails && (
+                <div className="mb-1 flex flex-wrap items-center gap-x-3 gap-y-1">
+                  {steps.map((s, i) => (
+                    <span key={i} className="flex items-center gap-1 text-xs" style={{ color: 'var(--text-secondary)', opacity: 0.7 }}>
+                      <CheckCircle2 size={11} style={{ color: 'var(--success)' }} />{s.label}{s.count > 1 ? ` ${s.count}×` : ''}
+                    </span>
+                  ))}
+                </div>
+              )}
+              <button
+                onClick={() => setShowDetails(v => !v)}
+                className="flex items-center gap-1 text-xs"
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)', opacity: 0.8, padding: 0 }}
+              >
+                <ChevronDown size={12} style={{ transform: showDetails ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
+                {showDetails ? 'Hide details' : 'Details'}
+              </button>
+              {showDetails && (
+                <div className="mt-2">
+                  {hasReasoning && showReasoning && <ReasoningBlock text={allReasoning} streaming={false} />}
+                  {gatewayActions.length > 0 && <GatewayActionBlock actions={gatewayActions} />}
+                  {hasTools && <ToolCallsBlock calls={message.toolCalls!} />}
+                </div>
+              )}
+            </div>
+          )}
+
+          {!message.streaming && cleanContent && <MessageFeedback message={message} />}
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="flex justify-start animate-fade-in">
