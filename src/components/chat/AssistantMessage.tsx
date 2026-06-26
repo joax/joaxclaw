@@ -448,9 +448,11 @@ export function AssistantMessage({ message, showTools = true, showReasoning = tr
               </button>
               {showDetails && (
                 <div className="mt-2">
-                  {hasReasoning && showReasoning && <ReasoningBlock text={allReasoning} streaming={false} />}
+                  {/* Full advanced view for this message — the header toggles are disabled
+                      in Basic mode, so Details is not gated by them. */}
+                  {hasReasoning && <ReasoningBlock text={allReasoning} streaming={false} />}
                   {gatewayActions.length > 0 && <GatewayActionBlock actions={gatewayActions} />}
-                  {hasTools && showTools && <ToolCallsBlock calls={message.toolCalls!} />}
+                  {hasTools && <ToolCallsBlock calls={message.toolCalls!} />}
                 </div>
               )}
             </div>
