@@ -3,7 +3,7 @@ import {
   Plus, RefreshCw, UsersRound, Play, X, Trash2, ChevronDown,
   Upload, Download, GripVertical, Loader2, CheckCircle2, XCircle,
   Clock, ArrowRight, FileText, AlertTriangle, GitBranch,
-  Wrench, BarChart2, BookOpen, History,
+  Wrench, BarChart2, BookOpen, History, Bot,
 } from 'lucide-react'
 import { useTeamsStore } from '../../store/teams'
 import { useProcessesStore, runsDir, type ProcessRun } from '../../store/processes'
@@ -761,10 +761,11 @@ function TeamDetail({
   onUpdated: (bp: TeamBlueprint) => void
 }) {
   const { runs, startRun, stopRun } = useProcessesStore()
-  const { saveCompiledDef, exportBundle, loadRevisions, revisions } = useTeamsStore()
+  const { saveCompiledDef, exportBundle, loadRevisions, revisions, runRequests, refreshRunRequest, consumeRunRequest } = useTeamsStore()
   const { agents } = useAgentsStore()
   const run = runs[blueprint.id]
   const teamRevisions = revisions[blueprint.id] ?? []
+  const runRequest = runRequests[blueprint.id] ?? null
 
   // Initialise directly to 'monitor' if a run is already in progress — avoids a
   // flash of the Build tab when navigating back while a team process is running.
@@ -772,9 +773,14 @@ function TeamDetail({
     useProcessesStore.getState().runs[blueprint.id]?.status === 'running' ? 'monitor' : 'build'
   )
   const [isStarting, setIsStarting] = useState(false)
+  // The task for THIS run — the variable input that makes the team reusable. Pre-filled
+  // with the team's last-used task (from its most recent run) so re-running is one click.
+  const [task, setTask] = useState<string>(() => useProcessesStore.getState().runs[blueprint.id]?.objective ?? '')
   const [graphSaveError, setGraphSaveError] = useState<string | null>(null)
   const [diskRun, setDiskRun] = useState<ProcessRun | null>(null)
   const importRef = useRef<HTMLInputElement>(null)
+  // Nonce of the run request we've already applied, so it's handled exactly once.
+  const handledNonceRef = useRef<string | null>(null)
   const { importBundle } = useTeamsStore()
 
   useEffect(() => {
@@ -783,7 +789,19 @@ function TeamDetail({
 
   useEffect(() => {
     setDiskRun(null)
+    handledNonceRef.current = null
+    // Re-seed the task box with the newly-selected team's last-used task.
+    setTask(useProcessesStore.getState().runs[blueprint.id]?.objective ?? '')
   }, [blueprint.id])
+
+  // Poll for an agent's run request (teams.run) while this team is open and idle, so it
+  // surfaces live in the Task box without the user reloading.
+  const running = run?.status === 'running'
+  useEffect(() => {
+    if (running) return
+    const iv = setInterval(() => { void refreshRunRequest(blueprint.id) }, 5000)
+    return () => clearInterval(iv)
+  }, [blueprint.id, running, refreshRunRequest])
 
   useEffect(() => {
     if (tab !== 'history') return
@@ -812,12 +830,38 @@ function TeamDetail({
   const isRunning = run?.status === 'running'
   const launchValidation = validateTeamForLaunch(blueprint, compiledDef)
 
-  const handleRun = async () => {
-    if (!launchValidation.valid) return
+  // A team is "templated" when a member task or its output contract references {objective}.
+  // Those teams need a task to fill the placeholder; teams with fully baked-in tasks don't.
+  const usesObjective = blueprint.members.some(m => m.task?.includes('{objective}'))
+    || (blueprint.outputContract?.includes('{objective}') ?? false)
+  const taskMissing = usesObjective && !task.trim()
+  const canRun = launchValidation.valid && !taskMissing
+
+  // `override` is the explicit task to launch with (used by autorun, where the task-box
+  // state hasn't flushed yet); falls back to the current box contents.
+  const handleRun = async (override?: string) => {
+    const t = (override ?? task).trim()
+    if (!launchValidation.valid || (usesObjective && !t)) return
+    const hadRequest = !!runRequests[blueprint.id]
     setIsStarting(true)
-    await startRun(blueprint.id, compiledDef, blueprint.controllerAgentId)
-    setIsStarting(false)
+    try {
+      await startRun(blueprint.id, compiledDef, blueprint.controllerAgentId, t)
+    } finally {
+      setIsStarting(false)
+      // Clear any agent request even if the launch errored, so it can't loop on re-open.
+      if (hadRequest) await consumeRunRequest(blueprint.id)
+    }
   }
+
+  // Apply an incoming agent run request once: drop its task into the box, and auto-launch
+  // if it asked to. Non-autorun requests just pre-fill + show a banner for the user.
+  useEffect(() => {
+    if (!runRequest || runRequest.nonce === handledNonceRef.current || running) return
+    handledNonceRef.current = runRequest.nonce
+    setTask(runRequest.task)
+    if (runRequest.autorun) void handleRun(runRequest.task)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runRequest, running])
 
   const handleStop = () => stopRun(blueprint.id)
 
@@ -896,9 +940,9 @@ function TeamDetail({
             <Btn size="sm" variant="outline" icon={<X size={12} />} onClick={handleStop}
               style={{ color: 'var(--danger)', borderColor: 'var(--danger)' }}>Stop</Btn>
           ) : (
-            <Btn size="sm" loading={isStarting} icon={<Play size={12} />} onClick={handleRun}
-              disabled={!launchValidation.valid || isStarting}
-              title={launchValidation.valid ? undefined : launchValidation.errors[0]}>
+            <Btn size="sm" loading={isStarting} icon={<Play size={12} />} onClick={() => handleRun()}
+              disabled={!canRun || isStarting}
+              title={launchValidation.valid ? (taskMissing ? 'Enter a task for this run' : undefined) : launchValidation.errors[0]}>
               Run
             </Btn>
           )}
@@ -988,6 +1032,61 @@ function TeamDetail({
           })}
         </div>
       </div>
+
+      {/* ── Task for this run ────────────────────────────────────────────────── */}
+      {!isRunning && (
+        <div style={{
+          padding: '8px 16px', flexShrink: 0,
+          borderBottom: '1px solid var(--border)', background: 'var(--bg-surface)',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+            <span style={{
+              fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em',
+              color: 'var(--text-secondary)',
+            }}>Task for this run</span>
+            {usesObjective && (
+              <span style={{ fontSize: 10, color: 'var(--accent)', opacity: 0.85 }}>
+                · fills <code style={{ fontFamily: 'monospace' }}>{'{objective}'}</code> in this team
+              </span>
+            )}
+          </div>
+
+          {/* Agent-requested run (via teams.run) — pre-filled above; offer to run or dismiss.
+              Shown for autorun requests too: if autorun couldn't launch (e.g. failed
+              validation) the request lingers, so the user still sees and can act on it. */}
+          {runRequest && (
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6,
+              padding: '5px 10px', borderRadius: 'var(--radius)', fontSize: 11,
+              background: 'color-mix(in srgb, var(--accent) 10%, var(--bg-elevated))',
+              border: '1px solid color-mix(in srgb, var(--accent) 30%, transparent)',
+              color: 'var(--accent)',
+            }}>
+              <Bot size={12} style={{ flexShrink: 0 }} />
+              <span style={{ flex: 1 }}>An agent asked to run this team with the task below.</span>
+              <Btn size="sm" disabled={!canRun || isStarting} onClick={() => handleRun()}>Run</Btn>
+              <Btn size="sm" variant="ghost" onClick={() => consumeRunRequest(blueprint.id)}>Dismiss</Btn>
+            </div>
+          )}
+
+          <textarea
+            value={task}
+            onChange={e => setTask(e.target.value)}
+            onKeyDown={e => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && canRun) { e.preventDefault(); void handleRun() } }}
+            placeholder={usesObjective
+              ? 'What should the team do this run? (required — this team uses {objective})'
+              : 'Optional: a goal for this run. Leave blank to run the team’s built-in tasks.'}
+            rows={2}
+            style={{
+              width: '100%', resize: 'vertical', boxSizing: 'border-box',
+              padding: '6px 8px', fontSize: 12, lineHeight: 1.5, fontFamily: 'inherit',
+              borderRadius: 'var(--radius)', color: 'var(--text-primary)',
+              background: 'var(--bg-elevated)',
+              border: `1px solid ${taskMissing ? 'color-mix(in srgb, var(--warning) 45%, var(--border))' : 'var(--border)'}`,
+            }}
+          />
+        </div>
+      )}
 
       {/* ── Validation error — compact inline bar ────────────────────────────── */}
       {!launchValidation.valid && !isRunning && (

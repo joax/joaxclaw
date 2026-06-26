@@ -144,6 +144,14 @@ export function ProcessMonitor({ def, run, onStop }: Props) {
           )}
         </div>
 
+        {/* Task for this run — what the team was asked to do */}
+        {run.objective && (
+          <div style={{ marginTop: 8, display: 'flex', gap: 6, fontSize: 11, lineHeight: 1.45, color: 'var(--text-secondary)' }}>
+            <span style={{ fontWeight: 700, flexShrink: 0, opacity: 0.7 }}>Task</span>
+            <span style={{ color: 'var(--text-primary)' }}>{run.objective}</span>
+          </div>
+        )}
+
         {/* Progress bar — shown when running and progress info is available */}
         {prog && (
           <div style={{ marginTop: 10 }}>

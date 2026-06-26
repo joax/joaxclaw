@@ -20,8 +20,13 @@ import {
   parseRevisions,
   serializeRevisions,
   validateBundle,
+  parseRunRequest,
+  serializeRunRequest,
+  runRequestPath,
+  type TeamRunRequest,
 } from '../teamBlueprint'
 import { buildTeamProcessDef, extractMembersFromDef } from '../teamCompiler'
+import { compileProcessToJob, buildLaunchPrompt } from '../processCompiler'
 import { serializeProcess, parseProcessFile } from '../processParser'
 import { validateTeamForLaunch } from '../teamValidation'
 
@@ -1101,5 +1106,85 @@ describe('validateTeamForLaunch — additional error cases', () => {
     const result = validateTeamForLaunch(bp, noAgents)
     expect(result.valid).toBe(false)
     expect(result.errors.some(e => /no agent nodes/i.test(e))).toBe(true)
+  })
+})
+
+// ── Run requests (agent → app "run this team with this task") ─────────────────
+
+describe('parseRunRequest', () => {
+  it('round-trips a valid request', () => {
+    const req: TeamRunRequest = { task: 'Do the thing', autorun: true, nonce: 'n1', requestedAt: 123 }
+    expect(parseRunRequest(serializeRunRequest(req))).toEqual(req)
+  })
+
+  it('returns null for blank / empty / nullish input', () => {
+    expect(parseRunRequest('')).toBeNull()
+    expect(parseRunRequest('   ')).toBeNull()
+    expect(parseRunRequest(null)).toBeNull()
+    expect(parseRunRequest(undefined)).toBeNull()
+  })
+
+  it('returns null when task or nonce is missing', () => {
+    expect(parseRunRequest(JSON.stringify({ nonce: 'n', requestedAt: 1 }))).toBeNull()
+    expect(parseRunRequest(JSON.stringify({ task: 'x', requestedAt: 1 }))).toBeNull()
+    expect(parseRunRequest(JSON.stringify({ task: '   ', nonce: 'n' }))).toBeNull()
+  })
+
+  it('returns null for malformed JSON', () => {
+    expect(parseRunRequest('{not json')).toBeNull()
+  })
+
+  it('trims the task, defaults autorun to false, and tolerates a missing requestedAt', () => {
+    const req = parseRunRequest(JSON.stringify({ task: '  go  ', nonce: 'n2' }))
+    expect(req).toEqual({ task: 'go', autorun: false, nonce: 'n2', requestedAt: 0 })
+  })
+
+  it('coerces a non-boolean autorun to false', () => {
+    expect(parseRunRequest(JSON.stringify({ task: 't', nonce: 'n', autorun: 'yes' }))?.autorun).toBe(false)
+  })
+
+  it('builds the request path next to the team', () => {
+    expect(runRequestPath('my-team', '/teams')).toBe('/teams/my-team.runrequest.json')
+  })
+})
+
+// ── Run objective (reusable team + per-run task) ──────────────────────────────
+
+describe('buildLaunchPrompt — run objective', () => {
+  const buildDef = (overrides: Partial<TeamBlueprint> = {}) =>
+    buildTeamProcessDef(makeBp(overrides), compiledMdPath('test-team', '/teams'))
+
+  it('omits the task section and leaves placeholders untouched when no objective is given', () => {
+    const def = buildDef()
+    const job = compileProcessToJob(def)
+    const prompt = buildLaunchPrompt(def, job)
+    expect(prompt).not.toMatch(/THE TASK FOR THIS RUN/)
+  })
+
+  it('injects the objective as the run headline', () => {
+    const def = buildDef()
+    const job = compileProcessToJob(def)
+    const prompt = buildLaunchPrompt(def, job, 'Analyse the Q3 churn numbers')
+    expect(prompt).toMatch(/THE TASK FOR THIS RUN/)
+    expect(prompt).toContain('Analyse the Q3 churn numbers')
+  })
+
+  it('substitutes {objective} in member tasks and the output contract', () => {
+    const def = buildDef({
+      members: [{ agentId: 'researcher', role: 'Researcher', task: 'Research {objective} thoroughly' }],
+      outputContract: 'A report on {objective}.',
+    })
+    const job = compileProcessToJob(def)
+    const prompt = buildLaunchPrompt(def, job, 'electric vehicles')
+    expect(prompt).toContain('Research electric vehicles thoroughly')
+    expect(prompt).toContain('A report on electric vehicles.')
+    expect(prompt).not.toContain('{objective}')
+  })
+
+  it('trims the objective and treats whitespace-only as absent', () => {
+    const def = buildDef()
+    const job = compileProcessToJob(def)
+    expect(buildLaunchPrompt(def, job, '   ')).not.toMatch(/THE TASK FOR THIS RUN/)
+    expect(buildLaunchPrompt(def, job, '  go  ')).toMatch(/THE TASK FOR THIS RUN[\s\S]*\ngo\n/)
   })
 })

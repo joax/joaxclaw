@@ -30,7 +30,16 @@ export function launchPromptProcessId(message: string): string | null {
   return /PROCESS:[^(]*\(([^)]+)\)/.exec(message)?.[1] ?? null
 }
 
-export function buildLaunchPrompt(def: ProcessDef, job: ControllerJob): string {
+// `objective` is the task for THIS run — the variable input that turns a reusable team
+// design into a concrete execution. It is injected as the run's headline goal and also
+// substituted for any `{objective}` placeholder a team author put in a member task, a
+// handoff brief, or the output contract. Omit it to run the blueprint's baked-in tasks
+// as-is (backward-compatible with one-shot process defs).
+export function buildLaunchPrompt(def: ProcessDef, job: ControllerJob, objective?: string): string {
+  const obj = objective?.trim()
+  // Fill {objective} placeholders; with no objective, leave the literal text untouched.
+  const fill = (s: string): string => obj ? s.replace(/\{objective\}/g, obj) : s
+
   const startNode = job.nodes.find(n => n.type === 'start')
   const firstEdge = job.edges.find(e => e.from === startNode?.id)
   const firstNode = job.nodes.find(n => n.id === firstEdge?.to)
@@ -38,9 +47,9 @@ export function buildLaunchPrompt(def: ProcessDef, job: ControllerJob): string {
   return `You are the Team Lead for the following process. Your role is pure orchestration — you coordinate the team, you do not do the work yourself.
 
 PROCESS: ${job.processName} (${job.processId})
-
+${obj ? `\nTHE TASK FOR THIS RUN — this is what the user wants the team to accomplish:\n${obj}\n\nApply the team blueprint below to accomplish THIS task. Each member's \`task\` describes how that role contributes; treat it as instructions to be applied to the task above, not as the goal itself.\n` : ''}
 TEAM BLUEPRINT:
-${JSON.stringify(job, null, 2)}
+${fill(JSON.stringify(job, null, 2))}
 
 STRICT RULES — you must follow these exactly:
 1. **Never generate a sub-agent's output yourself.** Every Agent node MUST be executed by spawning a real child session via sessions_spawn. If you write the output directly instead of spawning, you are violating this rule.
@@ -49,7 +58,7 @@ STRICT RULES — you must follow these exactly:
 4. For each **Review** node: send the current output to the notificationTarget channel using the message tool, then call sessions_yield to pause until a human responds.
 5. Follow the edges exactly — do not skip nodes or reorder them.
 6. When all nodes are done, produce a brief summary of outputs and stop.
-${def.outputContract ? `\nOUTPUT CONTRACT — the final output MUST satisfy:\n${def.outputContract}\n` : ''}
+${def.outputContract ? `\nOUTPUT CONTRACT — the final output MUST satisfy:\n${fill(def.outputContract)}\n` : ''}
 Start with node: ${firstNode?.id ?? 'first agent node'}
 Begin now.`
 }
