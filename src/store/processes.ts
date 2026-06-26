@@ -159,6 +159,76 @@ async function persistRun(run: ProcessRun) {
   } catch { /* non-critical */ }
 }
 
+// ── Gateway-authoritative completion (safety net) ───────────────────────────────
+// Inferring worker tracking from spawn tool-call events is fragile (the spawn result's
+// key field varies; some delegation paths emit no tool call at all). So when the
+// controller finishes with no tracked workers, ASK the gateway which descendant
+// sessions are still alive — sessions carry parentSessionKey + status/hasActiveRun —
+// and only complete once the whole tree is idle. A hard cap guarantees a missed signal
+// can never hang the run.
+const _completionGuards = new Set<string>()
+
+async function countLiveDescendants(controllerKey: string): Promise<number> {
+  let sessions: Array<Record<string, unknown>>
+  try {
+    const res = await gatewayClient.request<{ sessions?: Array<Record<string, unknown>> }>('sessions.list', {})
+    sessions = res.sessions ?? []
+  } catch { return 0 }
+  const byParent = new Map<string, Array<Record<string, unknown>>>()
+  for (const s of sessions) {
+    const parent = String(s.parentSessionKey ?? s.parentSession ?? '')
+    if (parent) { if (!byParent.has(parent)) byParent.set(parent, []); byParent.get(parent)!.push(s) }
+  }
+  let live = 0
+  const seen = new Set<string>()
+  const stack = [controllerKey]
+  while (stack.length) {
+    for (const child of byParent.get(stack.pop()!) ?? []) {
+      const key = String(child.key ?? '')
+      if (!key || seen.has(key)) continue
+      seen.add(key)
+      if (child.hasActiveRun === true || /^(active|running)$/i.test(String(child.status ?? ''))) live++
+      stack.push(key)
+    }
+  }
+  return live
+}
+
+async function completeWhenTreeIdle(processId: string, controllerKey: string): Promise<void> {
+  if (_completionGuards.has(processId)) return
+  _completionGuards.add(processId)
+  const deadline = Date.now() + 5 * 60_000   // hard cap — never hang
+  let announced = false
+  try {
+    await new Promise(r => setTimeout(r, 1500))  // grace: let fresh children register as active
+    while (Date.now() < deadline) {
+      if (useProcessesStore.getState().runs[processId]?.status !== 'running') return  // superseded
+      const live = await countLiveDescendants(controllerKey)
+      if (live === 0) break
+      if (!announced) {
+        announced = true
+        useProcessesStore.setState(s => {
+          const run = s.runs[processId]
+          if (!run) return s
+          return { runs: { ...s.runs, [processId]: { ...run, currentAgent: undefined, log: [...run.log, { ts: Date.now(), text: `Controller done — waiting for ${live} worker(s)…` }] } } }
+        })
+      }
+      await new Promise(r => setTimeout(r, 4000))
+    }
+  } finally {
+    _completionGuards.delete(processId)
+    _pendingSubSessions.delete(processId)
+    _controllerDone.delete(processId)
+    useProcessesStore.setState(s => {
+      const run = s.runs[processId]
+      if (!run || run.status !== 'running') return s
+      const updated: ProcessRun = { ...run, status: 'done', finishedAt: Date.now(), currentAgent: undefined, log: [...run.log, { ts: Date.now(), text: 'Process completed' }] }
+      persistRun(updated)
+      return { runs: { ...s.runs, [processId]: updated } }
+    })
+  }
+}
+
 // ── Store ─────────────────────────────────────────────────────────────────────
 
 interface ProcessesState {
@@ -398,18 +468,10 @@ export const useProcessesStore = create<ProcessesState>((set, get) => ({
           return
         }
 
-        // No pending sub-sessions — mark done immediately
-        _pendingSubSessions.delete(processId)
-        set(s => {
-          const run = s.runs[processId]
-          if (!run) return s
-          const updated: ProcessRun = {
-            ...run, status: 'done', finishedAt: now, currentAgent: undefined,
-            log: [...run.log, { ts: now, text: 'Process completed' }],
-          }
-          persistRun(updated)
-          return { runs: { ...s.runs, [processId]: updated } }
-        })
+        // No tracked sub-sessions — but the spawn-event path can miss workers, so don't
+        // assume done. Verify against the gateway: complete only once the controller's
+        // descendant sessions are all idle (or the safety cap is hit).
+        void completeWhenTreeIdle(processId, sk)
         return
       }
 
