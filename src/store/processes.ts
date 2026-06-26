@@ -130,6 +130,7 @@ export interface ProcessRun {
   startedAt: number
   finishedAt?: number
   status: RunStatus
+  objective?: string   // the task this run was launched with (a reusable team, run against a concrete goal)
   currentAgent?: string
   stepsDone: number
   progress?: RunProgress  // explicit progress reported by the agent via [PROGRESS:N/T:label]
@@ -139,15 +140,31 @@ export interface ProcessRun {
 }
 
 // ── Module-level session routing ──────────────────────────────────────────────
-// Maps sessionKey → processId so the event handler can route gateway frames.
+// Maps sessionKey → processId so the event handler can route gateway frames. Holds
+// both the controller key and every worker key we've linked to the run.
 const _runSessions = new Map<string, string>()
-// Sub-session tracking: processId → Set of sub-session keys that haven't fired 'final' yet
+// Sub-session tracking: processId → Set of worker keys spawned directly by the
+// controller that haven't fired 'final' yet. Drives the "currently delegating" display.
 const _pendingSubSessions = new Map<string, Set<string>>()
-// Processes whose controller session has fired 'final' but still have pending sub-sessions
-const _controllerDone = new Set<string>()
 // Maps toolCallId → processId for in-flight sessions_spawn calls.
 // data.name is only present on phase:'start', not phase:'result', so we match by id.
 const _spawnCallIds = new Map<string, string>()
+
+// Session keys look like "agent:<agentId>:<kind>:<uuid>" (e.g.
+// "agent:research-worker:subagent:…"). Recover the human-readable agent id.
+function agentIdFromKey(key: string): string {
+  const parts = key.split(':')
+  if (parts[0] === 'agent' && parts[1]) return parts[1]
+  const at = key.indexOf('@')   // legacy "agentId@…" shape
+  return at > 0 ? key.slice(0, at) : key
+}
+
+// Drop all routing/bookkeeping for a finished run so stale keys can't reroute later frames.
+function clearRunRouting(processId: string): void {
+  for (const [k, pid] of _runSessions) if (pid === processId) _runSessions.delete(k)
+  _pendingSubSessions.delete(processId)
+  for (const [cid, pid] of _spawnCallIds) if (pid === processId) _spawnCallIds.delete(cid)
+}
 
 // ── Persist run state to disk ─────────────────────────────────────────────────
 
@@ -242,8 +259,7 @@ async function watchTreeUntilIdle(processId: string, rootKey: string, includeRoo
     }
   } finally {
     _completionGuards.delete(processId)
-    _pendingSubSessions.delete(processId)
-    _controllerDone.delete(processId)
+    clearRunRouting(processId)
     useProcessesStore.setState(s => {
       const run = s.runs[processId]
       if (!run || run.status !== 'running') return s
@@ -283,7 +299,7 @@ interface ProcessesState {
   save:   (path: string, text: string) => Promise<boolean>
   delete: (path: string) => Promise<boolean>
 
-  startRun: (processId: string, def: ProcessDef, controllerAgentId: string) => Promise<void>
+  startRun: (processId: string, def: ProcessDef, controllerAgentId: string, objective?: string) => Promise<void>
   stopRun:  (processId: string) => Promise<void>
 
   _startEventListening: () => void
@@ -340,10 +356,38 @@ export const useProcessesStore = create<ProcessesState>((set, get) => ({
       if (frame.event !== 'chat' && frame.event !== 'agent') return
       const p = (frame.payload ?? {}) as Record<string, unknown>
       const sk = String(p.sessionKey ?? '')
-      const processId = _runSessions.get(sk)
-      if (!processId) return
-
       const now = Date.now()
+
+      // Resolve the owning run. The controller routes by its own key. Workers don't —
+      // but every worker frame carries `spawnedBy` = the key of the session that spawned
+      // it. This gateway emits no `delegating`/`waiting` chat state and the sessions_spawn
+      // tool-result usually omits the child key, so `spawnedBy` is the only reliable link
+      // from a worker back to its run. Register the worker the first time we see it so its
+      // later frames (including its `final`) route here too.
+      let processId = _runSessions.get(sk)
+      if (!processId) {
+        const spawnedBy = String(p.spawnedBy ?? '')
+        const owner = spawnedBy ? _runSessions.get(spawnedBy) : undefined
+        if (!owner) return
+        processId = owner
+        _runSessions.set(sk, owner)
+        // Count it as a flow step only when it's a direct child of the controller —
+        // deeper sub-agents are a worker's own business, not a node in the process graph.
+        const run0 = get().runs[owner]
+        if (run0?.sessionKey === spawnedBy) {
+          const tracked = _pendingSubSessions.get(owner) ?? new Set<string>()
+          if (!tracked.has(sk)) {
+            tracked.add(sk)
+            _pendingSubSessions.set(owner, tracked)
+            const agentId = agentIdFromKey(sk)
+            set(s => {
+              const run = s.runs[owner]
+              if (!run) return s
+              return { runs: { ...s.runs, [owner]: { ...run, currentAgent: agentId, log: [...run.log, { ts: now, text: `Delegating to ${agentId}` }] } } }
+            })
+          }
+        }
+      }
 
       // agent event: detect sessions_spawn tool calls to track active sub-agent
       if (frame.event === 'agent') {
@@ -456,67 +500,58 @@ export const useProcessesStore = create<ProcessesState>((set, get) => ({
       }
 
       if (state === 'final') {
-        _runSessions.delete(sk)
         const pending = _pendingSubSessions.get(processId)
-        const isSubSession = pending?.has(sk)
+        const isController = get().runs[processId]?.sessionKey === sk
 
-        if (isSubSession) {
-          // A worker sub-session completed — advance step count
-          pending!.delete(sk)
-          const atIdx = sk.indexOf('@')
-          const agentId = atIdx > 0 ? sk.slice(0, atIdx) : sk
-          const allDone = _controllerDone.has(processId) && pending!.size === 0
-          if (allDone) {
-            _pendingSubSessions.delete(processId)
-            _controllerDone.delete(processId)
+        if (!isController) {
+          // A worker finished. Drop it from routing, and if it was a tracked flow step
+          // (a direct child of the controller), advance the step count. Never mark the
+          // run done here — the controller may resume to run the next handoff/agent.
+          _runSessions.delete(sk)
+          const wasStep = pending?.delete(sk) ?? false
+          if (wasStep) {
+            const agentId = agentIdFromKey(sk)
+            set(s => {
+              const run = s.runs[processId]
+              if (!run) return s
+              return { runs: { ...s.runs, [processId]: { ...run, stepsDone: run.stepsDone + 1, currentAgent: undefined, log: [...run.log, { ts: now, text: `✓ ${agentId} done` }] } } }
+            })
           }
-          set(s => {
-            const run = s.runs[processId]
-            if (!run) return s
-            const newLog = [...run.log, { ts: now, text: `✓ ${agentId} done` }]
-            if (allDone) {
-              const updated: ProcessRun = {
-                ...run, status: 'done', finishedAt: now, currentAgent: undefined,
-                stepsDone: run.stepsDone + 1,
-                log: [...newLog, { ts: now, text: 'Process completed' }],
-              }
-              persistRun(updated)
-              return { runs: { ...s.runs, [processId]: updated } }
-            }
-            return { runs: { ...s.runs, [processId]: { ...run, stepsDone: run.stepsDone + 1, log: newLog } } }
-          })
           return
         }
 
-        // Controller session final — check if workers are still running
+        // The controller's turn ended. With sessions_yield this fires after EVERY spawn,
+        // not only at the true end, and the controller goes idle between steps — so we
+        // cannot treat it as "done". Defer to the gateway: complete only once the
+        // controller AND all of its descendants are idle. includeRoot=true keeps the
+        // watcher alive while the controller is resumed for the next step; the guard
+        // inside watchTreeUntilIdle makes repeated controller finals idempotent. The
+        // controller key stays routed so its next turn's frames still reach us.
         if (pending && pending.size > 0) {
-          _controllerDone.add(processId)
           set(s => {
             const run = s.runs[processId]
             if (!run) return s
-            return {
-              runs: {
-                ...s.runs,
-                [processId]: { ...run, log: [...run.log, { ts: now, text: 'Controller done — waiting for workers…' }] },
-              },
-            }
+            return { runs: { ...s.runs, [processId]: { ...run, log: [...run.log, { ts: now, text: 'Controller yielded — workers running…' }] } } }
           })
-          return
         }
-
-        // No tracked sub-sessions — but the spawn-event path can miss workers, so don't
-        // assume done. Verify against the gateway: complete only once the controller's
-        // descendant sessions are all idle (or the safety cap is hit).
-        void watchTreeUntilIdle(processId, sk, false)
+        void watchTreeUntilIdle(processId, sk, true)
         return
       }
 
       if (state === 'error') {
-        _runSessions.delete(sk)
-        _pendingSubSessions.get(processId)?.delete(sk)
-        _pendingSubSessions.delete(processId)
-        _controllerDone.delete(processId)
-        for (const [cid, pid] of _spawnCallIds) { if (pid === processId) _spawnCallIds.delete(cid) }
+        // A worker erroring doesn't fail the run — the controller may recover or route
+        // around it. Only the controller's own error is terminal.
+        if (get().runs[processId]?.sessionKey !== sk) {
+          _runSessions.delete(sk)
+          _pendingSubSessions.get(processId)?.delete(sk)
+          set(s => {
+            const run = s.runs[processId]
+            if (!run) return s
+            return { runs: { ...s.runs, [processId]: { ...run, currentAgent: undefined, log: [...run.log, { ts: now, text: `⚠ ${agentIdFromKey(sk)} failed: ${String(p.errorMessage ?? 'unknown')}` }] } } }
+          })
+          return
+        }
+        clearRunRouting(processId)
         set(s => {
           const run = s.runs[processId]
           if (!run) return s
@@ -532,11 +567,14 @@ export const useProcessesStore = create<ProcessesState>((set, get) => ({
       }
 
       if (state === 'aborted') {
-        _runSessions.delete(sk)
-        _pendingSubSessions.get(processId)?.delete(sk)
-        _pendingSubSessions.delete(processId)
-        _controllerDone.delete(processId)
-        for (const [cid, pid] of _spawnCallIds) { if (pid === processId) _spawnCallIds.delete(cid) }
+        // A single worker being aborted doesn't stop the run; only the controller's abort
+        // (e.g. the user pressing Stop) does.
+        if (get().runs[processId]?.sessionKey !== sk) {
+          _runSessions.delete(sk)
+          _pendingSubSessions.get(processId)?.delete(sk)
+          return
+        }
+        clearRunRouting(processId)
         set(s => {
           const run = s.runs[processId]
           if (!run) return s
@@ -553,8 +591,9 @@ export const useProcessesStore = create<ProcessesState>((set, get) => ({
 
   // ── Run actions ───────────────────────────────────────────────────────────────
 
-  async startRun(processId, def, controllerAgentId) {
+  async startRun(processId, def, controllerAgentId, objective) {
     get()._startEventListening()
+    const task = objective?.trim() || undefined
 
     let sessionKey: string
     try {
@@ -583,14 +622,18 @@ export const useProcessesStore = create<ProcessesState>((set, get) => ({
         ...s.runs,
         [processId]: {
           processId, sessionKey, status: 'running', startedAt: now,
+          ...(task ? { objective: task } : {}),
           stepsDone: 0, outputBuffer: '',
-          log: [{ ts: now, text: `Session created: ${sessionKey}` }],
+          log: [
+            { ts: now, text: `Session created: ${sessionKey}` },
+            ...(task ? [{ ts: now, text: `Task: ${task}` }] : []),
+          ],
         },
       },
     }))
 
     const job    = compileProcessToJob(def)
-    const prompt = buildLaunchPrompt(def, job)
+    const prompt = buildLaunchPrompt(def, job, task)
 
     try {
       await gatewayClient.request('chat.send', { sessionKey, message: prompt, idempotencyKey: nanoid(16) })
@@ -627,7 +670,6 @@ export const useProcessesStore = create<ProcessesState>((set, get) => ({
       }
       _pendingSubSessions.delete(processId)
     }
-    _controllerDone.delete(processId)
     for (const [cid, pid] of _spawnCallIds) { if (pid === processId) _spawnCallIds.delete(cid) }
     const run = get().runs[processId]
     if (!run?.sessionKey) return

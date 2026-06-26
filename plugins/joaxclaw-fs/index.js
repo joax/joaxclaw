@@ -26,11 +26,14 @@ import { errorShape, ErrorCodes } from 'openclaw/plugin-sdk/gateway-runtime'
 const READ_SCOPE = 'operator.read'
 const WRITE_SCOPE = 'operator.write'
 
-// The three artifacts that make up a team, keyed by the field name we expose.
+// The artifacts that make up a team, keyed by the field name we expose. `runRequest`
+// is an agent/app-authored "run this team with this task" request the desktop app
+// picks up; it rides the generic get/list/set/delete paths like the other artifacts.
 const SUFFIX = {
   blueprint: '.team.json',
   md: '.md',
   revisions: '.revisions.json',
+  runRequest: '.runrequest.json',
 }
 
 // Ids are kebab-case slugs / filename stems. Reject anything that could escape the
@@ -165,12 +168,13 @@ async function readdirOrEmpty(dir) {
 // ── teams ──────────────────────────────────────────────────────────────────────
 
 async function readTeam(dir, id) {
-  const [blueprint, md, revisions] = await Promise.all([
+  const [blueprint, md, revisions, runRequest] = await Promise.all([
     readTextOrNull(path.join(dir, id + SUFFIX.blueprint)),
     readTextOrNull(path.join(dir, id + SUFFIX.md)),
     readTextOrNull(path.join(dir, id + SUFFIX.revisions)),
+    readTextOrNull(path.join(dir, id + SUFFIX.runRequest)),
   ])
-  return { id, blueprint, md, revisions }
+  return { id, blueprint, md, revisions, runRequest }
 }
 
 function badId(respond, kind, id) {
@@ -217,11 +221,37 @@ export default definePluginEntry({
           if (typeof value === 'string') writes.push([path.join(dir, id + suffix), value])
         }
         if (writes.length === 0) {
-          return respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, 'teams.set requires at least one of: blueprint, md, revisions'))
+          return respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, `teams.set requires at least one of: ${Object.keys(SUFFIX).join(', ')}`))
         }
         await fs.mkdir(dir, { recursive: true })
         await Promise.all(writes.map(([p, v]) => fs.writeFile(p, v, 'utf8')))
         respond(true, { ok: true, id })
+      } catch (err) { failed(respond, err) }
+    }, { scope: WRITE_SCOPE })
+
+    // Request a run of a saved team with a concrete task. Thin by design: this only
+    // records the request as <id>.runrequest.json; the desktop app owns the actual
+    // launch (it holds the prompt-compilation logic and the live run monitor). The app
+    // clears the request once handled. `nonce` makes the request fire exactly once.
+    api.registerGatewayMethod('teams.run', async ({ params, respond }) => {
+      const id = params?.id
+      if (!isValidId(id)) return badId(respond, 'team', id)
+      const task = typeof params?.task === 'string' ? params.task.trim() : ''
+      if (!task) {
+        return respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, 'teams.run requires task (non-empty string)'))
+      }
+      try {
+        const dir = teamsDir()
+        // Require the team to exist before queueing a run for it.
+        const blueprint = await readTextOrNull(path.join(dir, id + SUFFIX.blueprint))
+        if (blueprint == null) {
+          return respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, `no such team ${JSON.stringify(id)}`))
+        }
+        const nonce = randomUUID()
+        const request = { task, autorun: params?.autorun === true, nonce, requestedAt: Date.now() }
+        await fs.mkdir(dir, { recursive: true })
+        await fs.writeFile(path.join(dir, id + SUFFIX.runRequest), JSON.stringify(request, null, 2), 'utf8')
+        respond(true, { ok: true, id, nonce })
       } catch (err) { failed(respond, err) }
     }, { scope: WRITE_SCOPE })
 

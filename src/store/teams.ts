@@ -14,16 +14,19 @@ import {
   type TeamBlueprint,
   type TeamExportBundle,
   type TeamRevision,
+  type TeamRunRequest,
   TEAM_SCHEMA_VERSION,
   blueprintPath,
   compiledMdPath,
   revisionsPath,
+  runRequestPath,
   serializeBlueprint,
   serializeBundle,
   serializeRevisions,
   parseBlueprint,
   parseBundle,
   parseRevisions,
+  parseRunRequest,
   appendRevision,
 } from '../lib/teamBlueprint'
 import { buildTeamProcessDef, extractMembersFromDef } from '../lib/teamCompiler'
@@ -56,8 +59,8 @@ export function teamsDir(): string {
 // A backend deals only in raw artifact text; all blueprint/process (de)serialization
 // stays in the store so both backends share identical logic.
 
-interface RawTeam { id: string; blueprint: string | null; md: string | null; revisions: string | null }
-interface TeamParts { blueprint?: string; md?: string; revisions?: string }
+interface RawTeam { id: string; blueprint: string | null; md: string | null; revisions: string | null; runRequest?: string | null }
+interface TeamParts { blueprint?: string; md?: string; revisions?: string; runRequest?: string }
 
 interface TeamsBackend {
   kind: 'rpc' | 'file'
@@ -80,7 +83,7 @@ const rpcBackend: TeamsBackend = {
   },
   async read(id) {
     const r = await gatewayClient.request<Partial<RawTeam>>('teams.get', { id })
-    return { id, blueprint: r.blueprint ?? null, md: r.md ?? null, revisions: r.revisions ?? null }
+    return { id, blueprint: r.blueprint ?? null, md: r.md ?? null, revisions: r.revisions ?? null, runRequest: r.runRequest ?? null }
   },
   async write(id, parts) { await gatewayClient.request('teams.set', { id, ...parts }) },
   async remove(id) { await gatewayClient.request('teams.delete', { id }) },
@@ -109,12 +112,13 @@ const fileBackend: TeamsBackend = {
   },
   async read(id) {
     const dir = teamsDir()
-    const [blueprint, md, revisions] = await Promise.all([
+    const [blueprint, md, revisions, runRequest] = await Promise.all([
       readFileText(blueprintPath(id, dir)),
       readFileText(compiledMdPath(id, dir)),
       readFileText(revisionsPath(id, dir)),
+      readFileText(runRequestPath(id, dir)),
     ])
-    return { id, blueprint, md, revisions }
+    return { id, blueprint, md, revisions, runRequest }
   },
   async write(id, parts) {
     const api = fileApi(); if (!api) throw new Error('File API not available')
@@ -123,6 +127,7 @@ const fileBackend: TeamsBackend = {
     if (parts.blueprint !== undefined) writes.push(api.write(blueprintPath(id, dir), parts.blueprint))
     if (parts.md !== undefined) writes.push(api.write(compiledMdPath(id, dir), parts.md))
     if (parts.revisions !== undefined) writes.push(api.write(revisionsPath(id, dir), parts.revisions))
+    if (parts.runRequest !== undefined) writes.push(api.write(runRequestPath(id, dir), parts.runRequest))
     const results = await Promise.all(writes)
     const failed = results.find(r => !r.ok)
     if (failed) throw new Error(failed.error ?? 'Failed to write team files')
@@ -134,6 +139,7 @@ const fileBackend: TeamsBackend = {
       api.delete(blueprintPath(id, dir)).catch(() => {}),
       api.delete(compiledMdPath(id, dir)).catch(() => {}),
       api.delete(revisionsPath(id, dir)).catch(() => {}),
+      api.delete(runRequestPath(id, dir)).catch(() => {}),
     ])
   },
 }
@@ -156,6 +162,8 @@ interface TeamsState {
   blueprints: TeamBlueprint[]
   compiledDefs: Record<string, ProcessDef>   // id → compiled ProcessDef
   revisions: Record<string, TeamRevision[]>  // id → revision log (newest last, max 20)
+  // id → pending agent/app run request (a task to run this team with), or null/absent.
+  runRequests: Record<string, TeamRunRequest | null>
   loading: boolean
   error: string | null
   // True on a remote gateway when the joaxclaw-fs plugin isn't installed → the view
@@ -183,12 +191,21 @@ interface TeamsState {
 
   // Load revision history for a specific team (lazy — only when the History tab opens)
   loadRevisions: (id: string) => Promise<void>
+
+  // Re-read one team's run request (cheap; polled while a team detail is open so an
+  // agent's teams.run call surfaces live). Updates runRequests[id].
+  refreshRunRequest: (id: string) => Promise<void>
+
+  // Clear a team's run request once it's been handled (run or dismissed), so it
+  // doesn't fire again. Best-effort persist + local clear.
+  consumeRunRequest: (id: string) => Promise<void>
 }
 
 export const useTeamsStore = create<TeamsState>((set, get) => ({
   blueprints: [],
   compiledDefs: {},
   revisions: {},
+  runRequests: {},
   loading: false,
   error: null,
   needsPlugin: false,
@@ -208,8 +225,11 @@ export const useTeamsStore = create<TeamsState>((set, get) => ({
       const raw = await backend.list()
       const blueprints: TeamBlueprint[] = []
       const compiledDefs: Record<string, ProcessDef> = {}
+      const runRequests: Record<string, TeamRunRequest | null> = {}
 
       for (const t of raw) {
+        runRequests[t.id] = parseRunRequest(t.runRequest)
+
         // mdPath is a nominal label for the ProcessDef; actual I/O goes through the backend by id.
         const mdPath = compiledMdPath(t.id, teamsDir())
 
@@ -251,10 +271,31 @@ export const useTeamsStore = create<TeamsState>((set, get) => ({
         }
       }
 
-      set({ backend, blueprints, compiledDefs, loading: false, needsPlugin: false })
+      set({ backend, blueprints, compiledDefs, runRequests, loading: false, needsPlugin: false })
     } catch (e) {
       set({ loading: false, error: String(e) })
     }
+  },
+
+  // ── Run requests ───────────────────────────────────────────────────────────────
+
+  async refreshRunRequest(id) {
+    const backend = get().backend
+    if (!backend) return
+    const raw = await backend.read(id).catch(() => null)
+    if (!raw) return
+    const req = parseRunRequest(raw.runRequest)
+    // Avoid a re-render when nothing changed (this runs on a poll).
+    if ((get().runRequests[id]?.nonce ?? null) === (req?.nonce ?? null)) return
+    set(s => ({ runRequests: { ...s.runRequests, [id]: req } }))
+  },
+
+  async consumeRunRequest(id) {
+    set(s => ({ runRequests: { ...s.runRequests, [id]: null } }))
+    const backend = get().backend
+    if (!backend) return
+    // Persist the clear so the request doesn't resurface on the next read/poll.
+    await backend.write(id, { runRequest: '' }).catch(() => { /* best-effort */ })
   },
 
   // ── saveBlueprint ─────────────────────────────────────────────────────────────

@@ -69,6 +69,47 @@ export interface TeamExportBundle {
   exportedAt: number
 }
 
+// ── Run requests ────────────────────────────────────────────────────────────────
+//
+// A team is a reusable design; the *task* for a given run is supplied separately. An
+// agent (or the app) can drop a run request next to the team — <id>.runrequest.json —
+// asking the app to run this team with a concrete task. The app surfaces it in the Team
+// tab (pre-filling the task box, optionally auto-launching) and clears it once handled.
+// `nonce` makes each request fire exactly once even if the file is polled repeatedly.
+export interface TeamRunRequest {
+  task: string
+  autorun?: boolean    // launch immediately vs. just pre-fill the task and wait for the user
+  nonce: string
+  requestedAt: number  // Unix ms
+}
+
+export function runRequestPath(id: string, dir: string): string {
+  return `${dir}/${id}.runrequest.json`
+}
+
+export function serializeRunRequest(req: TeamRunRequest): string {
+  return JSON.stringify(req, null, 2)
+}
+
+// Returns null for absent/blank/malformed requests or ones missing a task or nonce.
+export function parseRunRequest(text: string | null | undefined): TeamRunRequest | null {
+  if (!text || !text.trim()) return null
+  try {
+    const d = JSON.parse(text) as Record<string, unknown>
+    const task = typeof d.task === 'string' ? d.task.trim() : ''
+    const nonce = typeof d.nonce === 'string' ? d.nonce : ''
+    if (!task || !nonce) return null
+    return {
+      task,
+      autorun: d.autorun === true,
+      nonce,
+      requestedAt: typeof d.requestedAt === 'number' ? d.requestedAt : 0,
+    }
+  } catch {
+    return null
+  }
+}
+
 // ── Path helpers ──────────────────────────────────────────────────────────────
 
 export function blueprintFilename(id: string): string {
