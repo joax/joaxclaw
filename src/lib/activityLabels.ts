@@ -5,11 +5,44 @@
 
 import {
   Terminal, PenLine, FileText, FolderSearch, Globe, Plug, Users, Wrench,
-  Brain, Sparkles, Hourglass, Loader2, Image as ImageIcon, type LucideIcon,
+  Brain, Sparkles, Hourglass, Image as ImageIcon, type LucideIcon,
 } from 'lucide-react'
 import type { ChatMessage, ToolCall } from './types'
 
-export interface Activity { Icon: LucideIcon; label: string }
+export interface Activity { Icon: LucideIcon; label: string; whimsy?: boolean }
+
+// Playful "thinking" verbs in the spirit of Claude Code's spinner words (the leaked
+// "Tengu" set). Shown — and rotated — while the model is working with no specific
+// tool, so a generic wait feels alive instead of a flat "Working…".
+export const WHIMSY_VERBS: readonly string[] = [
+  'Accomplishing', 'Actioning', 'Actualizing', 'Baking', 'Booping', 'Brewing',
+  'Calculating', 'Cerebrating', 'Channelling', 'Churning', 'Clauding', 'Coalescing',
+  'Cogitating', 'Combobulating', 'Computing', 'Concocting', 'Conjuring', 'Considering',
+  'Contemplating', 'Cooking', 'Crafting', 'Creating', 'Crunching', 'Deciphering',
+  'Deliberating', 'Determining', 'Discombobulating', 'Divining', 'Doing', 'Elucidating',
+  'Enchanting', 'Envisioning', 'Finagling', 'Flibbertigibbeting', 'Forging', 'Forming',
+  'Frolicking', 'Generating', 'Germinating', 'Hatching', 'Herding', 'Honking',
+  'Hustling', 'Ideating', 'Imagining', 'Incubating', 'Inferring', 'Jiving',
+  'Manifesting', 'Marinating', 'Meandering', 'Moseying', 'Mulling', 'Mustering',
+  'Musing', 'Noodling', 'Percolating', 'Perusing', 'Philosophising', 'Pondering',
+  'Pontificating', 'Processing', 'Puttering', 'Puzzling', 'Reticulating', 'Ruminating',
+  'Scheming', 'Schlepping', 'Shimmying', 'Shucking', 'Simmering', 'Smooshing',
+  'Spelunking', 'Spinning', 'Stewing', 'Sussing', 'Synthesizing', 'Thinking',
+  'Tinkering', 'Transmuting', 'Unfurling', 'Unravelling', 'Vibing', 'Wandering',
+  'Whirring', 'Wibbling',
+]
+
+export function randomWhimsy(): string {
+  return WHIMSY_VERBS[Math.floor(Math.random() * WHIMSY_VERBS.length)]
+}
+
+// A different verb than `prev`, so rotation never visibly repeats the same word.
+export function nextWhimsy(prev: string): string {
+  if (WHIMSY_VERBS.length < 2) return WHIMSY_VERBS[0] ?? ''
+  let v = prev
+  while (v === prev) v = randomWhimsy()
+  return v
+}
 
 type Kind =
   | 'bash' | 'file-write' | 'file-read' | 'file-search'
@@ -72,9 +105,9 @@ export function currentActivity(message: ChatMessage, promptProgress: number | n
   const running = [...(message.toolCalls ?? [])].reverse().find(tc => tc.status === 'running')
   if (running) return toolActivity(running, 'now')
   if (message.waitingForSession) return { Icon: Users, label: 'Working with a specialist' }
-  if (message.reasoningStreaming) return { Icon: Sparkles, label: 'Thinking' }
+  if (message.reasoningStreaming) return { Icon: Sparkles, label: 'Thinking', whimsy: true }
   if (promptProgress != null) return { Icon: Hourglass, label: 'Getting ready' }
-  if (message.streaming && !message.content) return { Icon: Loader2, label: 'Working on it' }
+  if (message.streaming && !message.content) return { Icon: Sparkles, label: 'Working on it', whimsy: true }
   return null
 }
 
