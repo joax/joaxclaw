@@ -264,7 +264,12 @@ export const useProcessesStore = create<ProcessesState>((set, get) => ({
                 const r = typeof data.result === 'string'
                   ? (() => { try { return JSON.parse(data.result as string) as Record<string, unknown> } catch { return {} as Record<string, unknown> } })()
                   : (data.result ?? {}) as Record<string, unknown>
-                const subKey = String((r as Record<string, unknown>).key ?? (r as Record<string, unknown>).sessionKey ?? '')
+                // The gateway returns the new worker's key as `childSessionKey` (and
+                // sometimes `sessionKey`/`key`). Missing it leaves _pendingSubSessions
+                // empty, so the controller's `final` would mark the run done while the
+                // worker is still running — read all three.
+                const rr = r as Record<string, unknown>
+                const subKey = String(rr.childSessionKey ?? rr.sessionKey ?? rr.key ?? '')
                 if (subKey) {
                   _runSessions.set(subKey, ownerProcessId)
                   if (!_pendingSubSessions.has(ownerProcessId)) _pendingSubSessions.set(ownerProcessId, new Set())
@@ -313,7 +318,15 @@ export const useProcessesStore = create<ProcessesState>((set, get) => ({
       }
 
       if (state === 'waiting' || state === 'delegating') {
-        const subKey = String(p.waitingSessionKey ?? p.subSessionKey ?? '')
+        const subKey = String(p.waitingSessionKey ?? p.subSessionKey ?? p.childSessionKey ?? '')
+        // Register the awaited worker so the controller's `final` waits for it and its
+        // own `final` routes back here to decrement — a safety net for any delegation
+        // the spawn-result path above didn't capture.
+        if (subKey) {
+          _runSessions.set(subKey, processId)
+          if (!_pendingSubSessions.has(processId)) _pendingSubSessions.set(processId, new Set())
+          _pendingSubSessions.get(processId)!.add(subKey)
+        }
         const entry: RunLogEntry = { ts: now, text: `Delegating to ${subKey || 'sub-agent'}` }
         // When sub-sessions are tracked, stepsDone is driven by sub-session 'final' events instead
         const trackingSubSessions = (_pendingSubSessions.get(processId)?.size ?? 0) > 0
