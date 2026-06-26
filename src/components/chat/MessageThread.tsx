@@ -11,6 +11,7 @@ const PIN_THRESHOLD = 80
 
 export function MessageThread({ conv, showTools, showReasoning }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null)
+  const contentRef = useRef<HTMLDivElement>(null)
   // Whether the view is glued to the bottom. While true we auto-follow new
   // content; once the user scrolls up to read, we leave them alone.
   const pinnedRef = useRef(true)
@@ -23,6 +24,22 @@ export function MessageThread({ conv, showTools, showReasoning }: Props) {
     pinnedRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < PIN_THRESHOLD
   }
 
+  // Follow EVERY content-height change — streamed text, tool calls, reasoning,
+  // Basic-mode action steps, images loading, markdown reflow — by watching the
+  // content box size rather than enumerating which fields changed. Jump straight
+  // to the bottom, instantly (never animated): a smooth scroll restarted on each
+  // increment fights itself and makes the view bounce up and down.
+  useEffect(() => {
+    const el = scrollRef.current
+    const content = contentRef.current
+    if (!el || !content) return
+    const ro = new ResizeObserver(() => {
+      if (pinnedRef.current) el.scrollTop = el.scrollHeight
+    })
+    ro.observe(content)
+    return () => ro.disconnect()
+  }, [])
+
   // Reset to the bottom whenever we switch conversations.
   useEffect(() => {
     const el = scrollRef.current
@@ -30,21 +47,6 @@ export function MessageThread({ conv, showTools, showReasoning }: Props) {
     pinnedRef.current = true
     el.scrollTop = el.scrollHeight
   }, [conv.id])
-
-  // Follow growth of the last message (text, tools, reasoning, streaming state).
-  const last = conv.messages[conv.messages.length - 1]
-  const lastMsgKey = last
-    ? `${last.id}:${last.content?.length ?? 0}:${last.reasoning?.length ?? 0}:${last.toolCalls?.length ?? 0}:${last.streaming}`
-    : ''
-
-  // Jump straight to the bottom — instantly, never animated. A smooth scroll
-  // restarted on every streaming token fights itself (and markdown reflow) and
-  // makes the view bounce up and down. Only follow if the user is still pinned.
-  useEffect(() => {
-    if (!pinnedRef.current) return
-    const el = scrollRef.current
-    if (el) el.scrollTop = el.scrollHeight
-  }, [conv.messages.length, lastMsgKey])
 
   if (conv.messages.length === 0) {
     return (
@@ -57,12 +59,14 @@ export function MessageThread({ conv, showTools, showReasoning }: Props) {
   }
 
   return (
-    <div ref={scrollRef} onScroll={onScroll} className="flex-1 overflow-y-auto px-4 py-4 space-y-4" style={{ userSelect: 'text', overflowAnchor: 'none' }}>
-      {conv.messages.map(msg =>
-        msg.role === 'user'
-          ? <UserMessage key={msg.id} message={msg} />
-          : <AssistantMessage key={msg.id} message={msg} showTools={showTools} showReasoning={showReasoning} />
-      )}
+    <div ref={scrollRef} onScroll={onScroll} className="flex-1 overflow-y-auto" style={{ userSelect: 'text', overflowAnchor: 'none' }}>
+      <div ref={contentRef} className="px-4 py-4 space-y-4">
+        {conv.messages.map(msg =>
+          msg.role === 'user'
+            ? <UserMessage key={msg.id} message={msg} />
+            : <AssistantMessage key={msg.id} message={msg} showTools={showTools} showReasoning={showReasoning} />
+        )}
+      </div>
     </div>
   )
 }

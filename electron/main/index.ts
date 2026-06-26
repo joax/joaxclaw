@@ -7,6 +7,7 @@ import { exec, spawn } from 'child_process'
 import { createHash } from 'crypto'
 import si from 'systeminformation'
 import WebSocket from 'ws'
+import { registerUpdater } from './updater'
 
 let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null
@@ -156,6 +157,12 @@ app.on('before-quit', () => {
 
 // ── IPC: App info ─────────────────────────────────────────────────────────────
 ipcMain.handle('app:version', () => app.getVersion())
+
+// ── IPC: Auto-updater (GitHub Releases) ──────────────────────────────────────
+registerUpdater(
+  () => mainWindow,
+  () => { isQuitting = true; app.quit() },
+)
 
 // ── IPC: Window controls ──────────────────────────────────────────────────────
 ipcMain.handle('window:minimize', () => mainWindow?.minimize())
