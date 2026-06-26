@@ -22,6 +22,7 @@ import { useConnectionStore, restoreConnectionsFromBackup } from './store/connec
 import { useMetricsStore } from './store/metrics'
 import { useSettingsStore, ZOOM_STEP } from './store/settings'
 import { useExtensionsStore } from './store/extensions'
+import { useProcessesStore } from './store/processes'
 import { useSkillsStore } from './store/skills'
 
 export type NavSection = 'dashboard' | 'chat' | 'talk' | 'agents' | 'processes' | 'teams' | 'extensions' | 'sessions' | 'crons' | 'obsidian' | 'models' | 'gateway' | 'settings'
@@ -63,7 +64,12 @@ export default function App() {
   // The initial call at mount usually fails (connection not ready yet),
   // so we re-load on every successful connect / reconnect.
   useEffect(() => {
-    if (status === 'connected') loadExtensions()
+    if (status === 'connected') {
+      loadExtensions()
+      // Re-attach to any team/process run that was still executing on the gateway when
+      // the app last closed, so a restart keeps tracking it (idempotent per run).
+      useProcessesStore.getState().load()
+    }
   }, [status])
 
   // Install the app-native agent skills (process-builder, teams-blueprint) on
