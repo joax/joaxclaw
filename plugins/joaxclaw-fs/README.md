@@ -25,6 +25,7 @@ gateway RPC methods that read/write those directories on the host.
 | `teams.list` | read | — | `{ teams: [{ id, blueprint, md, revisions }] }` |
 | `teams.get` | read | `{ id }` | `{ id, blueprint, md, revisions }` |
 | `teams.set` | write | `{ id, blueprint?, md?, revisions? }` | `{ ok, id }` |
+| `teams.run` | write | `{ id, task, autorun? }` | `{ ok, id, nonce }` |
 | `teams.delete` | write | `{ id }` | `{ ok, id }` |
 | `processes.list` | read | — | `{ defs: [{ id, md }], runs: [{ id, run }] }` |
 | `processes.get` | read | `{ id }` | `{ id, md }` |
@@ -41,6 +42,12 @@ gateway RPC methods that read/write those directories on the host.
 
 Artifacts are passed through verbatim as strings (or `null` when missing); the app
 owns (de)serialization. Ids are validated to stay inside the state directories.
+
+`teams.run` lets an agent launch a saved team against a concrete `task`. It's thin by
+design: it only records the request as `<id>.runrequest.json` (with a one-shot `nonce`);
+the JoaxClaw app polls for it, builds the launch prompt, optionally auto-launches when
+`autorun` is set, and clears the request. The app owns prompt compilation and the live
+run monitor, so the plugin never starts a run itself.
 
 `engines.probe` / `engines.fetch` GET a local LLM engine's health/model URL **from
 the gateway host** — that's how the app checks liveness and lists models for engines

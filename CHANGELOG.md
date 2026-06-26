@@ -5,6 +5,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **Reusable teams — run a saved team against a per-run task.** A team blueprint is now a reusable design: a new **"Task for this run"** box supplies a concrete objective at launch, and member tasks / the output contract may use an `{objective}` placeholder that's substituted in (threaded through `buildLaunchPrompt`, recorded on the run, and shown in the monitor).
+- **Agent-launchable team runs.** Agents can start a saved team via the `joaxclaw-fs` plugin's new **`teams.run`** method (`{ id, task, autorun? }`), which records a one-shot `<id>.runrequest.json`; the app polls for it, pre-fills the task, optionally auto-launches, and clears it (the app still owns prompt-building and the run monitor). Documented in the `teams-blueprint` skill (v2). **Requires `joaxclaw-fs` ≥ 0.4.0** on the gateway host.
+
+### Fixed
+
+- **Team runs no longer report "complete" after the first step.** This gateway emits no `waiting`/`delegating` chat state, so worker sub-sessions weren't linked to the run and a controller `final` (fired on every `sessions_yield`) ended it early. Runs now link workers via each frame's `spawnedBy` and complete **only** via the gateway idle-poll (`includeRoot=true`), so neither a controller nor a worker `final` ends the run prematurely; a worker error/abort no longer fails the whole run (controller-only).
+
+### Plugin
+
+- **`openclaw-joaxclaw-fs` 0.4.0** adds the `teams.run` gateway method (agent-launchable team runs). Published to npm via CI on the version bump.
+
 ## [0.12.0] - 2026-06-26
 
 ### Added
