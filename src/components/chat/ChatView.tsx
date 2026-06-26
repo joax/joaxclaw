@@ -257,25 +257,28 @@ export function ChatView() {
                     >{m}</button>
                   ))}
                 </div>
-                {/* Always mounted so the toggle row never reflows when switching modes.
-                    In Basic mode these govern what the per-message "Details" panel shows. */}
+                {/* Always mounted so the toggle row never reflows when switching modes,
+                    but disabled in Basic mode — these are Advanced-only controls. */}
                 <ToggleBtn
                   active={showReasoning}
                   onClick={() => setShowReasoning(v => !v)}
                   icon={<Brain size={12} />}
                   label="Reasoning"
+                  disabled={chatMode === 'basic'}
                 />
                 <ToggleBtn
                   active={showTools}
                   onClick={() => setShowTools(v => !v)}
                   icon={<Wrench size={12} />}
                   label="Actions"
+                  disabled={chatMode === 'basic'}
                 />
                 <ToggleBtn
                   active={showContext}
                   onClick={() => setShowContext(v => !v)}
                   icon={<Layers size={12} />}
                   label="Context"
+                  disabled={chatMode === 'basic'}
                 />
               </div>
             </div>
@@ -450,18 +453,19 @@ function SessionRow({ session, agentName, onClick }: { session: Session; agentNa
   )
 }
 
-function ToggleBtn({ active, onClick, icon, label }: { active: boolean; onClick: () => void; icon: React.ReactNode; label: string }) {
+function ToggleBtn({ active, onClick, icon, label, disabled = false }: { active: boolean; onClick: () => void; icon: React.ReactNode; label: string; disabled?: boolean }) {
   return (
     <button
-      onClick={onClick}
-      title={`${active ? 'Hide' : 'Show'} ${label}`}
+      onClick={disabled ? undefined : onClick}
+      disabled={disabled}
+      title={disabled ? `${label} — available in Advanced mode` : `${active ? 'Hide' : 'Show'} ${label}`}
       className="flex items-center gap-1 px-2 py-1 rounded text-xs transition-opacity"
       style={{
         border: '1px solid var(--border)',
-        background: active ? 'color-mix(in srgb, var(--accent) 15%, transparent)' : 'transparent',
-        color: active ? 'var(--accent)' : 'var(--text-secondary)',
-        cursor: 'pointer',
-        opacity: active ? 1 : 0.6
+        background: active && !disabled ? 'color-mix(in srgb, var(--accent) 15%, transparent)' : 'transparent',
+        color: active && !disabled ? 'var(--accent)' : 'var(--text-secondary)',
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        opacity: disabled ? 0.35 : (active ? 1 : 0.6)
       }}
     >
       {icon}
