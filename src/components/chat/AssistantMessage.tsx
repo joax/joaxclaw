@@ -4,6 +4,7 @@ import type { ChatMessage, ContextOverflowInfo, ToolCall } from '../../lib/types
 import { useExtensionsStore } from '../../store/extensions'
 import { useOllamaProgress } from '../../store/ollamaProgress'
 import { useSettingsStore } from '../../store/settings'
+import { useConnectionStore } from '../../store/connection'
 import { currentActivity, completedSteps } from '../../lib/activityLabels'
 import { formatTimestamp } from '../../lib/dateUtils'
 import { MarkdownContent } from './MarkdownContent'
@@ -378,6 +379,8 @@ export function AssistantMessage({ message, showTools = true, showReasoning = tr
             <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>{formatTimestamp(message.createdAt)}</span>
           </div>
 
+          {message.interrupted && <InterruptedNotice />}
+
           {/* Activity trail while working: completed steps + the current action, live */}
           {message.streaming && !isStalled && (cur || steps.length > 0) && (
             <div className="mb-2 flex flex-col gap-1.5">
@@ -486,6 +489,8 @@ export function AssistantMessage({ message, showTools = true, showReasoning = tr
           )}
         </div>
 
+        {message.interrupted && <InterruptedNotice />}
+
         {/* Reasoning block */}
         {hasReasoning && showReasoning && (
           <ReasoningBlock
@@ -550,6 +555,28 @@ export function AssistantMessage({ message, showTools = true, showReasoning = tr
           <MessageFeedback message={message} />
         )}
       </div>
+    </div>
+  )
+}
+
+// ── Gateway-restart / connection-drop notice ──────────────────────────────────
+// Rendered on a message whose turn was cut off by a gateway drop. Reads live
+// connection status so it flips from "reconnecting…" to "back online" on its own —
+// that flip IS the wake-up the user is waiting for.
+function InterruptedNotice() {
+  const status = useConnectionStore(s => s.status)
+  const back = status === 'connected'
+  return (
+    <div
+      className="flex items-center gap-2 mb-2 px-3 py-2 text-xs rounded"
+      style={{ background: 'var(--bg-elevated)', border: `1px solid ${back ? 'var(--success)' : 'var(--warning)'}`, color: back ? 'var(--success)' : 'var(--warning)' }}
+    >
+      {back ? <CheckCircle2 size={13} style={{ flexShrink: 0 }} /> : <Loader2 size={13} className="animate-spin" style={{ flexShrink: 0 }} />}
+      <span>
+        {back
+          ? 'Gateway restarted and is back online — send a message to continue.'
+          : 'The gateway connection dropped (it may be restarting) — reconnecting…'}
+      </span>
     </div>
   )
 }

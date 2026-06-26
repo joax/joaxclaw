@@ -107,6 +107,7 @@ export interface ChatMessage {
   waitingForSession?: string   // key of sub-session being awaited, if known
   contextOverflow?: ContextOverflowInfo
   model?: string               // actual model used for this assistant message (provider/model or bare model id)
+  interrupted?: boolean        // turn cut off by a gateway drop/restart; shows a live reconnect notice
 }
 
 // Per-chat thinking level. 'adaptive' (the default) means "no override" — let the
