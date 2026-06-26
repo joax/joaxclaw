@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Check, Plus, Trash2 } from 'lucide-react'
-import { useSettingsStore } from '../../store/settings'
+import { useSettingsStore, ZOOM_MIN, ZOOM_MAX, ZOOM_STEP } from '../../store/settings'
 import type { ThemeSettings, IconFamily } from '../../lib/types'
 import { DEFAULT_THEME } from '../../lib/types'
 import { Btn } from '../ui/Btn'
@@ -16,7 +16,7 @@ const ICON_FAMILIES: { id: IconFamily; label: string; desc: string }[] = [
 ]
 
 export function SettingsView() {
-  const { themes, activeThemeId, setActiveTheme, saveTheme, deleteTheme, showGpu, showRam, showHeartbeat, showModelName, streamStallTimeout, setAppPref } = useSettingsStore()
+  const { themes, activeThemeId, setActiveTheme, saveTheme, deleteTheme, showGpu, showRam, showHeartbeat, showModelName, streamStallTimeout, setAppPref, uiZoom, setUiZoom } = useSettingsStore()
   const activeTheme = themes.find(t => t.id === activeThemeId) ?? DEFAULT_THEME
 
   const [editing, setEditing] = useState<ThemeSettings>(activeTheme)
@@ -211,6 +211,20 @@ export function SettingsView() {
         {/* App preferences */}
         <Section title="App">
           <div className="space-y-3">
+            <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>Zoom</label>
+                <span className="text-xs font-mono" style={{ color: 'var(--text-secondary)' }}>{Math.round(Math.pow(1.2, uiZoom) * 100)}%</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <Btn size="sm" variant="outline" onClick={() => setUiZoom(uiZoom - ZOOM_STEP)} disabled={uiZoom <= ZOOM_MIN}>−</Btn>
+                <Btn size="sm" variant="outline" onClick={() => setUiZoom(0)} disabled={uiZoom === 0}>Reset</Btn>
+                <Btn size="sm" variant="outline" onClick={() => setUiZoom(uiZoom + ZOOM_STEP)} disabled={uiZoom >= ZOOM_MAX}>+</Btn>
+              </div>
+              <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)', opacity: 0.7 }}>
+                Scales the whole app. Shortcut: <b style={{ color: 'var(--text-primary)' }}>Ctrl/⌘ +</b> / <b style={{ color: 'var(--text-primary)' }}>−</b> (and <b style={{ color: 'var(--text-primary)' }}>Ctrl/⌘ 0</b> to reset).
+              </p>
+            </div>
             <SliderField
               label="Stream stall timeout"
               value={streamStallTimeout}

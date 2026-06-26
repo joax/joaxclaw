@@ -1,10 +1,17 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webFrame } from 'electron'
 import { homedir } from 'os'
 
 contextBridge.exposeInMainWorld('api', {
   // App info
   app: {
     version: () => ipcRenderer.invoke('app:version')
+  },
+
+  // UI zoom (whole-app font/size scaling). webFrame runs in the renderer's frame,
+  // so this scales everything including inline-px styles — no main round-trip.
+  zoom: {
+    set: (level: number) => webFrame.setZoomLevel(level),
+    get: () => webFrame.getZoomLevel()
   },
 
   // Window controls
