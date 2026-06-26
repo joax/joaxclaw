@@ -3,6 +3,7 @@ import { nanoid } from '../lib/nanoid'
 import type { Conversation, ChatMessage, ContextOverflowInfo, ToolCall, MediaAttachment, ThinkingLevel } from '../lib/types'
 import { gatewayClient } from '../lib/gateway'
 import { useExtensionsStore } from './extensions'
+import { useConnectionStore } from './connection'
 
 const AUDIO_EXT = /\.(mp3|ogg|wav|m4a|aac|opus|webm|flac)(\?[^\s]*)?$/i
 const AUDIO_MIME = /^audio\//i
@@ -672,3 +673,43 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
   }
 }))
+
+// ── Gateway-restart recovery ────────────────────────────────────────────────────
+// A tool can restart the gateway (e.g. `systemctl --user restart openclaw-gateway`),
+// which kills the WebSocket mid-turn. No `final` event ever arrives, so the streaming
+// message would hang forever with a spinning cursor and a live Stop button. When the
+// connection drops, finalize any in-flight message and flag it `interrupted` — the UI
+// then shows a live "reconnecting → back online" notice (the wake-up) driven by the
+// connection status, so the user knows the restart happened and can continue.
+function interruptActiveStreams(): void {
+  for (const [, entry] of activeStreams) entry.unsub()
+  activeStreams.clear()
+
+  const { conversations } = useChatStore.getState()
+  if (!conversations.some(c => c.messages.some(m => m.streaming))) return
+
+  useChatStore.setState({
+    conversations: conversations.map(c =>
+      !c.messages.some(m => m.streaming) ? c : {
+        ...c,
+        messages: c.messages.map(m => m.streaming ? {
+          ...m,
+          streaming: false,
+          reasoningStreaming: false,
+          waitingForSession: undefined,
+          interrupted: true,
+          toolCalls: m.toolCalls?.map(tc =>
+            tc.status === 'running' ? { ...tc, status: 'error' as const, error: 'Interrupted — gateway connection lost' } : tc
+          ),
+        } : m),
+      }
+    ),
+  })
+}
+
+// Fire when the gateway connection drops from a healthy state (restart / reload / blip).
+useConnectionStore.subscribe((s, prev) => {
+  if (prev.status === 'connected' && s.status !== 'connected' && s.status !== 'connecting') {
+    interruptActiveStreams()
+  }
+})
