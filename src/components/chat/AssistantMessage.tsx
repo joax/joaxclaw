@@ -5,7 +5,8 @@ import { useExtensionsStore } from '../../store/extensions'
 import { useOllamaProgress } from '../../store/ollamaProgress'
 import { useSettingsStore } from '../../store/settings'
 import { useConnectionStore } from '../../store/connection'
-import { currentActivity, completedSteps } from '../../lib/activityLabels'
+import { currentActivity, completedSteps, randomWhimsy, nextWhimsy } from '../../lib/activityLabels'
+import type { LucideIcon } from 'lucide-react'
 import { formatTimestamp } from '../../lib/dateUtils'
 import { MarkdownContent } from './MarkdownContent'
 import { AudioPlayer } from './AudioPlayer'
@@ -390,12 +391,14 @@ export function AssistantMessage({ message, showTools = true, showReasoning = tr
                   <span>{s.label}{s.count > 1 ? ` · ${s.count}×` : ''}</span>
                 </div>
               ))}
-              {cur && (
-                <div className="flex items-center gap-2 text-xs" style={{ color: 'var(--accent)' }}>
-                  <cur.Icon size={13} className="animate-pulse-dot" style={{ flexShrink: 0 }} />
-                  <span>{cur.label}…</span>
-                </div>
-              )}
+              {cur && (cur.whimsy
+                ? <WorkingVerb Icon={cur.Icon} />
+                : (
+                  <div className="flex items-center gap-2 text-xs" style={{ color: 'var(--accent)' }}>
+                    <cur.Icon size={13} className="animate-pulse-dot" style={{ flexShrink: 0 }} />
+                    <span>{cur.label}…</span>
+                  </div>
+                ))}
             </div>
           )}
 
@@ -557,6 +560,23 @@ export function AssistantMessage({ message, showTools = true, showReasoning = tr
           <MessageFeedback message={message} />
         )}
       </div>
+    </div>
+  )
+}
+
+// ── Whimsical "working" verb (Basic mode) ─────────────────────────────────────
+// Rotates through playful gerunds (Claude Code's spinner-word spirit) while the
+// model is working with no specific tool, so a generic wait feels alive.
+function WorkingVerb({ Icon }: { Icon: LucideIcon }) {
+  const [verb, setVerb] = useState(randomWhimsy)
+  useEffect(() => {
+    const t = setInterval(() => setVerb(nextWhimsy), 2800)
+    return () => clearInterval(t)
+  }, [])
+  return (
+    <div className="flex items-center gap-2 text-xs" style={{ color: 'var(--accent)' }}>
+      <Icon size={13} className="animate-pulse-dot" style={{ flexShrink: 0 }} />
+      <span>{verb}…</span>
     </div>
   )
 }
