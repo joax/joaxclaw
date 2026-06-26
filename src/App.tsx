@@ -20,7 +20,7 @@ import { ConnectScreen } from './components/layout/ConnectScreen'
 import { ReconnectOverlay } from './components/layout/ReconnectOverlay'
 import { useConnectionStore, restoreConnectionsFromBackup } from './store/connection'
 import { useMetricsStore } from './store/metrics'
-import { useSettingsStore } from './store/settings'
+import { useSettingsStore, ZOOM_STEP } from './store/settings'
 import { useExtensionsStore } from './store/extensions'
 import { useSkillsStore } from './store/skills'
 
@@ -42,6 +42,21 @@ export default function App() {
     // resets) and keep the backup in sync going forward.
     restoreConnectionsFromBackup()
     return () => stopMetrics()
+  }, [])
+
+  // Whole-app zoom: Ctrl/Cmd and +/- to scale text & UI, Ctrl/Cmd+0 to reset.
+  // Persisted in settings; re-applied here once the preload bridge is available.
+  useEffect(() => {
+    useSettingsStore.getState().setUiZoom(useSettingsStore.getState().uiZoom)
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey) return
+      const s = useSettingsStore.getState()
+      if (e.key === '=' || e.key === '+') { e.preventDefault(); s.setUiZoom(s.uiZoom + ZOOM_STEP) }
+      else if (e.key === '-' || e.key === '_') { e.preventDefault(); s.setUiZoom(s.uiZoom - ZOOM_STEP) }
+      else if (e.key === '0') { e.preventDefault(); s.setUiZoom(0) }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
   }, [])
 
   // Load extensions whenever the gateway becomes connected.
