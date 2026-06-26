@@ -31,6 +31,9 @@ export interface Skill {
   emoji?: string
   source?: string
   bundled?: boolean
+  // True for skills surfaced from the gateway (skills.status) with no config entry yet
+  // — not persisted on save unless the user toggles them (mirrors Plugin.discovered).
+  discovered?: boolean
   [key: string]: unknown
 }
 
@@ -179,6 +182,7 @@ export const useExtensionsStore = create<ExtensionsState>((set, get) => ({
           emoji: s.emoji,
           source: s.source,
           bundled: false,
+          discovered: true,
         }))
 
       const skills = [...configSkills, ...discoveredSkills]
@@ -281,7 +285,16 @@ export const useExtensionsStore = create<ExtensionsState>((set, get) => ({
   },
 
   setSkillEnabled(id, enabled) {
-    set(s => ({ skills: s.skills.map(sk => sk.id === id ? { ...sk, enabled } : sk), dirty: true }))
+    set(s => ({
+      skills: s.skills.map(sk => {
+        if (sk.id !== id) return sk
+        // Adopting a discovered skill: keep only config-relevant fields so save() writes
+        // a clean entry (the gateway rejects name/description/etc.).
+        if (sk.discovered) return { id: sk.id, enabled, name: sk.name, description: sk.description, filePath: sk.filePath, emoji: sk.emoji, source: sk.source }
+        return { ...sk, enabled }
+      }),
+      dirty: true,
+    }))
   },
 
   removePlugin(id) {
@@ -309,15 +322,21 @@ export const useExtensionsStore = create<ExtensionsState>((set, get) => ({
         // Untouched registry-discovered plugins have no config intent — don't persist
         // them (otherwise we'd write all ~90 stock plugins into the config).
         if (p.discovered) continue
-        // Strip gateway-computed fields so they don't leak into the saved config.
-        const { id, discovered: _d, keyStatus: _k, version: _v, origin: _o, ...rest } = p
-        void _d; void _k; void _v; void _o
+        // Strip display/enrichment fields. The gateway's config schema is strict and
+        // rejects unrecognized keys (name/description/source/version/origin/keyStatus
+        // are surfaced from the registry, not config), so only genuine config keys
+        // (enabled, config, …) may go into the patch.
+        const { id, discovered: _d, keyStatus: _k, version: _v, origin: _o, name: _n, description: _ds, source: _s, ...rest } = p
+        void _d; void _k; void _v; void _o; void _n; void _ds; void _s
         pluginEntries[id] = rest
       }
       const skillEntries: Record<string, unknown> = {}
       for (const s of skills) {
-        // Strip gateway-only fields — only config-relevant fields go into the patch
-        const { id, filePath: _fp, emoji: _em, source: _src, bundled: _bu, ...rest } = s
+        // Likewise skip untouched discovered skills, and strip enrichment fields the
+        // gateway schema rejects (name/description come from skills.status, not config).
+        if (s.discovered) continue
+        const { id, filePath: _fp, emoji: _em, source: _src, bundled: _bu, name: _n, description: _ds, ...rest } = s
+        void _fp; void _em; void _src; void _bu; void _n; void _ds
         skillEntries[id] = rest
       }
 
