@@ -159,57 +159,82 @@ async function persistRun(run: ProcessRun) {
   } catch { /* non-critical */ }
 }
 
-// ── Gateway-authoritative completion (safety net) ───────────────────────────────
-// Inferring worker tracking from spawn tool-call events is fragile (the spawn result's
-// key field varies; some delegation paths emit no tool call at all). So when the
-// controller finishes with no tracked workers, ASK the gateway which descendant
-// sessions are still alive — sessions carry parentSessionKey + status/hasActiveRun —
-// and only complete once the whole tree is idle. A hard cap guarantees a missed signal
-// can never hang the run.
+// ── Gateway-authoritative completion + restart recovery ─────────────────────────
+// A team/process run executes on the GATEWAY (controller session + worker sub-
+// sessions), independent of the app. So we treat the gateway as the source of truth
+// for "is this run still going": `sessions.list` carries each session's
+// status/hasActiveRun (known-good fields the app already uses) and parentSessionKey.
+// Used both as a completion safety net (event inference is fragile) and to RE-ATTACH
+// to an in-flight run after an app restart. A hard cap guarantees we never hang.
 const _completionGuards = new Set<string>()
+const _reattached = new Set<string>()
 
-async function countLiveDescendants(controllerKey: string): Promise<number> {
+// Count sessions in the run's tree that are still active. Returns -1 if the gateway
+// query fails (unknown — never treat that as "idle"). includeRoot also counts the
+// controller's own activity (it stays active for the whole flow, even while yielding).
+async function countLiveInTree(rootKey: string, includeRoot: boolean): Promise<number> {
   let sessions: Array<Record<string, unknown>>
   try {
     const res = await gatewayClient.request<{ sessions?: Array<Record<string, unknown>> }>('sessions.list', {})
     sessions = res.sessions ?? []
-  } catch { return 0 }
+  } catch { return -1 }
+  const isActive = (s: Record<string, unknown>) =>
+    s.hasActiveRun === true || /^(active|running|busy)$/i.test(String(s.status ?? ''))
   const byParent = new Map<string, Array<Record<string, unknown>>>()
+  const byKey = new Map<string, Record<string, unknown>>()
   for (const s of sessions) {
+    const key = String(s.key ?? '')
+    if (key) byKey.set(key, s)
     const parent = String(s.parentSessionKey ?? s.parentSession ?? '')
     if (parent) { if (!byParent.has(parent)) byParent.set(parent, []); byParent.get(parent)!.push(s) }
   }
   let live = 0
-  const seen = new Set<string>()
-  const stack = [controllerKey]
+  if (includeRoot) { const root = byKey.get(rootKey); if (root && isActive(root)) live++ }
+  const seen = new Set<string>([rootKey])
+  const stack = [rootKey]
   while (stack.length) {
     for (const child of byParent.get(stack.pop()!) ?? []) {
       const key = String(child.key ?? '')
       if (!key || seen.has(key)) continue
       seen.add(key)
-      if (child.hasActiveRun === true || /^(active|running)$/i.test(String(child.status ?? ''))) live++
+      if (isActive(child)) live++
       stack.push(key)
     }
   }
   return live
 }
 
-async function completeWhenTreeIdle(processId: string, controllerKey: string): Promise<void> {
+// Poll the gateway until the run's session tree is idle, then mark it done. Requires
+// two consecutive idle reads (the tree looks momentarily idle between a worker
+// finishing and the controller resuming). includeRoot=true when re-attaching, since
+// the controller may still be the only thing running.
+async function watchTreeUntilIdle(processId: string, rootKey: string, includeRoot: boolean, openingLog?: string): Promise<void> {
   if (_completionGuards.has(processId)) return
   _completionGuards.add(processId)
-  const deadline = Date.now() + 5 * 60_000   // hard cap — never hang
+  const deadline = Date.now() + 10 * 60_000   // hard cap — never hang
+  if (openingLog) {
+    useProcessesStore.setState(s => {
+      const run = s.runs[processId]; if (!run) return s
+      return { runs: { ...s.runs, [processId]: { ...run, log: [...run.log, { ts: Date.now(), text: openingLog }] } } }
+    })
+  }
+  let idleStreak = 0
   let announced = false
   try {
-    await new Promise(r => setTimeout(r, 1500))  // grace: let fresh children register as active
+    await new Promise(r => setTimeout(r, 1500))  // grace: let sessions settle before the first read
     while (Date.now() < deadline) {
-      if (useProcessesStore.getState().runs[processId]?.status !== 'running') return  // superseded
-      const live = await countLiveDescendants(controllerKey)
-      if (live === 0) break
-      if (!announced) {
+      if (useProcessesStore.getState().runs[processId]?.status !== 'running') return  // superseded by a live final / abort
+      const live = await countLiveInTree(rootKey, includeRoot)
+      if (live === 0) {
+        if (++idleStreak >= 2) break
+        await new Promise(r => setTimeout(r, 2000))
+        continue
+      }
+      idleStreak = 0  // active (>0) or query failed (<0): not idle
+      if (live > 0 && !announced && !includeRoot) {
         announced = true
         useProcessesStore.setState(s => {
-          const run = s.runs[processId]
-          if (!run) return s
+          const run = s.runs[processId]; if (!run) return s
           return { runs: { ...s.runs, [processId]: { ...run, currentAgent: undefined, log: [...run.log, { ts: Date.now(), text: `Controller done — waiting for ${live} worker(s)…` }] } } }
         })
       }
@@ -227,6 +252,17 @@ async function completeWhenTreeIdle(processId: string, controllerKey: string): P
       return { runs: { ...s.runs, [processId]: updated } }
     })
   }
+}
+
+// Re-attach to a run that was still in-flight when the app last closed. The run keeps
+// executing on the gateway, so we just re-route its live events and reconcile
+// completion against the live session tree. Idempotent per run per app session.
+function reattachRunningRun(run: ProcessRun): void {
+  const { processId, sessionKey } = run
+  if (!sessionKey || _reattached.has(processId)) return
+  _reattached.add(processId)
+  _runSessions.set(sessionKey, processId)   // route the controller's live events again
+  void watchTreeUntilIdle(processId, sessionKey, true, '↻ Re-attached after restart — checking the run on the gateway…')
 }
 
 // ── Store ─────────────────────────────────────────────────────────────────────
@@ -471,7 +507,7 @@ export const useProcessesStore = create<ProcessesState>((set, get) => ({
         // No tracked sub-sessions — but the spawn-event path can miss workers, so don't
         // assume done. Verify against the gateway: complete only once the controller's
         // descendant sessions are all idle (or the safety cap is hit).
-        void completeWhenTreeIdle(processId, sk)
+        void watchTreeUntilIdle(processId, sk, false)
         return
       }
 
@@ -561,7 +597,11 @@ export const useProcessesStore = create<ProcessesState>((set, get) => ({
       set(s => {
         const run = s.runs[processId]
         if (!run) return s
-        return { runs: { ...s.runs, [processId]: { ...run, log: [...run.log, { ts: Date.now(), text: 'Prompt sent — Team Lead is executing…' }] } } }
+        const updated: ProcessRun = { ...run, log: [...run.log, { ts: Date.now(), text: 'Prompt sent — Team Lead is executing…' }] }
+        // Persist the in-flight run (with its controller sessionKey) so a later app
+        // restart can re-attach to it — the run keeps executing on the gateway.
+        persistRun(updated)
+        return { runs: { ...s.runs, [processId]: updated } }
       })
     } catch (e) {
       _runSessions.delete(sessionKey)
@@ -619,15 +659,15 @@ export const useProcessesStore = create<ProcessesState>((set, get) => ({
 
       // Restore persisted run states
       const restoredRuns: Record<string, ProcessRun> = {}
+      const toReattach: ProcessRun[] = []
       for (const r of rawRuns) {
         if (!r.run) continue
         try {
           const run = JSON.parse(r.run) as ProcessRun
-          if (run.status === 'running') {
-            run.status = 'error'
-            run.error = 'Interrupted — app was restarted'
-            run.finishedAt = Date.now()
-          }
+          // A persisted 'running' run means the gateway was still executing it when the
+          // app last closed. The team runs on the gateway, independent of the app, so we
+          // re-attach instead of declaring it interrupted.
+          if (run.status === 'running' && run.sessionKey) toReattach.push(run)
           restoredRuns[run.processId] = run
         } catch { /* skip corrupt run files */ }
       }
@@ -642,6 +682,12 @@ export const useProcessesStore = create<ProcessesState>((set, get) => ({
         }
         return { _backend: backend, processes: defs, runs: merged, loading: false, needsPlugin: false }
       })
+
+      // Re-route live events for each recovered run and reconcile its completion
+      // against the gateway (idempotent — runs at most once per run per app session).
+      for (const run of toReattach) {
+        if (get().runs[run.processId]?.status === 'running') reattachRunningRun(run)
+      }
     } catch (e) {
       set({ loading: false, error: String(e) })
     }
