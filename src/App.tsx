@@ -18,6 +18,8 @@ import { ModelsView } from './components/models/ModelsView'
 import { SystemMonitorHUD } from './components/monitor/SystemMonitorHUD'
 import { ConnectScreen } from './components/layout/ConnectScreen'
 import { ReconnectOverlay } from './components/layout/ReconnectOverlay'
+import { UpdateBanner } from './components/layout/UpdateBanner'
+import { useUpdaterStore } from './store/updater'
 import { useConnectionStore, restoreConnectionsFromBackup } from './store/connection'
 import { useMetricsStore } from './store/metrics'
 import { useSettingsStore, ZOOM_STEP } from './store/settings'
@@ -60,6 +62,22 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
+  // Auto-update check: independent of the gateway. Checks GitHub Releases shortly
+  // after launch, then every 6 hours, when the preference is on. A found update
+  // surfaces via the app-wide UpdateBanner; manual checks live in Settings.
+  useEffect(() => {
+    const PERIOD_MS = 6 * 60 * 60 * 1000
+    let interval: ReturnType<typeof setInterval> | undefined
+    const tick = () => {
+      if (useSettingsStore.getState().autoUpdateCheck) {
+        void useUpdaterStore.getState().check({ silent: true })
+      }
+    }
+    const initial = setTimeout(tick, 4000)
+    interval = setInterval(tick, PERIOD_MS)
+    return () => { clearTimeout(initial); if (interval) clearInterval(interval) }
+  }, [])
+
   // Load extensions whenever the gateway becomes connected.
   // The initial call at mount usually fails (connection not ready yet),
   // so we re-load on every successful connect / reconnect.
@@ -93,6 +111,7 @@ export default function App() {
   return (
     <div className="flex flex-col h-screen select-none">
       <TitleBar />
+      <UpdateBanner />
       <div className="flex flex-1 min-h-0">
         <NavRail section={section} onNavigate={setSection} disabledSections={disabledSections} />
         <main className="flex-1 min-w-0 flex flex-col relative" style={{ background: 'var(--bg-primary)' }}>

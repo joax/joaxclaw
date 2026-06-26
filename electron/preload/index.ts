@@ -7,6 +7,20 @@ contextBridge.exposeInMainWorld('api', {
     version: () => ipcRenderer.invoke('app:version')
   },
 
+  // Auto-updater (GitHub Releases) — check / download / install per-OS
+  updater: {
+    check: () => ipcRenderer.invoke('update:check'),
+    download: (url: string, name: string) => ipcRenderer.invoke('update:download', url, name),
+    install: (filePath: string) => ipcRenderer.invoke('update:install', filePath),
+    openReleasePage: (url?: string) => ipcRenderer.invoke('update:openReleasePage', url),
+    restart: () => ipcRenderer.invoke('update:restart'),
+    onProgress: (cb: (p: { received: number; total: number; percent: number }) => void) => {
+      const listener = (_: Electron.IpcRendererEvent, p: { received: number; total: number; percent: number }) => cb(p)
+      ipcRenderer.on('update:progress', listener)
+      return () => ipcRenderer.removeListener('update:progress', listener)
+    }
+  },
+
   // UI zoom (whole-app font/size scaling). webFrame runs in the renderer's frame,
   // so this scales everything including inline-px styles — no main round-trip.
   zoom: {

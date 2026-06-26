@@ -30,6 +30,13 @@ interface SettingsState {
   // Whole-app zoom level (Electron webFrame zoom). 0 = 100%; each ±0.5 step ≈ ±10%.
   uiZoom: number
 
+  // Auto-updater: check GitHub Releases on launch + periodically when enabled.
+  autoUpdateCheck: boolean
+  // A version the user chose to "Skip" — suppresses the banner until a newer one.
+  skippedUpdateVersion: string
+
+  setAutoUpdateCheck: (on: boolean) => void
+  setSkippedUpdateVersion: (version: string) => void
   setChatMode: (mode: 'basic' | 'advanced') => void
   setUiZoom: (level: number) => void
   setActiveTheme: (id: string) => void
@@ -57,6 +64,11 @@ export const useSettingsStore = create<SettingsState>()(
       streamStallTimeout: 60,
       chatMode: 'advanced',
       uiZoom: 0,
+      autoUpdateCheck: true,
+      skippedUpdateVersion: '',
+
+      setAutoUpdateCheck(on) { set({ autoUpdateCheck: on }) },
+      setSkippedUpdateVersion(version) { set({ skippedUpdateVersion: version }) },
 
       setChatMode(mode) { set({ chatMode: mode }) },
 

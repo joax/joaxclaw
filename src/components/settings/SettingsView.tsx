@@ -1,6 +1,7 @@
-import { useState } from 'react'
-import { Check, Plus, Trash2 } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Check, Plus, Trash2, RefreshCw, Download, ExternalLink, RotateCw, Sparkles, CheckCircle2 } from 'lucide-react'
 import { useSettingsStore, ZOOM_MIN, ZOOM_MAX, ZOOM_STEP } from '../../store/settings'
+import { useUpdaterStore } from '../../store/updater'
 import type { ThemeSettings, IconFamily } from '../../lib/types'
 import { DEFAULT_THEME } from '../../lib/types'
 import { Btn } from '../ui/Btn'
@@ -235,6 +236,9 @@ export function SettingsView() {
           </div>
         </Section>
 
+        {/* Updates */}
+        <UpdatesSection />
+
         {/* Mini preview */}
         <Section title="Preview">
           <div
@@ -271,6 +275,88 @@ export function SettingsView() {
         </Section>
       </div>
     </div>
+  )
+}
+
+function UpdatesSection() {
+  const { autoUpdateCheck, setAutoUpdateCheck } = useSettingsStore()
+  const { status, info, lastChecked, error, check, download, install } = useUpdaterStore()
+  const [version, setVersion] = useState<string>('')
+
+  useEffect(() => {
+    const api = (window as unknown as { api?: { app?: { version: () => Promise<string> } } }).api
+    api?.app?.version().then(v => setVersion(v)).catch(() => { /* not in Electron */ })
+  }, [])
+
+  const checking = status === 'checking'
+  const hasUpdate = !!info?.available
+  const downloadable = hasUpdate && !!info?.asset
+
+  return (
+    <Section title="Updates">
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-sm" style={{ color: 'var(--text-primary)' }}>Current version</p>
+            <p className="text-xs font-mono mt-0.5" style={{ color: 'var(--text-secondary)' }}>
+              v{version || '…'}
+            </p>
+          </div>
+          <Btn size="sm" variant="outline" icon={<RefreshCw size={12} className={checking ? 'animate-spin' : ''} />}
+               loading={checking} onClick={() => check()}>
+            Check now
+          </Btn>
+        </div>
+
+        {/* Status line */}
+        {status === 'up-to-date' && (
+          <div className="flex items-center gap-2 text-xs" style={{ color: 'var(--text-secondary)' }}>
+            <CheckCircle2 size={13} style={{ color: 'var(--accent)' }} />
+            You're on the latest version.
+          </div>
+        )}
+        {hasUpdate && (
+          <div
+            className="px-3 py-2.5 rounded space-y-2"
+            style={{ background: 'color-mix(in srgb, var(--accent) 10%, var(--bg-elevated))', border: '1px solid color-mix(in srgb, var(--accent) 30%, var(--border))' }}
+          >
+            <div className="flex items-center gap-2">
+              <Sparkles size={13} style={{ color: 'var(--accent)' }} />
+              <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
+                v{info?.latestVersion} available
+              </span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              {downloadable && status !== 'downloaded' && status !== 'downloading' && (
+                <Btn size="sm" icon={<Download size={12} />} loading={status === 'downloading'} onClick={() => download()}>
+                  Download
+                </Btn>
+              )}
+              {status === 'downloading' && (
+                <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>Downloading…</span>
+              )}
+              {status === 'downloaded' && (
+                <Btn size="sm" icon={<RotateCw size={12} />} onClick={() => install()}>Install</Btn>
+              )}
+              <Btn size="sm" variant="ghost" icon={<ExternalLink size={12} />}
+                   onClick={() => useUpdaterStore.getState().openReleasePage()}>
+                Release notes
+              </Btn>
+            </div>
+          </div>
+        )}
+        {status === 'error' && (
+          <p className="text-xs" style={{ color: 'var(--danger)' }}>{error ?? 'Update check failed.'}</p>
+        )}
+        {lastChecked && !checking && (
+          <p className="text-xs" style={{ color: 'var(--text-secondary)', opacity: 0.65 }}>
+            Last checked {new Date(lastChecked).toLocaleString()}
+          </p>
+        )}
+
+        <Toggle label="Check for updates automatically" value={autoUpdateCheck} onChange={setAutoUpdateCheck} />
+      </div>
+    </Section>
   )
 }
 
