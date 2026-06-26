@@ -5,6 +5,7 @@ import { useChatStore } from '../../store/chat'
 import { useAgentsStore } from '../../store/agents'
 import { useSessionsStore } from '../../store/sessions'
 import { useModelsStore } from '../../store/models'
+import { useSettingsStore } from '../../store/settings'
 import { MessageThread } from './MessageThread'
 import { MessageInput } from './MessageInput'
 import logoUrl from '../../assets/logo-dark.png'
@@ -28,6 +29,8 @@ export function ChatView() {
   const [showReasoning, setShowReasoning] = useState(true)
   const [showContext, setShowContext] = useState(true)
   const { load: loadModels } = useModelsStore()
+  const chatMode = useSettingsStore(s => s.chatMode)
+  const setChatMode = useSettingsStore(s => s.setChatMode)
 
   useEffect(() => { if (showContext) loadModels() }, [showContext])
 
@@ -238,19 +241,39 @@ export function ChatView() {
                 />
               </div>
 
-              <div className="ml-auto flex items-center gap-1">
-                <ToggleBtn
-                  active={showReasoning}
-                  onClick={() => setShowReasoning(v => !v)}
-                  icon={<Brain size={12} />}
-                  label="Reasoning"
-                />
-                <ToggleBtn
-                  active={showTools}
-                  onClick={() => setShowTools(v => !v)}
-                  icon={<Wrench size={12} />}
-                  label="Actions"
-                />
+              <div className="ml-auto flex items-center gap-1.5">
+                {/* Basic vs Advanced presentation */}
+                <div className="flex items-center rounded overflow-hidden" style={{ border: '1px solid var(--border)' }} title="Basic shows a friendly activity summary; Advanced shows tool calls and reasoning">
+                  {(['basic', 'advanced'] as const).map(m => (
+                    <button
+                      key={m}
+                      onClick={() => setChatMode(m)}
+                      className="text-xs px-2 py-1 capitalize transition-colors"
+                      style={{
+                        background: chatMode === m ? 'var(--accent)' : 'transparent',
+                        color: chatMode === m ? '#fff' : 'var(--text-secondary)',
+                        border: 'none', cursor: 'pointer',
+                      }}
+                    >{m}</button>
+                  ))}
+                </div>
+                {/* Advanced-only toggles */}
+                {chatMode === 'advanced' && (
+                  <>
+                    <ToggleBtn
+                      active={showReasoning}
+                      onClick={() => setShowReasoning(v => !v)}
+                      icon={<Brain size={12} />}
+                      label="Reasoning"
+                    />
+                    <ToggleBtn
+                      active={showTools}
+                      onClick={() => setShowTools(v => !v)}
+                      icon={<Wrench size={12} />}
+                      label="Actions"
+                    />
+                  </>
+                )}
                 <ToggleBtn
                   active={showContext}
                   onClick={() => setShowContext(v => !v)}

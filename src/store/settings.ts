@@ -14,7 +14,11 @@ interface SettingsState {
 
   // App preferences (local, not sent to gateway)
   streamStallTimeout: number  // seconds before "model stopped responding" banner
+  // Chat presentation: 'advanced' = full tool calls + reasoning; 'basic' = friendly
+  // plain-language activity trail for run-of-the-mill users.
+  chatMode: 'basic' | 'advanced'
 
+  setChatMode: (mode: 'basic' | 'advanced') => void
   setActiveTheme: (id: string) => void
   saveTheme: (theme: ThemeSettings) => void
   deleteTheme: (id: string) => void
@@ -38,6 +42,9 @@ export const useSettingsStore = create<SettingsState>()(
       showHeartbeat: true,
       showModelName: true,
       streamStallTimeout: 60,
+      chatMode: 'advanced',
+
+      setChatMode(mode) { set({ chatMode: mode }) },
 
       setActiveTheme(id) {
         const theme = get().themes.find(t => t.id === id)
