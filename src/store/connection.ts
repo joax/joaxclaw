@@ -25,6 +25,9 @@ interface ConnectionState {
   // True while we are silently retrying a dropped connection (gateway reload).
   reconnecting: boolean
   reconnectAttempt: number
+  // Operator scopes the gateway granted this connection (from the connect handshake).
+  // Drives client-side gating of admin-only UI; the gateway still enforces it.
+  grantedScopes: string[]
 
   connect: (conn: GatewayConnection) => void
   disconnect: () => void
@@ -49,6 +52,12 @@ export function isRemoteGatewayState(): boolean {
   return s.status === 'connected' && !isLocalGateway(gatewayHost(s.connection?.url))
 }
 
+// True when the connection holds the operator.admin scope — required for managing
+// other devices (approve/reject/remove, token rotate/revoke).
+export function useIsAdmin(): boolean {
+  return useConnectionStore(s => s.grantedScopes.includes('operator.admin'))
+}
+
 // Reconnect bookkeeping kept outside the store (timers / flags, not UI state).
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 let intentionalDisconnect = false
@@ -71,6 +80,7 @@ export const useConnectionStore = create<ConnectionState>()(
       uptimeStart: null,
       reconnecting: false,
       reconnectAttempt: 0,
+      grantedScopes: [],
 
       connect(conn) {
         intentionalDisconnect = false
@@ -82,7 +92,7 @@ export const useConnectionStore = create<ConnectionState>()(
           if (status === 'connected') {
             attempt = 0
             clearReconnect()
-            set({ status: 'connected', statusDetail: '', uptimeStart: Date.now(), reconnecting: false, reconnectAttempt: 0 })
+            set({ status: 'connected', statusDetail: '', uptimeStart: Date.now(), reconnecting: false, reconnectAttempt: 0, grantedScopes: [...gatewayClient.grantedScopes] })
           } else if (status === 'connecting') {
             // Don't clobber the "reconnecting" banner with a plain connecting state.
             if (!get().reconnecting) set({ status: 'connecting', statusDetail: '' })
@@ -119,7 +129,7 @@ export const useConnectionStore = create<ConnectionState>()(
         intentionalDisconnect = true
         clearReconnect()
         gatewayClient.disconnect()
-        set({ status: 'disconnected', connection: null, uptimeStart: null, uptime: 0, reconnecting: false, reconnectAttempt: 0 })
+        set({ status: 'disconnected', connection: null, uptimeStart: null, uptime: 0, reconnecting: false, reconnectAttempt: 0, grantedScopes: [] })
       },
 
       cancelReconnect() {

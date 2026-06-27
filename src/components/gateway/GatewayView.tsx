@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { RotateCcw, Square, CheckCircle2, XCircle, AlertCircle, RefreshCw, Eye, EyeOff, Server, Plug, Cpu, Sparkles, MessageSquare, HelpCircle } from 'lucide-react'
+import { RotateCcw, Square, CheckCircle2, XCircle, AlertCircle, RefreshCw, Eye, EyeOff, Server, Plug, Cpu, Sparkles, MessageSquare, HelpCircle, MonitorSmartphone } from 'lucide-react'
 import Editor from '@monaco-editor/react'
 import { useConnectionStore, useIsRemoteGateway } from '../../store/connection'
 import { useMetricsStore } from '../../store/metrics'
@@ -9,17 +9,19 @@ import { formatBytes } from '../../lib/ollama'
 import { useHelpStore } from '../../store/help'
 import { useSkillsStore } from '../../store/skills'
 import { ChannelsPanel } from './ChannelsPanel'
+import { DevicesPanel } from './DevicesPanel'
 import { LocalEnginesCard } from './LocalEnginesCard'
 
 type GwStatus = { running: boolean; pid?: number; uptime?: string }
 
-type SettingsTab = 'connection' | 'gateway' | 'channels' | 'engines' | 'skills'
+type SettingsTab = 'connection' | 'gateway' | 'devices' | 'channels' | 'engines' | 'skills'
 // Remembered across remounts (e.g. when an auto-reconnect briefly swaps the view
 // out) so the user returns to the tab they were on — notably Channels.
 let lastSettingsTab: SettingsTab = 'connection'
 const SETTINGS_TABS: { id: SettingsTab; label: string; icon: React.ReactNode }[] = [
   { id: 'connection', label: 'Connection', icon: <Plug size={15} /> },
   { id: 'gateway',    label: 'Gateway',    icon: <Server size={15} /> },
+  { id: 'devices',    label: 'Devices',    icon: <MonitorSmartphone size={15} /> },
   { id: 'channels',   label: 'Channels',   icon: <MessageSquare size={15} /> },
   { id: 'engines',    label: 'Local LLM',  icon: <Cpu size={15} /> },
   { id: 'skills',     label: 'Skills',     icon: <Sparkles size={15} /> },
@@ -249,6 +251,11 @@ export function GatewayView() {
               </div>
             )}
           </div>
+        )}
+
+        {/* ── Devices ── */}
+        {tab === 'devices' && (
+          <DevicesPanel connected={status === 'connected'} />
         )}
 
         {/* ── Channels ── */}

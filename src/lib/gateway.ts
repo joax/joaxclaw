@@ -36,6 +36,10 @@ export class GatewayClient {
   private _unsubLog: (() => void) | null = null
 
   readonly log: ConnLog[] = []
+  // Operator scopes the gateway granted this connection (from the connect response's
+  // `auth.scopes`). Empty until the handshake completes. Used to gate admin-only UI
+  // (e.g. device management) client-side; the gateway still enforces authorization.
+  grantedScopes: string[] = []
   onLog?: (entry: ConnLog) => void
   onStatusChange?: (status: 'connecting' | 'connected' | 'disconnected' | 'error', detail?: string) => void
   onHeartbeat?: () => void
@@ -153,9 +157,10 @@ export class GatewayClient {
     }
 
     this._addLog('info', 'Sending connect request…')
-    this.request<unknown>('connect', params as Record<string, unknown>).then(() => {
+    this.request<{ auth?: { scopes?: string[] } }>('connect', params as Record<string, unknown>).then((res) => {
       this._handshakeDone = true
       this._connected = true
+      this.grantedScopes = Array.isArray(res?.auth?.scopes) ? res.auth!.scopes! : []
       this._addLog('info', 'Handshake complete ✓')
       this.onStatusChange?.('connected')
     }).catch((err: unknown) => {
@@ -170,6 +175,7 @@ export class GatewayClient {
     this._teardownListeners()
     this._handshakeDone = false
     this._connected = false
+    this.grantedScopes = []
     wsApi().disconnect()
     this.onStatusChange?.('disconnected')
     this.pending.forEach(cb => cb.reject(new Error('Disconnected')))
