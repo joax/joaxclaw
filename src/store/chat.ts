@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { nanoid } from '../lib/nanoid'
-import type { Conversation, ChatMessage, ContextOverflowInfo, ToolCall, MediaAttachment, ThinkingLevel } from '../lib/types'
+import type { Conversation, ChatMessage, ContextOverflowInfo, ToolCall, SubThread, MediaAttachment, ThinkingLevel } from '../lib/types'
 import { gatewayClient } from '../lib/gateway'
 import { useExtensionsStore } from './extensions'
 import { useConnectionStore } from './connection'
@@ -44,15 +44,143 @@ interface AgentEventPayload {
 
 type UpdateFn = (updater: (msg: ChatMessage) => ChatMessage) => void
 
+// ── Sub-agent threads ───────────────────────────────────────────────────────────
+
+// Session keys look like "agent:<agentId>:<kind>:<uuid>" → recover the agent id.
+function agentIdFromKey(key: string): string {
+  const parts = key.split(':')
+  return parts[0] === 'agent' && parts[1] ? parts[1] : key
+}
+
+function parseResult(result: unknown): Record<string, unknown> {
+  if (typeof result === 'string') { try { return JSON.parse(result) as Record<string, unknown> } catch { return {} } }
+  return (result ?? {}) as Record<string, unknown>
+}
+
+function threadPreview(text: string): string {
+  const oneLine = text.replace(/\s+/g, ' ').trim()
+  return oneLine.length > 140 ? `${oneLine.slice(0, 140)}…` : oneLine
+}
+
+// Immutably upsert a SubThread by id, applying a patch (object or updater).
+function patchThread(
+  threads: SubThread[] | undefined,
+  id: string,
+  patch: Partial<SubThread> | ((t: SubThread) => Partial<SubThread>),
+): SubThread[] {
+  const list = threads ? [...threads] : []
+  const idx = list.findIndex(t => t.id === id)
+  if (idx === -1) {
+    const base: SubThread = { id, status: 'running', content: '', startedAt: new Date().toISOString() }
+    list.push({ ...base, ...(typeof patch === 'function' ? patch(base) : patch) })
+  } else {
+    list[idx] = { ...list[idx], ...(typeof patch === 'function' ? patch(list[idx]) : patch) }
+  }
+  return list
+}
+
+// When the parent turn ends, settle any thread still shown as in-flight so its chip
+// stops spinning (the stream listener is about to detach).
+function finalizeThreads(update: UpdateFn): void {
+  update(m => {
+    if (!m.threads?.length) return m
+    const threads = m.threads.map(t =>
+      t.status === 'spawning' || t.status === 'running'
+        ? { ...t, status: 'done' as const, finishedAt: t.finishedAt ?? new Date().toISOString(), resultPreview: t.resultPreview ?? threadPreview(t.content) }
+        : t)
+    return { ...m, threads }
+  })
+}
+
+// Route one frame from a spawned sub-agent into its SubThread on the parent message.
+function applyChildFrame(event: string, p: ChatEventPayload & AgentEventPayload, threadId: string, update: UpdateFn): void {
+  const set = (patch: Partial<SubThread> | ((t: SubThread) => Partial<SubThread>)) =>
+    update(m => ({ ...m, threads: patchThread(m.threads, threadId, patch) }))
+
+  if (event === 'agent') {
+    const d = p.data
+    if (p.stream === 'thinking' && d?.delta) {
+      set(t => ({ reasoning: (t.reasoning ?? '') + d.delta }))
+    } else if (p.stream === 'tool' || p.stream === 'item') {
+      // Workers surface tool activity as stream:'tool' (phase start/result) or
+      // stream:'item' (phase start/end). Map both into the thread's tool list.
+      const name = d?.name ?? 'tool'
+      const id = d?.toolCallId ?? `${name}:${p.seq ?? ''}`
+      if (d?.phase === 'start') {
+        set(t => ({ status: 'running', toolCalls: [...(t.toolCalls ?? []), { id, name, status: 'running', args: d?.args !== undefined ? JSON.stringify(d.args) : undefined }] }))
+      } else if (d?.phase === 'result' || d?.phase === 'end') {
+        const resultStr = d?.result !== undefined ? (typeof d.result === 'string' ? d.result : JSON.stringify(d.result)) : undefined
+        set(t => {
+          const calls = t.toolCalls ?? []
+          // Match by id, else the most recent running call of the same name.
+          let target = calls.findIndex(tc => tc.id === id)
+          if (target === -1) target = calls.map(tc => tc.name).lastIndexOf(name)
+          if (target === -1) return {}
+          const next = [...calls]
+          next[target] = { ...next[target], status: d?.isError ? 'error' : 'done', result: d?.isError ? undefined : resultStr, error: d?.isError ? (resultStr ?? 'error') : undefined }
+          return { toolCalls: next }
+        })
+      }
+    }
+    return
+  }
+
+  // chat events
+  switch (p.state) {
+    case 'delta':
+      if (p.replace) set({ content: p.deltaText ?? '', status: 'running' })
+      else if (p.deltaText) set(t => ({ content: t.content + p.deltaText, status: 'running' }))
+      break
+    case 'thinking_delta':
+      if (p.deltaText) set(t => ({ reasoning: (t.reasoning ?? '') + p.deltaText }))
+      break
+    case 'final': {
+      const finalText = extractText(p.message)
+      set(t => {
+        const content = t.content || finalText || ''
+        return { status: 'done', finishedAt: new Date().toISOString(), content, resultPreview: threadPreview(content) }
+      })
+      break
+    }
+    case 'error':
+    case 'incomplete':
+      set({ status: 'error', finishedAt: new Date().toISOString(), error: p.errorMessage ?? extractText(p.message) ?? 'error' })
+      break
+    case 'aborted':
+      set(t => ({ status: t.status === 'done' ? 'done' : 'error', finishedAt: new Date().toISOString(), error: t.error ?? 'aborted' }))
+      break
+  }
+}
+
 // Shared chat event handler — used by both sendMessage and watchSession
 function attachChatStream(convId: string, sessionKey: string, update: UpdateFn): void {
+  // Sub-agent thread routing for this stream. childKeys: a spawned child's session key
+  // → its threadId. spawnCalls: a sessions_spawn toolCallId → threadId (the child's
+  // session key only arrives later, on the spawn tool's result).
+  const childKeys = new Map<string, string>()
+  const spawnCalls = new Map<string, string>()
+
   const unsub = gatewayClient.on((frame) => {
     if (frame.event !== 'chat' && frame.event !== 'agent' && frame.event !== 'context-overflow-diag') return
     const p = frame.payload as ChatEventPayload & AgentEventPayload & {
       provider?: string; messages?: number; compactionTokens?: number
-      observedTokens?: number | string; error?: string; diagId?: string
+      observedTokens?: number | string; error?: string; diagId?: string; spawnedBy?: string
     }
-    if (p.sessionKey !== sessionKey) return
+
+    // Frames from a spawned sub-agent (different session key) are routed into a thread
+    // on the live message instead of being dropped. A direct child carries
+    // spawnedBy === our session key; once seen, its key is remembered.
+    if (p.sessionKey !== sessionKey) {
+      let threadId = p.sessionKey ? childKeys.get(p.sessionKey) : undefined
+      if (!threadId && p.sessionKey && p.spawnedBy === sessionKey) {
+        threadId = p.sessionKey
+        childKeys.set(p.sessionKey, threadId)
+        const agentId = agentIdFromKey(p.sessionKey)
+        update(m => ({ ...m, threads: patchThread(m.threads, threadId!, { id: threadId!, childSessionKey: p.sessionKey, agentId, status: 'running' }) }))
+      }
+      if (threadId && (frame.event === 'chat' || frame.event === 'agent')) applyChildFrame(frame.event, p, threadId, update)
+      return
+    }
 
     if (frame.event === 'context-overflow-diag') {
       const overflow: ContextOverflowInfo = {
@@ -81,6 +209,7 @@ function attachChatStream(convId: string, sessionKey: string, update: UpdateFn):
           reasoningStreaming: false,
           waitingForSession: undefined,
         }))
+        finalizeThreads(update)
         activeStreams.delete(convId)
         unsub()
         return
@@ -92,6 +221,20 @@ function attachChatStream(convId: string, sessionKey: string, update: UpdateFn):
       } else if (p.stream === 'tool') {
         if (p.data?.phase === 'start') {
           const toolName = p.data.name ?? 'unknown'
+          // A sessions_spawn is shown as an inline thread, not a raw tool card.
+          if (toolName === 'sessions_spawn') {
+            const tid = p.data.toolCallId ?? nanoid()
+            spawnCalls.set(tid, tid)
+            const a = (p.data.args ?? {}) as Record<string, unknown>
+            const agentId = String(a.agentId ?? a.agent ?? a.taskName ?? '')
+            const task = String(a.task ?? a.prompt ?? a.message ?? '')
+            update(m => ({ ...m, threads: patchThread(m.threads, tid, {
+              id: tid, status: 'spawning',
+              ...(agentId ? { agentId } : {}), ...(task ? { task } : {}),
+              startedAt: new Date().toISOString(),
+            }), waitingForSession: undefined }))
+            return
+          }
           const pluginId = useExtensionsStore.getState().toolNameMap.get(toolName)
           const newCall: ToolCall = {
             id: p.data.toolCallId ?? nanoid(),
@@ -103,6 +246,18 @@ function attachChatStream(convId: string, sessionKey: string, update: UpdateFn):
           update(m => ({ ...m, toolCalls: [...(m.toolCalls ?? []), newCall], waitingForSession: undefined }))
         } else if (p.data?.phase === 'result') {
           const callId = p.data.toolCallId
+          // A sessions_spawn result carries the new child session key — link it to the thread.
+          if (callId && spawnCalls.has(callId)) {
+            const tid = spawnCalls.get(callId)!
+            const r = parseResult(p.data.result)
+            const childKey = String(r.childSessionKey ?? r.sessionKey ?? r.key ?? '')
+            if (childKey) childKeys.set(childKey, tid)
+            update(m => ({ ...m, threads: patchThread(m.threads, tid, t => ({
+              status: t.status === 'done' || t.status === 'error' ? t.status : 'running',
+              ...(childKey ? { childSessionKey: childKey, ...(t.agentId ? {} : { agentId: agentIdFromKey(childKey) }) } : {}),
+            })) }))
+            return
+          }
           const rawResult = p.data!.result
           const resultStr = rawResult !== undefined
             ? (typeof rawResult === 'string' ? rawResult : JSON.stringify(rawResult, null, 2))
@@ -154,6 +309,7 @@ function attachChatStream(convId: string, sessionKey: string, update: UpdateFn):
         reasoningStreaming: false,
         waitingForSession: undefined
       }))
+      finalizeThreads(update)
       activeStreams.delete(convId)
       unsub()
     } else if (p.state === 'error' || p.state === 'incomplete') {
@@ -168,6 +324,7 @@ function attachChatStream(convId: string, sessionKey: string, update: UpdateFn):
         reasoningStreaming: false,
         waitingForSession: undefined,
       }))
+      finalizeThreads(update)
       activeStreams.delete(convId)
       unsub()
     } else if (p.state === 'aborted') {
@@ -178,6 +335,7 @@ function attachChatStream(convId: string, sessionKey: string, update: UpdateFn):
         reasoningStreaming: false,
         ...(abortMsg && !m.content ? { content: `Aborted: ${abortMsg}` } : {})
       }))
+      finalizeThreads(update)
       activeStreams.delete(convId)
       unsub()
     }

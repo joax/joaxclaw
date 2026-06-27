@@ -79,8 +79,10 @@ export function MessageInput({ convId }: Props) {
   const isStreaming = conv?.messages.some(m => m.streaming) ?? false
 
   const streamingMsg = conv?.messages.findLast(m => m.streaming)
+  // A streaming sub-agent thread keeps the turn alive even when the parent is idle.
+  const threadsSignal = streamingMsg?.threads?.reduce((n, t) => n + t.content.length + (t.reasoning?.length ?? 0) + (t.toolCalls?.length ?? 0), 0) ?? 0
   const activityKey = streamingMsg
-    ? `${streamingMsg.content.length}:${streamingMsg.reasoning?.length ?? 0}:${streamingMsg.toolCalls?.length ?? 0}:${streamingMsg.toolCalls?.filter(t => t.status === 'running').length ?? 0}:${streamingMsg.waitingForSession ?? ''}`
+    ? `${streamingMsg.content.length}:${streamingMsg.reasoning?.length ?? 0}:${streamingMsg.toolCalls?.length ?? 0}:${streamingMsg.toolCalls?.filter(t => t.status === 'running').length ?? 0}:${streamingMsg.waitingForSession ?? ''}:${threadsSignal}`
     : null
   const prevActivityKey = useRef<string | null>(null)
 

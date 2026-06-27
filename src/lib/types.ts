@@ -84,6 +84,25 @@ export interface ToolCall {
   pluginId?: string
 }
 
+// A spawned sub-agent's conversation, captured inline as a collapsible "thread"
+// anchored at the spawn point in the parent assistant message. The sub-agent runs in
+// its own gateway session (childSessionKey); we route its live frames here via the
+// frame's `spawnedBy` link to the parent session.
+export interface SubThread {
+  id: string                    // stable id: the sessions_spawn toolCallId, else the child session key
+  childSessionKey?: string
+  agentId?: string              // e.g. "research-worker", derived from the child session key
+  task?: string                 // the brief the parent handed the sub-agent
+  status: 'spawning' | 'running' | 'done' | 'error'
+  content: string               // the sub-agent's streamed answer
+  reasoning?: string
+  toolCalls?: ToolCall[]
+  resultPreview?: string        // one-line summary shown on the collapsed chip
+  startedAt: string
+  finishedAt?: string
+  error?: string
+}
+
 export interface ContextOverflowInfo {
   provider?: string
   messages?: number
@@ -105,6 +124,7 @@ export interface ChatMessage {
   streaming?: boolean
   reasoningStreaming?: boolean
   waitingForSession?: string   // key of sub-session being awaited, if known
+  threads?: SubThread[]        // spawned sub-agents, shown as inline expandable threads
   contextOverflow?: ContextOverflowInfo
   model?: string               // actual model used for this assistant message (provider/model or bare model id)
   interrupted?: boolean        // turn cut off by a gateway drop/restart; shows a live reconnect notice
