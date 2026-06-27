@@ -195,6 +195,7 @@ function computeRevisionSummary(prev: TeamBlueprint | null, next: TeamBlueprint)
   else if (prev.members.some((m, i) => m.agentId !== next.members[i]?.agentId || m.role !== next.members[i]?.role))
     parts.push('members updated')
   if (prev.outputContract !== next.outputContract) parts.push('output contract updated')
+  if ((prev.workspace ?? '') !== (next.workspace ?? '')) parts.push(next.workspace ? 'workspace set' : 'workspace cleared')
   const prevRoutes = prev.routes?.length ?? 0
   const nextRoutes = next.routes?.length ?? 0
   if (prevRoutes !== nextRoutes) parts.push(nextRoutes === 0 ? 'routing removed' : `${nextRoutes} route${nextRoutes !== 1 ? 's' : ''} configured`)
@@ -279,10 +280,11 @@ interface TeamDraft {
   members: TeamMemberDef[]
   routes: TeamRoute[]
   outputContract: string
+  workspace: string
 }
 
 function emptyDraft(): TeamDraft {
-  return { name: '', description: '', controllerAgentId: '', members: [], routes: [], outputContract: '' }
+  return { name: '', description: '', controllerAgentId: '', members: [], routes: [], outputContract: '', workspace: '' }
 }
 
 function draftFromBlueprint(bp: TeamBlueprint): TeamDraft {
@@ -293,6 +295,7 @@ function draftFromBlueprint(bp: TeamBlueprint): TeamDraft {
     members: bp.members.map(m => ({ ...m })),
     routes: (bp.routes ?? []).map(r => ({ ...r, branches: r.branches.map(b => ({ ...b })) })),
     outputContract: bp.outputContract ?? '',
+    workspace: bp.workspace ?? '',
   }
 }
 
@@ -504,6 +507,7 @@ function TeamBuilder({
       members: draft.members,
       routes: cleanRoutes.length > 0 ? cleanRoutes : undefined,
       outputContract: draft.outputContract.trim() || undefined,
+      workspace: draft.workspace.trim() || undefined,
     }
 
     // New teams: build at version 1 without bumping. Edits: bump version.
@@ -612,6 +616,32 @@ function TeamBuilder({
           rows={3}
           style={{ ...inp, resize: 'vertical', fontFamily: 'inherit', marginTop: 4 }}
         />
+      </div>
+
+      {/* Shared workspace (repo) */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        <label style={{ fontSize: 11, color: 'var(--text-secondary)', fontWeight: 600 }}>Shared Workspace (repository)</label>
+        <p style={{ fontSize: 11, color: 'var(--text-secondary)', margin: 0 }}>
+          A directory all members edit together (e.g. a code repo). Members are spawned with this as their working dir, so their file changes are shared on disk and flow across the handoff. Leave blank for non-coding teams.
+        </p>
+        <input
+          value={draft.workspace}
+          onChange={e => setDraft(d => ({ ...d, workspace: e.target.value }))}
+          placeholder="/home/you/repos/my-project"
+          spellCheck={false}
+          style={{ ...inp, fontFamily: 'monospace', marginTop: 4 }}
+        />
+        {!draft.workspace.trim() && draft.members.length > 0 && (
+          <p style={{ fontSize: 11, color: 'var(--text-secondary)', opacity: 0.75, margin: '2px 0 0' }}>
+            No workspace — members run in isolated sandboxes and can't edit a shared repo; only text passes between them.
+          </p>
+        )}
+        {draft.workspace.trim() && draft.routes.length > 0 && (
+          <p style={{ fontSize: 11, color: 'var(--warning)', margin: '2px 0 0', display: 'flex', alignItems: 'center', gap: 5 }}>
+            <AlertTriangle size={11} style={{ flexShrink: 0 }} />
+            Branching/parallel members may edit the same files at once and conflict — sequential teams are safest on a shared repo.
+          </p>
+        )}
       </div>
 
       {error && (
@@ -1181,6 +1211,12 @@ function TeamDetail({
 
         {tab === 'docs' && (
           <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 16 }}>
+            {blueprint.workspace && (
+              <div>
+                <p style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', marginBottom: 6 }}>Shared Workspace</p>
+                <p style={{ fontSize: 13, color: 'var(--text-primary)', lineHeight: 1.6, fontFamily: 'monospace' }}>{blueprint.workspace}</p>
+              </div>
+            )}
             {blueprint.outputContract && (
               <div>
                 <p style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', marginBottom: 6 }}>Output Contract</p>

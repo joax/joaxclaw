@@ -80,6 +80,7 @@ export interface ProcessDef {
   controllerAgentId?: string  // agent ID to use as Team Lead when executing
   type?: 'process' | 'team'
   outputContract?: string     // team: description of expected final output
+  workspace?: string          // team: shared working dir (repo) every member edits via cwd
 
   path: string
   body: string
@@ -282,6 +283,7 @@ export function parseProcessFile(path: string, text: string): ProcessDef | null 
       controllerAgentId: fm.controller ? String(fm.controller) : undefined,
       type: fm.type === 'team' ? 'team' : 'process',
       outputContract: fm.outputContract ? String(fm.outputContract) : undefined,
+      workspace: fm.workspace ? String(fm.workspace) : undefined,
       path,
       body: cleanBody,
       raw: text,
@@ -312,6 +314,7 @@ export function serializeProcess(def: ProcessDef): string {
   if (def.controllerAgentId) lines.push(`controller: ${yamlStr(def.controllerAgentId)}`)
   if (def.type === 'team') lines.push(`type: team`)
   if (def.outputContract) lines.push(`outputContract: ${yamlStr(def.outputContract)}`)
+  if (def.workspace) lines.push(`workspace: ${yamlStr(def.workspace)}`)
   lines.push('---')
 
   // Graph is stored as JSON in an HTML comment so we avoid round-tripping
