@@ -33,7 +33,7 @@ export function buildTeamProcessDef(bp: TeamBlueprint, compiledPath: string): Pr
 // ── Linear compiler (original logic, unchanged) ───────────────────────────────
 
 function buildLinearTeamDef(bp: TeamBlueprint, compiledPath: string): ProcessDef {
-  const { id, name, description, controllerAgentId, members, outputContract } = bp
+  const { id, name, description, controllerAgentId, members, outputContract, workspace } = bp
 
   const nodes: GraphNode[] = []
   const edges: GraphEdge[] = []
@@ -95,6 +95,7 @@ function buildLinearTeamDef(bp: TeamBlueprint, compiledPath: string): ProcessDef
     id, name, description,
     type: 'team',
     outputContract,
+    ...(workspace ? { workspace } : {}),
     version: bp.version,
     tags: bp.tags ?? ['team'],
     agents,
@@ -112,7 +113,7 @@ function buildLinearTeamDef(bp: TeamBlueprint, compiledPath: string): ProcessDef
 // ── Branching compiler ────────────────────────────────────────────────────────
 
 function buildBranchingTeamDef(bp: TeamBlueprint, compiledPath: string): ProcessDef {
-  const { id, name, description, controllerAgentId, members, outputContract } = bp
+  const { id, name, description, controllerAgentId, members, outputContract, workspace } = bp
   const routes = bp.routes!
 
   // Lookups
@@ -243,6 +244,7 @@ function buildBranchingTeamDef(bp: TeamBlueprint, compiledPath: string): Process
     id, name, description,
     type: 'team',
     outputContract,
+    ...(workspace ? { workspace } : {}),
     version: bp.version,
     tags: bp.tags ?? ['team'],
     agents,

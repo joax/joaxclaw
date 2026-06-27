@@ -1148,6 +1148,41 @@ describe('parseRunRequest', () => {
   })
 })
 
+// ── Shared workspace (repo-editing teams) ─────────────────────────────────────
+
+describe('shared workspace', () => {
+  const compiledPath = compiledMdPath('test-team', '/teams')
+
+  it('compiles the workspace onto the ProcessDef and through compileProcessToJob', () => {
+    const def = buildTeamProcessDef(makeBp({ workspace: '/home/me/repos/app' }), compiledPath)
+    expect(def.workspace).toBe('/home/me/repos/app')
+    expect(compileProcessToJob(def).workspace).toBe('/home/me/repos/app')
+  })
+
+  it('survives serialize → parse round-trip via the compiled .md', () => {
+    const def = buildTeamProcessDef(makeBp({ workspace: '/repo/x' }), compiledPath)
+    const reparsed = parseProcessFile(compiledPath, serializeProcess(def))
+    expect(reparsed?.workspace).toBe('/repo/x')
+  })
+
+  it('launch prompt injects shared-workspace rules: cwd, filesystem handoff, git checkpoints', () => {
+    const def = buildTeamProcessDef(makeBp({ workspace: '/home/me/repos/app' }), compiledPath)
+    const prompt = buildLaunchPrompt(def, compileProcessToJob(def))
+    expect(prompt).toMatch(/SHARED WORKSPACE: \/home\/me\/repos\/app/)
+    expect(prompt).toContain('cwd: "/home/me/repos/app"')   // members spawned into the repo
+    expect(prompt).toMatch(/git -C "\/home\/me\/repos\/app"/) // per-step checkpoint guidance
+    expect(prompt).toMatch(/SHARE THE FILESYSTEM/)            // filesystem-first handoff
+  })
+
+  it('omits all workspace rules when no workspace is set (plain delegation)', () => {
+    const def = buildTeamProcessDef(makeBp(), compiledPath)
+    const prompt = buildLaunchPrompt(def, compileProcessToJob(def))
+    expect(prompt).not.toMatch(/SHARED WORKSPACE/)
+    expect(prompt).not.toContain('cwd:')
+    expect(prompt).toContain('call sessions_spawn with the node\'s agentId and task')
+  })
+})
+
 // ── Run objective (reusable team + per-run task) ──────────────────────────────
 
 describe('buildLaunchPrompt — run objective', () => {

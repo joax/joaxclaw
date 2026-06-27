@@ -54,6 +54,10 @@ export interface TeamBlueprint {
   members: TeamMemberDef[]
   routes?: TeamRoute[]     // optional conditional routing; absent/empty = linear flow
   outputContract?: string
+  // Shared working directory (a repo) that every member operates in. When set, members
+  // are spawned with cwd=workspace so their file edits land on the same files and flow
+  // across the handoff chain — turning the team into a real repo-editing collaboration.
+  workspace?: string
   tags?: string[]
   createdAt: number    // Unix ms
   updatedAt: number    // Unix ms
