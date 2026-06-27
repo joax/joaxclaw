@@ -196,7 +196,7 @@ async function countLiveInTree(rootKey: string, includeRoot: boolean): Promise<n
     sessions = res.sessions ?? []
   } catch { return -1 }
   const isActive = (s: Record<string, unknown>) =>
-    s.hasActiveRun === true || /^(active|running|busy)$/i.test(String(s.status ?? ''))
+    s.hasActiveRun === true || s.hasActiveSubagentRun === true || /^(active|running|busy)$/i.test(String(s.status ?? ''))
   const byParent = new Map<string, Array<Record<string, unknown>>>()
   const byKey = new Map<string, Record<string, unknown>>()
   for (const s of sessions) {
@@ -221,14 +221,25 @@ async function countLiveInTree(rootKey: string, includeRoot: boolean): Promise<n
   return live
 }
 
-// Poll the gateway until the run's session tree is idle, then mark it done. Requires
-// two consecutive idle reads (the tree looks momentarily idle between a worker
-// finishing and the controller resuming). includeRoot=true when re-attaching, since
-// the controller may still be the only thing running.
+// Poll the gateway until the run's session tree is GENUINELY idle, then mark it done.
+//
+// Completion is gated on a sustained idle streak — never on a timer. A member can work
+// for a long time; while any session in the tree is active the watcher just keeps
+// polling. The wall-clock value below is only the watcher's own lifetime bound; it does
+// NOT force-complete an active tree (that was the bug: a member working past the cap got
+// the whole flow falsely marked done). If the lifetime cap is hit while still active, we
+// stop watching but leave the run running and keep routing, so the controller's next
+// `final` re-arms this watcher and it eventually completes for real.
+const COMPLETION_GRACE_MS = 1500            // let sessions settle before the first read
+const COMPLETION_IDLE_READS = 3             // consecutive idle reads required to confirm done
+const COMPLETION_IDLE_GAP_MS = 3000         // spacing between idle reads (≈6–9s sustained idle)
+const COMPLETION_ACTIVE_POLL_MS = 5000      // re-poll cadence while the tree is active
+const COMPLETION_WATCH_MAX_MS = 2 * 60 * 60_000  // watcher lifetime (2h) — generous; agents can run long
+
 async function watchTreeUntilIdle(processId: string, rootKey: string, includeRoot: boolean, openingLog?: string): Promise<void> {
   if (_completionGuards.has(processId)) return
   _completionGuards.add(processId)
-  const deadline = Date.now() + 10 * 60_000   // hard cap — never hang
+  const deadline = Date.now() + COMPLETION_WATCH_MAX_MS
   if (openingLog) {
     useProcessesStore.setState(s => {
       const run = s.runs[processId]; if (!run) return s
@@ -237,14 +248,15 @@ async function watchTreeUntilIdle(processId: string, rootKey: string, includeRoo
   }
   let idleStreak = 0
   let announced = false
+  let confirmedIdle = false   // only true once we observe a sustained idle streak
   try {
-    await new Promise(r => setTimeout(r, 1500))  // grace: let sessions settle before the first read
+    await new Promise(r => setTimeout(r, COMPLETION_GRACE_MS))
     while (Date.now() < deadline) {
       if (useProcessesStore.getState().runs[processId]?.status !== 'running') return  // superseded by a live final / abort
       const live = await countLiveInTree(rootKey, includeRoot)
       if (live === 0) {
-        if (++idleStreak >= 2) break
-        await new Promise(r => setTimeout(r, 2000))
+        if (++idleStreak >= COMPLETION_IDLE_READS) { confirmedIdle = true; break }
+        await new Promise(r => setTimeout(r, COMPLETION_IDLE_GAP_MS))
         continue
       }
       idleStreak = 0  // active (>0) or query failed (<0): not idle
@@ -255,18 +267,29 @@ async function watchTreeUntilIdle(processId: string, rootKey: string, includeRoo
           return { runs: { ...s.runs, [processId]: { ...run, currentAgent: undefined, log: [...run.log, { ts: Date.now(), text: `Controller done — waiting for ${live} worker(s)…` }] } } }
         })
       }
-      await new Promise(r => setTimeout(r, 4000))
+      await new Promise(r => setTimeout(r, COMPLETION_ACTIVE_POLL_MS))
     }
   } finally {
     _completionGuards.delete(processId)
-    clearRunRouting(processId)
-    useProcessesStore.setState(s => {
-      const run = s.runs[processId]
-      if (!run || run.status !== 'running') return s
-      const updated: ProcessRun = { ...run, status: 'done', finishedAt: Date.now(), currentAgent: undefined, log: [...run.log, { ts: Date.now(), text: 'Process completed' }] }
-      persistRun(updated)
-      return { runs: { ...s.runs, [processId]: updated } }
-    })
+    if (confirmedIdle) {
+      // The tree went genuinely idle for a sustained window — the run is done.
+      clearRunRouting(processId)
+      useProcessesStore.setState(s => {
+        const run = s.runs[processId]
+        if (!run || run.status !== 'running') return s
+        const updated: ProcessRun = { ...run, status: 'done', finishedAt: Date.now(), currentAgent: undefined, log: [...run.log, { ts: Date.now(), text: 'Process completed' }] }
+        persistRun(updated)
+        return { runs: { ...s.runs, [processId]: updated } }
+      })
+    } else {
+      // Lifetime cap reached while still active — do NOT complete a working run. Stop
+      // watching but keep routing so a later controller `final` re-arms this watcher.
+      useProcessesStore.setState(s => {
+        const run = s.runs[processId]
+        if (!run || run.status !== 'running') return s
+        return { runs: { ...s.runs, [processId]: { ...run, log: [...run.log, { ts: Date.now(), text: 'Still active on the gateway — paused auto-monitoring; will resume on the next update. Use Stop to end it.' }] } } }
+      })
+    }
   }
 }
 
