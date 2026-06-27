@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { ChevronDown, ChevronRight, BrainCircuit, CheckCircle2, XCircle, Loader2, Clock, Hourglass, Terminal, PenLine, FileText, Search, Globe, Plug, Bot, Wrench, FolderSearch, AlertTriangle, Zap, ThumbsUp, ThumbsDown } from 'lucide-react'
-import type { ChatMessage, ContextOverflowInfo, ToolCall } from '../../lib/types'
+import type { ChatMessage, ContextOverflowInfo, ToolCall, SubThread } from '../../lib/types'
 import { useExtensionsStore } from '../../store/extensions'
 import { useOllamaProgress } from '../../store/ollamaProgress'
 import { useSettingsStore } from '../../store/settings'
@@ -336,7 +336,11 @@ export function AssistantMessage({ message, showTools = true, showReasoning = tr
   const { thinking: inlineThinking, text: cleanContent } = extractThinkTags(noActions)
   const allReasoning = [message.reasoning, inlineThinking].filter(Boolean).join('\n\n')
   const hasReasoning = !!allReasoning
-  const hasTools = !!(message.toolCalls?.length)
+  // sessions_spawn is represented as an inline thread, not a raw tool card.
+  const visibleToolCalls = (message.toolCalls ?? []).filter(c => c.name !== 'sessions_spawn')
+  const hasTools = visibleToolCalls.length > 0
+  const threads = message.threads ?? []
+  const hasThreads = threads.length > 0
 
   // Stale streaming detection: if streaming but no content updates for STALE_THRESHOLD_MS, show waiting indicator
   const [isStale, setIsStale] = useState(false)
@@ -345,8 +349,12 @@ export function AssistantMessage({ message, showTools = true, showReasoning = tr
   // advancing — it just hasn't emitted a token yet — so feed it into the activity key
   // (resets the stale timer) and suppress the "model stopped" banner below.
   const promptProgress = useOllamaProgress(s => s.progress)
+  // A spawned sub-agent streaming counts as activity (the parent yields while it works)
+  // — fold its progress into the key so the parent doesn't look stalled during delegation.
+  const hasRunningThread = threads.some(t => t.status === 'running' || t.status === 'spawning')
+  const threadsSignal = threads.reduce((n, t) => n + t.content.length + (t.reasoning?.length ?? 0) + (t.toolCalls?.length ?? 0), 0)
   // Include running tool count so the timer resets on tool_start and tool_done transitions
-  const activityKey = `${message.content.length}:${message.reasoning?.length ?? 0}:${message.toolCalls?.length ?? 0}:${runningToolCount}:${promptProgress ?? ''}`
+  const activityKey = `${message.content.length}:${message.reasoning?.length ?? 0}:${message.toolCalls?.length ?? 0}:${runningToolCount}:${promptProgress ?? ''}:${threadsSignal}`
   const prevActivityKey = useRef(activityKey)
 
   useEffect(() => {
@@ -361,8 +369,8 @@ export function AssistantMessage({ message, showTools = true, showReasoning = tr
 
   // A running tool call is not "waiting" — suppress the indicator while tools are actively executing
   const hasRunningTool = runningToolCount > 0
-  const isWaitingForSession = message.streaming && !hasRunningTool && !!message.waitingForSession
-  const isStalled = isStale && message.streaming && !hasRunningTool && !message.waitingForSession && promptProgress == null
+  const isWaitingForSession = message.streaming && !hasRunningTool && !hasRunningThread && !!message.waitingForSession
+  const isStalled = isStale && message.streaming && !hasRunningTool && !hasRunningThread && !message.waitingForSession && promptProgress == null
 
   const chatMode = useSettingsStore(s => s.chatMode)
   const [showDetails, setShowDetails] = useState(false)
@@ -371,7 +379,7 @@ export function AssistantMessage({ message, showTools = true, showReasoning = tr
   if (chatMode === 'basic') {
     const cur = currentActivity(message, promptProgress)
     const steps = completedSteps(message)
-    const hasDetails = hasReasoning || hasTools || gatewayActions.length > 0
+    const hasDetails = hasReasoning || hasTools || hasThreads || gatewayActions.length > 0
     return (
       <div className="flex justify-start animate-fade-in">
         <div className="max-w-[85%] min-w-0 w-full">
@@ -455,7 +463,8 @@ export function AssistantMessage({ message, showTools = true, showReasoning = tr
                       in Basic mode, so Details is not gated by them. */}
                   {hasReasoning && <ReasoningBlock text={allReasoning} streaming={false} />}
                   {gatewayActions.length > 0 && <GatewayActionBlock actions={gatewayActions} />}
-                  {hasTools && <ToolCallsBlock calls={message.toolCalls!} />}
+                  {hasThreads && <ThreadsBlock threads={threads} />}
+                  {hasTools && <ToolCallsBlock calls={visibleToolCalls} />}
                 </div>
               )}
             </div>
@@ -511,11 +520,16 @@ export function AssistantMessage({ message, showTools = true, showReasoning = tr
 
         {/* Tool calls */}
         {hasTools && showTools && (
-          <ToolCallsBlock calls={message.toolCalls!} />
+          <ToolCallsBlock calls={visibleToolCalls} />
         )}
 
-        {/* Waiting for sub-session indicator */}
-        {isWaitingForSession && (
+        {/* Spawned sub-agents — inline threads */}
+        {hasThreads && (
+          <ThreadsBlock threads={threads} />
+        )}
+
+        {/* Waiting for sub-session indicator (only when no thread already represents it) */}
+        {isWaitingForSession && !hasThreads && (
           <WaitingBlock sessionKey={message.waitingForSession} />
         )}
 
@@ -644,8 +658,8 @@ function PromptProgress() {
 
 // ── Reasoning block ───────────────────────────────────────────────────────────
 
-function ReasoningBlock({ text, streaming }: { text: string; streaming: boolean }) {
-  const [open, setOpen] = useState(true)
+function ReasoningBlock({ text, streaming, defaultOpen = true }: { text: string; streaming: boolean; defaultOpen?: boolean }) {
+  const [open, setOpen] = useState(defaultOpen)
 
   // Auto-open while streaming, keep state after done
   const isOpen = streaming ? true : open
@@ -984,6 +998,87 @@ function ToolStatusIcon({ status }: { status: ToolCall['status'] }) {
   if (status === 'error') return <XCircle size={13} style={{ color: 'var(--danger)', flexShrink: 0 }} />
   if (status === 'running') return <Loader2 size={13} className="animate-spin" style={{ color: 'var(--warning)', flexShrink: 0 }} />
   return <div style={{ width: 13, height: 13, borderRadius: '50%', border: '2px solid var(--border)', flexShrink: 0 }} />
+}
+
+// ── Sub-agent threads (Slack-style inline threads) ──────────────────────────────
+
+function threadElapsed(t: SubThread): string {
+  const end = t.finishedAt ? new Date(t.finishedAt).getTime() : Date.now()
+  const s = Math.max(0, Math.round((end - new Date(t.startedAt).getTime()) / 1000))
+  if (s < 60) return `${s}s`
+  return `${Math.floor(s / 60)}m ${s % 60}s`
+}
+
+// One-line "what's happening" shown on the collapsed chip.
+function threadPeek(t: SubThread): string {
+  if (t.status === 'error') return t.error || 'failed'
+  if (t.status === 'done') return t.resultPreview || t.content.replace(/\s+/g, ' ').trim().slice(0, 140) || 'done'
+  const runningTool = (t.toolCalls ?? []).find(c => c.status === 'running')
+  if (runningTool) return `${runningTool.name}…`
+  if (t.content) return t.content.replace(/\s+/g, ' ').trim().slice(-120)
+  return t.status === 'spawning' ? 'starting…' : 'working…'
+}
+
+function ThreadsBlock({ threads }: { threads: SubThread[] }) {
+  return (
+    <div className="mb-2 flex flex-col gap-1.5">
+      {threads.map(t => <ThreadChip key={t.id} thread={t} />)}
+    </div>
+  )
+}
+
+function ThreadChip({ thread: t }: { thread: SubThread }) {
+  const [open, setOpen] = useState(false)
+  const running = t.status === 'spawning' || t.status === 'running'
+  const tone = t.status === 'error' ? 'var(--danger)' : t.status === 'done' ? 'var(--success)' : 'var(--accent)'
+  const toolCount = (t.toolCalls ?? []).length
+  const name = t.agentId || 'sub-agent'
+
+  const StatusIcon = t.status === 'error' ? XCircle : t.status === 'done' ? CheckCircle2 : Loader2
+
+  return (
+    <div style={{ borderRadius: 'var(--radius)', border: '1px solid var(--border)', borderLeft: `2px solid ${tone}`, background: 'var(--bg-surface)', overflow: 'hidden' }}>
+      {/* Chip header */}
+      <div
+        onClick={() => setOpen(o => !o)}
+        className="cursor-pointer"
+        style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 10px' }}
+      >
+        {open ? <ChevronDown size={12} style={{ color: 'var(--text-secondary)', flexShrink: 0 }} /> : <ChevronRight size={12} style={{ color: 'var(--text-secondary)', flexShrink: 0 }} />}
+        <Bot size={13} style={{ color: tone, flexShrink: 0 }} />
+        <span className="text-xs font-semibold" style={{ color: 'var(--text-primary)', flexShrink: 0 }}>{name}</span>
+        <StatusIcon size={11} className={running ? 'animate-spin' : ''} style={{ color: tone, flexShrink: 0 }} />
+        {/* live one-liner peek */}
+        <span className="text-xs truncate flex-1" style={{ color: 'var(--text-secondary)' }} title={t.task}>
+          {threadPeek(t)}
+        </span>
+        <span className="text-xs shrink-0" style={{ color: 'var(--text-secondary)', opacity: 0.7, fontVariantNumeric: 'tabular-nums' }}>
+          {toolCount > 0 ? `${toolCount} tool${toolCount !== 1 ? 's' : ''} · ` : ''}{threadElapsed(t)}
+        </span>
+      </div>
+
+      {/* Expanded: the sub-agent's conversation, nested under a thread line */}
+      {open && (
+        <div style={{ borderTop: '1px solid var(--border)', padding: '8px 10px 8px 12px', marginLeft: 8, borderLeft: `1px solid color-mix(in srgb, ${tone} 30%, transparent)`, background: 'color-mix(in srgb, var(--bg-elevated) 40%, transparent)' }}>
+          {t.task && (
+            <div className="text-xs mb-2" style={{ color: 'var(--text-secondary)' }}>
+              <span style={{ opacity: 0.6 }}>task · </span>{t.task}
+            </div>
+          )}
+          {t.reasoning && <ReasoningBlock text={t.reasoning} streaming={running} defaultOpen={false} />}
+          {(t.toolCalls?.length ?? 0) > 0 && <ToolCallsBlock calls={t.toolCalls!} />}
+          {t.content
+            ? <div className="text-sm" style={{ lineHeight: 1.6 }}><MarkdownContent text={t.content} streaming={running} /></div>
+            : running ? <span className="streaming-cursor" style={{ color: 'var(--text-secondary)' }} /> : null}
+          {(t.agentId || t.childSessionKey) && (
+            <div className="text-xs mt-2" style={{ color: 'var(--text-secondary)', opacity: 0.5, fontFamily: 'monospace' }}>
+              {t.childSessionKey ? t.childSessionKey.slice(0, 28) + (t.childSessionKey.length > 28 ? '…' : '') : t.agentId}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
 }
 
 function WaitingBlock({ sessionKey }: { sessionKey?: string }) {
