@@ -8,6 +8,7 @@ import { useConnectionStore } from '../../store/connection'
 import { currentActivity, completedSteps, randomWhimsy, nextWhimsy } from '../../lib/activityLabels'
 import type { LucideIcon } from 'lucide-react'
 import { formatTimestamp } from '../../lib/dateUtils'
+import { extractThinkTags, fmtThoughtDuration } from '../../lib/reasoning'
 import { MarkdownContent } from './MarkdownContent'
 import { AudioPlayer } from './AudioPlayer'
 import { WorkspaceImage, VideoPlayer } from './WorkspaceMedia'
@@ -15,25 +16,6 @@ import { useFeedbackStore } from '../../store/feedback'
 
 const STALE_THRESHOLD_MS = 15_000
 
-// Extract <think>…</think> blocks that some models embed directly in content
-function extractThinkTags(content: string): { thinking: string; text: string } {
-  const parts: string[] = []
-  let cleaned = content.replace(/<think>([\s\S]*?)<\/think>/g, (_, inner: string) => {
-    parts.push(inner.trim())
-    return ''
-  })
-  // Handle unclosed <think> tag — strip it and treat any following text as reasoning
-  const openIdx = cleaned.lastIndexOf('<think>')
-  if (openIdx !== -1) {
-    const inner = cleaned.slice(openIdx + 7).trim()
-    if (inner) parts.push(inner)
-    cleaned = cleaned.slice(0, openIdx)
-  }
-  // Strip trailing partial <think> prefix (e.g. "<", "<t", "<th", "<thi", "<thin", "<think")
-  // that arrives when a stream cuts off mid-tag
-  cleaned = cleaned.replace(/<(?:t(?:h(?:i(?:n(?:k>?)?)?)?)?)?$/, '')
-  return { thinking: parts.join('\n\n'), text: cleaned.trim() }
-}
 
 // Strip gateway protocol wrapper tags from content.
 // Handles: <final>, </final>, variants with attributes (<final_answer>),
@@ -461,7 +443,7 @@ export function AssistantMessage({ message, showTools = true, showReasoning = tr
                 <div className="mt-2">
                   {/* Full advanced view for this message — the header toggles are disabled
                       in Basic mode, so Details is not gated by them. */}
-                  {hasReasoning && <ReasoningBlock text={allReasoning} streaming={false} />}
+                  {hasReasoning && <ReasoningBlock text={allReasoning} streaming={false} answerStarted durationMs={message.reasoningDurationMs} />}
                   {gatewayActions.length > 0 && <GatewayActionBlock actions={gatewayActions} />}
                   {hasThreads && <ThreadsBlock threads={threads} />}
                   {hasTools && <ToolCallsBlock calls={visibleToolCalls} />}
@@ -510,6 +492,8 @@ export function AssistantMessage({ message, showTools = true, showReasoning = tr
           <ReasoningBlock
             text={allReasoning}
             streaming={(message.reasoningStreaming) || (!!inlineThinking && (message.streaming ?? false))}
+            answerStarted={!!cleanContent}
+            durationMs={message.reasoningDurationMs}
           />
         )}
 
@@ -658,50 +642,48 @@ function PromptProgress() {
 
 // ── Reasoning block ───────────────────────────────────────────────────────────
 
-function ReasoningBlock({ text, streaming, defaultOpen = true }: { text: string; streaming: boolean; defaultOpen?: boolean }) {
-  const [open, setOpen] = useState(defaultOpen)
+// Reasoning / chain-of-thought, shown distinct from the answer. While the model is
+// still thinking (no answer yet) it streams open so you can watch; the moment the
+// answer starts it auto-collapses to a quiet "Thought for Ns" pill (tap to reopen).
+function ReasoningBlock({ text, streaming, answerStarted = false, durationMs }: { text: string; streaming: boolean; answerStarted?: boolean; durationMs?: number }) {
+  const [open, setOpen] = useState(false)
 
-  // Auto-open while streaming, keep state after done
-  const isOpen = streaming ? true : open
+  const thinkingLive = streaming && !answerStarted   // actively thinking, no answer yet
+  const isOpen = thinkingLive || open
+  const label = thinkingLive
+    ? 'Thinking'
+    : durationMs != null ? `Thought for ${fmtThoughtDuration(durationMs)}` : 'Reasoning'
 
   return (
-    <div
-      className="reasoning-block mb-2"
-      style={{ borderRadius: 'var(--radius)', overflow: 'hidden' }}
-    >
+    <div className="reasoning-block mb-2" style={{ borderRadius: 'var(--radius)', overflow: 'hidden' }}>
       <button
-        onClick={() => !streaming && setOpen(o => !o)}
-        className="flex items-center gap-2 w-full px-3 py-2 text-left"
-        style={{
-          background: 'none',
-          border: 'none',
-          cursor: streaming ? 'default' : 'pointer',
-          color: 'var(--text-secondary)',
-          fontSize: 12,
-          fontWeight: 500
-        }}
+        onClick={() => !thinkingLive && setOpen(o => !o)}
+        className="flex items-center gap-1.5 px-3 py-1.5 text-left"
+        style={{ background: 'none', border: 'none', cursor: thinkingLive ? 'default' : 'pointer', color: 'var(--text-secondary)', fontSize: 12, fontWeight: 500 }}
       >
+        {!thinkingLive && (isOpen
+          ? <ChevronDown size={12} style={{ color: 'var(--text-secondary)', flexShrink: 0 }} />
+          : <ChevronRight size={12} style={{ color: 'var(--text-secondary)', flexShrink: 0 }} />)}
         <BrainCircuit size={13} style={{ color: 'var(--accent)', flexShrink: 0 }} />
-        <span style={{ color: 'var(--accent)' }}>Reasoning</span>
-        {streaming && <Loader2 size={11} className="animate-spin" style={{ color: 'var(--accent)' }} />}
-        {!streaming && (isOpen
-          ? <ChevronDown size={12} className="ml-auto" />
-          : <ChevronRight size={12} className="ml-auto" />
-        )}
-        {!streaming && <span className="text-xs opacity-50">{text.length} chars</span>}
+        <span className={thinkingLive ? 'shimmer-text' : ''} style={{ color: thinkingLive ? 'var(--accent)' : 'var(--text-secondary)' }}>{label}</span>
+        {thinkingLive && <Loader2 size={11} className="animate-spin" style={{ color: 'var(--accent)' }} />}
+        {!thinkingLive && text && <span className="text-xs opacity-40 ml-1">· {text.length} chars</span>}
       </button>
 
       {isOpen && (
         <div
-          className="px-3 pb-3 text-xs"
+          className="text-xs"
           style={{
             color: 'var(--text-secondary)',
             lineHeight: 1.7,
             whiteSpace: 'pre-wrap',
             wordBreak: 'break-word',
-            maxHeight: 300,
+            maxHeight: 280,
             overflowY: 'auto',
-            fontStyle: 'italic'
+            fontStyle: 'italic',
+            margin: '0 0 2px 18px',
+            padding: '2px 0 4px 10px',
+            borderLeft: '2px solid color-mix(in srgb, var(--accent) 30%, transparent)',
           }}
         >
           {text}
@@ -1065,7 +1047,7 @@ function ThreadChip({ thread: t }: { thread: SubThread }) {
               <span style={{ opacity: 0.6 }}>task · </span>{t.task}
             </div>
           )}
-          {t.reasoning && <ReasoningBlock text={t.reasoning} streaming={running} defaultOpen={false} />}
+          {t.reasoning && <ReasoningBlock text={t.reasoning} streaming={running} answerStarted={!!t.content} />}
           {(t.toolCalls?.length ?? 0) > 0 && <ToolCallsBlock calls={t.toolCalls!} />}
           {t.content
             ? <div className="text-sm" style={{ lineHeight: 1.6 }}><MarkdownContent text={t.content} streaming={running} /></div>

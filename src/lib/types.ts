@@ -118,6 +118,8 @@ export interface ChatMessage {
   role: MessageRole
   content: string
   reasoning?: string
+  reasoningStartedAt?: number   // ms epoch when the first reasoning token arrived
+  reasoningDurationMs?: number  // frozen once the answer starts (drives "Thought for Ns")
   toolCalls?: ToolCall[]
   attachments?: MediaAttachment[]
   createdAt: string

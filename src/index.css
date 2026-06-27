@@ -108,6 +108,13 @@ html, body, #root {
 .animate-spin { animation: spin 1s linear infinite; }
 .animate-typing { animation: typing-cursor 1s step-end infinite; }
 
+/* Shimmering text — used for the live "Thinking" label while a model reasons */
+@keyframes shimmer-text {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
+}
+.shimmer-text { animation: shimmer-text 1.4s ease-in-out infinite; }
+
 /* Streaming cursor */
 .streaming-cursor::after {
   content: '▊';
