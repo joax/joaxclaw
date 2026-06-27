@@ -216,7 +216,7 @@ function attachChatStream(convId: string, sessionKey: string, update: UpdateFn):
       }
       // Thinking stream: real-time reasoning text
       if (p.stream === 'thinking' && p.data?.delta) {
-        update(m => ({ ...m, reasoning: (m.reasoning ?? '') + p.data!.delta!, reasoningStreaming: true, waitingForSession: undefined }))
+        update(m => ({ ...m, reasoning: (m.reasoning ?? '') + p.data!.delta!, reasoningStreaming: true, reasoningStartedAt: m.reasoningStartedAt ?? Date.now(), waitingForSession: undefined }))
       // Tool stream: tool call lifecycle events
       } else if (p.stream === 'tool') {
         if (p.data?.phase === 'start') {
@@ -280,14 +280,16 @@ function attachChatStream(convId: string, sessionKey: string, update: UpdateFn):
 
     // chat events
     if (p.state === 'delta') {
+      // First answer token ends the "thinking" phase — freeze the reasoning duration.
+      const stamp = (m: ChatMessage) => m.reasoningStartedAt && !m.reasoningDurationMs ? { reasoningDurationMs: Date.now() - m.reasoningStartedAt } : {}
       if (p.replace) {
-        update(m => ({ ...m, content: p.deltaText ?? '', waitingForSession: undefined }))
+        update(m => ({ ...m, content: p.deltaText ?? '', waitingForSession: undefined, ...stamp(m) }))
       } else if (p.deltaText) {
-        update(m => ({ ...m, content: m.content + p.deltaText, waitingForSession: undefined }))
+        update(m => ({ ...m, content: m.content + p.deltaText, waitingForSession: undefined, ...stamp(m) }))
       }
     } else if (p.state === 'thinking_delta') {
       if (p.deltaText) {
-        update(m => ({ ...m, reasoning: (m.reasoning ?? '') + p.deltaText, reasoningStreaming: true, waitingForSession: undefined }))
+        update(m => ({ ...m, reasoning: (m.reasoning ?? '') + p.deltaText, reasoningStreaming: true, reasoningStartedAt: m.reasoningStartedAt ?? Date.now(), waitingForSession: undefined }))
       }
     } else if (p.state === 'waiting' || p.state === 'delegating' || p.state === 'blocked' || p.state === 'waiting_for_session') {
       const subKey = p.waitingSessionKey ?? p.subSessionKey
@@ -302,6 +304,8 @@ function attachChatStream(convId: string, sessionKey: string, update: UpdateFn):
         ...m,
         ...(finalText ? { content: finalText } : {}),
         ...(finalReasoning ? { reasoning: finalReasoning } : {}),
+        // Freeze reasoning duration if the answer arrived only at final (no streamed deltas).
+        ...((finalReasoning || m.reasoning) && m.reasoningStartedAt && !m.reasoningDurationMs ? { reasoningDurationMs: Date.now() - m.reasoningStartedAt } : {}),
         ...(finalToolCalls.length ? { toolCalls: finalToolCalls } : {}),
         ...(finalAttachments.length ? { attachments: finalAttachments } : {}),
         ...(finalModel ? { model: finalModel } : {}),
