@@ -5,6 +5,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.12.2] - 2026-06-27
+
+### Added
+
+- **Device pairing management (Settings → Devices).** Full lifecycle for the gateway's paired clients: approve/reject incoming pairing requests, view paired devices (expandable, with copyable `deviceId`/`publicKey` and a per-token table), and remove devices or rotate/revoke their tokens. The panel is read-only without `operator.admin`; destructive actions use inline confirms and a **last-admin-device** guard blocks locking yourself out of device management; the list live-updates via the gateway's `device.pair*` / `device.pairing.*` events. New `store/devices.ts`, `components/gateway/DevicesPanel.tsx`.
+- **Inline sub-agent threads in advanced chat.** When the assistant spawns a sub-agent (`sessions_spawn`), it now appears as a Slack-style collapsible **thread** anchored at the spawn point — a chip showing the agent, a live status, and a one-line peek of what it's doing; expand it to watch the sub-agent's own reasoning, tool calls, and answer stream live. The sub-agent's frames are linked back to the run via each frame's `spawnedBy`, replacing the cold "waiting for session" hourglass that previously hid all of its work.
+
+### Changed
+
+- **Clearer "thinking" vs. answer in chat.** Reasoning no longer dumps fully expanded above the reply: it streams open only while the model is still thinking, then auto-collapses the instant the answer starts into a quiet **"Thought for Ns"** pill (tap to reopen). Reasoning extraction now also recognizes `<thinking>` / `<reasoning>` / `<thought>` (not just `<think>`), so more models that stream their reasoning as content get the tidy treatment.
+
+### Fixed
+
+- **Team/Process runs no longer falsely complete while a member is still working.** Completion was force-marked "done" by a 10-minute hard cap even when the session tree was still active, so any member that legitimately worked past it ended the whole flow early. The completion watcher now finishes a run **only** on a confirmed sustained-idle streak (never on the timer); the wall-clock is just a generous watcher lifetime (10 min → 2 h) that *pauses without completing* if reached while still active (re-arming on the controller's next `final`); and it counts `hasActiveSubagentRun`, so a yielding controller with live members still reads as busy.
+
+### Notes
+
+- Added a **Shared Workspace** field to the Teams builder as groundwork toward teams that edit a shared repository — members are spawned with a shared `cwd`, handoffs are filesystem-first, and steps are git-checkpointed. The app-side wiring is in place, but a member reliably editing the host repo still depends on a gateway-side spawn-runtime change and is **not complete yet**.
+
 ## [0.12.1] - 2026-06-26
 
 ### Added
