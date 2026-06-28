@@ -52,9 +52,24 @@ function fmtLastRun(ms: number): string {
   const s = Math.floor(diff / 1000)
   const m = Math.floor(s / 60)
   const h = Math.floor(m / 60)
+  const d = Math.floor(h / 24)
+  if (d > 0) return `${d}d ago`
   if (h > 0) return `${h}h ago`
   if (m > 0) return `${m}m ago`
   return `${s}s ago`
+}
+
+// Running duration (input in seconds). Scales up through hours and days so a
+// long-running process/team reads "2h 5m" / "1d 3h" instead of a huge minute count.
+function fmtElapsed(totalSeconds: number): string {
+  const s = totalSeconds
+  const m = Math.floor(s / 60)
+  const h = Math.floor(m / 60)
+  const d = Math.floor(h / 24)
+  if (d > 0) return `${d}d ${h % 24}h`
+  if (h > 0) return `${h}h ${m % 60}m`
+  if (m > 0) return `${m}m ${s % 60}s`
+  return `${s}s`
 }
 
 function ResourceBar({ value, max, color }: { value: number; max?: number; color: string }) {
@@ -72,6 +87,7 @@ function HealthStrip({ onNavigate }: { onNavigate: (s: NavSection) => void }) {
   const { status, uptimeStart, lastHeartbeat } = useConnectionStore()
   const { sessions } = useSessionsStore()
   const { runs } = useProcessesStore()
+  const { blueprints } = useTeamsStore()
   const [, tick] = useState(0)
 
   useEffect(() => {
@@ -83,7 +99,10 @@ function HealthStrip({ onNavigate }: { onNavigate: (s: NavSection) => void }) {
   const uptime       = uptimeStart ? Date.now() - uptimeStart : 0
   const hbAgo        = lastHeartbeat ? Math.round((Date.now() - lastHeartbeat) / 1000) : null
   const activeSess   = sessions.filter(s => s.hasActiveRun).length
-  const runningProcs = Object.values(runs).filter(r => r.status === 'running').length
+  // Team runs share the `runs` store but aren't processes — count them separately.
+  const teamIds      = new Set(blueprints.map(b => b.id))
+  const runningProcs = Object.values(runs).filter(r => r.status === 'running' && !teamIds.has(r.processId)).length
+  const runningTeams = Object.values(runs).filter(r => r.status === 'running' && teamIds.has(r.processId)).length
 
   const dotColor = status === 'connected' ? 'var(--success)'
     : status === 'connecting' ? 'var(--warning)'
@@ -118,6 +137,7 @@ function HealthStrip({ onNavigate }: { onNavigate: (s: NavSection) => void }) {
       <div style={{ flex: 1 }} />
       {chip('sessions active', activeSess, 'sessions')}
       {chip('processes running', runningProcs, 'processes')}
+      {chip('teams running', runningTeams, 'teams')}
     </div>
   )
 }
@@ -308,10 +328,16 @@ function RecentConversations({ onOpen, onNavigate }: { onOpen: (convId: string) 
 
 function ActiveSection({ onNavigate }: { onNavigate: (s: NavSection) => void }) {
   const { processes, runs } = useProcessesStore()
+  const { blueprints } = useTeamsStore()
   const { sessions } = useSessionsStore()
 
+  // Team runs live in the same `runs` store but have their own dedicated Teams section
+  // (which navigates to the Teams tab). Exclude them here so a running team isn't
+  // duplicated into the processes-oriented "Active" list — and so tapping it doesn't
+  // wrongly drive to the Processes tab.
+  const teamIds = new Set(blueprints.map(b => b.id))
   const runningProcs = Object.values(runs)
-    .filter(r => r.status === 'running')
+    .filter(r => r.status === 'running' && !teamIds.has(r.processId))
     .map(r => ({ run: r, def: processes.find(p => p.id === r.processId) }))
 
   const activeSessions = sessions.filter(s => s.hasActiveRun)
@@ -331,7 +357,7 @@ function ActiveSection({ onNavigate }: { onNavigate: (s: NavSection) => void }) 
         const name        = def?.name ?? run.processId
         const graphSteps  = def?.graph?.nodes.filter(n => n.type !== 'start' && n.type !== 'end').length ?? 0
         const elapsed     = Math.floor((Date.now() - run.startedAt) / 1000)
-        const elapsedStr  = elapsed < 60 ? `${elapsed}s` : `${Math.floor(elapsed / 60)}m ${elapsed % 60}s`
+        const elapsedStr  = fmtElapsed(elapsed)
         const progCurrent = run.progress?.current ?? run.stepsDone
         const progTotal   = run.progress?.total   ?? graphSteps
         const progLabel   = run.progress?.label
@@ -603,7 +629,7 @@ function TeamsSection({ onNavigate }: { onNavigate: (s: NavSection) => void }) {
           const status    = run?.status ?? 'idle'
           const isRunning = status === 'running'
           const elapsed   = isRunning && run?.startedAt ? Math.floor((Date.now() - run.startedAt) / 1000) : 0
-          const elapsedStr = elapsed < 60 ? `${elapsed}s` : `${Math.floor(elapsed / 60)}m ${elapsed % 60}s`
+          const elapsedStr = fmtElapsed(elapsed)
 
           return (
             <button key={bp.id} onClick={() => onNavigate('teams')}
