@@ -9,7 +9,9 @@ import { currentActivity, completedSteps, randomWhimsy, nextWhimsy } from '../..
 import type { LucideIcon } from 'lucide-react'
 import { formatTimestamp } from '../../lib/dateUtils'
 import { extractThinkTags, fmtThoughtDuration } from '../../lib/reasoning'
+import { extractResultDiff } from '../../lib/diffModel'
 import { MarkdownContent } from './MarkdownContent'
+import { DiffView } from './DiffView'
 import { AudioPlayer } from './AudioPlayer'
 import { WorkspaceImage, VideoPlayer } from './WorkspaceMedia'
 import { useFeedbackStore } from '../../store/feedback'
@@ -101,7 +103,6 @@ function parseEditContent(raw: string): { path: string; edits: EditPair[] } | nu
 }
 
 function EditBlock({ content }: { content: string }) {
-  const [expanded, setExpanded] = useState(false)
   const parsed = parseEditContent(content)
 
   if (!parsed) {
@@ -117,45 +118,13 @@ function EditBlock({ content }: { content: string }) {
     )
   }
 
-  const filename = parsed.path.split('/').pop() ?? parsed.path
-  const n = parsed.edits.length
-
+  // One rich diff per edit (a single edit auto-expands; multiple collapse to keep it tidy).
   return (
-    <div className="mb-2" style={{ border: '1px solid color-mix(in srgb, var(--accent) 25%, var(--border))', borderRadius: 'var(--radius)', overflow: 'hidden' }}>
-      {/* Header */}
-      <div
-        className="flex items-center gap-2 px-3 py-1.5 cursor-pointer select-none"
-        style={{ background: 'color-mix(in srgb, var(--accent) 7%, var(--bg-elevated))', borderBottom: expanded ? '1px solid var(--border)' : 'none' }}
-        onClick={() => setExpanded(v => !v)}
-      >
-        <PenLine size={11} style={{ color: 'var(--accent)', flexShrink: 0 }} />
-        <span className="text-xs font-semibold" style={{ color: 'var(--accent)' }}>Edit</span>
-        <span className="text-xs font-mono font-semibold truncate" style={{ color: 'var(--text-primary)' }}>{filename}</span>
-        <span className="text-xs ml-auto shrink-0" style={{ color: 'var(--text-secondary)', opacity: 0.6 }}>
-          {n} edit{n !== 1 ? 's' : ''}
-        </span>
-        <ChevronDown size={11} style={{ color: 'var(--text-secondary)', flexShrink: 0, transform: expanded ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
-      </div>
-
-      {/* Path */}
-      {expanded && (
-        <div className="px-3 py-1.5 text-xs font-mono truncate" style={{ color: 'var(--text-secondary)', opacity: 0.6, borderBottom: '1px solid var(--border)', background: 'var(--bg-primary)' }}>
-          {parsed.path}
-        </div>
-      )}
-
-      {/* Diffs */}
-      {expanded && parsed.edits.map((e, i) => (
-        <div key={i} style={{ borderBottom: i < parsed.edits.length - 1 ? '1px solid var(--border)' : 'none' }}>
-          <div className="px-3 py-1.5 text-xs font-mono" style={{ background: 'color-mix(in srgb, var(--danger) 8%, var(--bg-primary))', color: 'var(--danger)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-            {'− '}{e.oldText}
-          </div>
-          <div className="px-3 py-1.5 text-xs font-mono" style={{ background: 'color-mix(in srgb, var(--success) 8%, var(--bg-primary))', color: 'var(--success)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-            {'+ '}{e.newText}
-          </div>
-        </div>
+    <>
+      {parsed.edits.map((e, i) => (
+        <DiffView key={i} path={parsed.path} oldText={e.oldText} newText={e.newText} defaultExpanded={parsed.edits.length === 1} />
       ))}
-    </div>
+    </>
   )
 }
 
@@ -899,21 +868,23 @@ function ToolDetail({ kind, name, args, rawArgs, result, error }: {
     ) : null
 
   } else if (kind === 'file-write') {
-    const path = str(args.path ?? args.file_path ?? args.filename ?? args.target_file)
-    const content = str(args.content ?? args.new_content)
-    const oldStr = str(args.old_string)
-    const newStr = str(args.new_string)
+    const path = str(args.path ?? args.file_path ?? args.filename ?? args.target_file) || undefined
+    const content = str(args.content ?? args.new_content ?? args.file_text)
+    const oldStr = str(args.old_string ?? args.old_str ?? args.oldText)
+    const newStr = str(args.new_string ?? args.new_str ?? args.newText ?? args.replacement)
+    const patch = str(args.patch ?? args.unified ?? args.diff)
     inputSection = (
-      <div>
-        {path && <p className="px-3 pt-2 pb-1 text-xs font-mono" style={{ color: 'var(--accent)' }}>{path}</p>}
-        {oldStr && newStr ? (
-          <>
-            <p className="px-3 py-1 font-medium" style={{ color: 'var(--danger)', fontSize: 10 }}>- old</p>
-            {codeBlock(oldStr)}
-            <p className="px-3 py-1 font-medium" style={{ color: 'var(--success)', fontSize: 10 }}>+ new</p>
-            {codeBlock(newStr)}
-          </>
-        ) : content ? codeBlock(content) : null}
+      <div style={{ padding: 8 }}>
+        {patch ? (
+          <DiffView unified={patch} path={path} />
+        ) : oldStr || newStr ? (
+          <DiffView path={path} oldText={oldStr} newText={newStr} />
+        ) : content ? (
+          // Full-file write (no prior content) — render as an all-additions diff.
+          <DiffView path={path} oldText="" newText={content} />
+        ) : path ? (
+          <p className="text-xs font-mono" style={{ color: 'var(--accent)' }}>{path}</p>
+        ) : null}
       </div>
     )
 
@@ -957,18 +928,29 @@ function ToolDetail({ kind, name, args, rawArgs, result, error }: {
       </div>
     )
   } else if (result) {
-    const pretty = tryPrettyJson(result)
-    const lines = pretty.split('\n').length
-    resultSection = (
-      <div style={{ borderTop: '1px solid var(--border)' }}>
-        <p className="px-3 pt-2 pb-1 font-medium" style={{ color: 'var(--text-secondary)' }}>
-          Output {lines > 1 ? `(${lines} lines)` : ''}
-        </p>
-        <div style={{ maxHeight: 240, overflowY: 'auto' }}>
-          {codeBlock(pretty)}
+    // Many edit tools return the change as a unified diff in their RESULT (e.g.
+    // `details.patch`) — render that as a rich diff rather than raw JSON.
+    const resultDiff = extractResultDiff(result)
+    if (resultDiff) {
+      resultSection = (
+        <div style={{ borderTop: '1px solid var(--border)', padding: 8 }}>
+          <DiffView unified={resultDiff} />
         </div>
-      </div>
-    )
+      )
+    } else {
+      const pretty = tryPrettyJson(result)
+      const lines = pretty.split('\n').length
+      resultSection = (
+        <div style={{ borderTop: '1px solid var(--border)' }}>
+          <p className="px-3 pt-2 pb-1 font-medium" style={{ color: 'var(--text-secondary)' }}>
+            Output {lines > 1 ? `(${lines} lines)` : ''}
+          </p>
+          <div style={{ maxHeight: 240, overflowY: 'auto' }}>
+            {codeBlock(pretty)}
+          </div>
+        </div>
+      )
+    }
   }
 
   if (!inputSection && !resultSection) return null

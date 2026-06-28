@@ -3,6 +3,7 @@ import remarkGfm from 'remark-gfm'
 import type { Components } from 'react-markdown'
 import { AudioPlayer } from './AudioPlayer'
 import { WorkspaceImage, VideoPlayer, IMAGE_EXT, VIDEO_EXT, toFileUrl } from './WorkspaceMedia'
+import { DiffView } from './DiffView'
 
 const AUDIO_EXT = /\.(mp3|ogg|wav|m4a|aac|opus|webm|flac)(\?[^\s]*)?$/i
 const LOCAL_PATH = /^(\/|~\/|file:\/\/)/
@@ -95,6 +96,10 @@ const components: Components = {
   // code: inline vs block differentiated by className presence + newlines
   code: ({ children, className }) => {
     const isBlock = !!className || String(children).includes('\n')
+    // A ```diff fenced block → render as a rich diff instead of a plain code block.
+    if (isBlock && /language-diff\b/.test(className ?? '')) {
+      return <DiffView unified={String(children).replace(/\n$/, '')} />
+    }
     if (isBlock) {
       return (
         <code className={className} style={{
@@ -114,17 +119,22 @@ const components: Components = {
     return <code style={inlineCode}>{children}</code>
   },
 
-  pre: ({ children }) => (
-    <pre style={{
-      background: 'var(--bg-primary)',
-      border: '1px solid var(--border)',
-      borderRadius: 'var(--radius)',
-      margin: '0.65em 0',
-      overflow: 'hidden'
-    }}>
-      {children}
-    </pre>
-  ),
+  pre: ({ children }) => {
+    // A diff block renders its own framed DiffView — don't double-wrap it in the pre frame.
+    const child = children as { props?: { className?: string } } | undefined
+    if (/language-diff\b/.test(child?.props?.className ?? '')) return <>{children}</>
+    return (
+      <pre style={{
+        background: 'var(--bg-primary)',
+        border: '1px solid var(--border)',
+        borderRadius: 'var(--radius)',
+        margin: '0.65em 0',
+        overflow: 'hidden'
+      }}>
+        {children}
+      </pre>
+    )
+  },
 
   // Tables (GFM)
   table: ({ children }) => (
