@@ -800,6 +800,88 @@ describe('validateBundle — empty string fields', () => {
   })
 })
 
+// ── Branching with a reused agentId (role-based targeting) ────────────────────
+
+describe('branching — reused agentId targets the correct step', () => {
+  // coder-worker appears twice: "Code Agent" (index 1) and "QA Agent" (index 3).
+  // A route after QA loops back to Code on failure, otherwise ends.
+  const dupBp = (): TeamBlueprint => makeBp({
+    members: [
+      { agentId: 'planner', role: 'Planner', task: 'plan' },
+      { agentId: 'coder-worker', role: 'Code Agent', task: 'write code' },
+      { agentId: 'reviewer', role: 'Reviewer', task: 'review' },
+      { agentId: 'coder-worker', role: 'QA Agent', task: 'run tests' },
+    ],
+    routes: [{
+      afterRole: 'QA Agent', afterMemberId: 'coder-worker',
+      branches: [
+        { condition: 'tests fail', nextRole: 'Code Agent', nextMemberId: 'coder-worker' },
+        { condition: '', nextMemberId: BRANCH_END },
+      ],
+    }],
+  })
+
+  it('attaches the route to the QA step only — not every member sharing the agentId', () => {
+    const ids = buildTeamProcessDef(dupBp(), '/tmp/test.md').graph!.nodes.map(n => n.id)
+    expect(ids).toContain('decision-3')      // QA Agent (index 3) gets the decision
+    expect(ids).not.toContain('decision-1')  // Code Agent (index 1) must NOT (the old bug)
+  })
+
+  it('routes the feedback edge to the Code Agent step (index 1) + a catch-all to end', () => {
+    const fromDecision = buildTeamProcessDef(dupBp(), '/tmp/test.md').graph!.edges.filter(e => e.from === 'decision-3')
+    expect(fromDecision.map(e => e.to).sort()).toEqual(['agent-1', 'end'])
+    expect(fromDecision.find(e => e.to === 'agent-1')!.condition).toBe('tests fail')
+  })
+
+  it('keeps later steps reachable (DAG not corrupted) and validates', () => {
+    const bp = dupBp()
+    const def = buildTeamProcessDef(bp, '/tmp/test.md')
+    const adj = new Map<string, string[]>()
+    for (const e of def.graph!.edges) { if (!adj.has(e.from)) adj.set(e.from, []); adj.get(e.from)!.push(e.to) }
+    const reachable = new Set<string>()
+    const q = ['start']
+    while (q.length) { const n = q.shift()!; if (reachable.has(n)) continue; reachable.add(n); for (const t of adj.get(n) ?? []) q.push(t) }
+    expect(reachable.has('agent-2')).toBe(true)  // Reviewer — would be orphaned by the old bug
+    expect(reachable.has('agent-3')).toBe(true)  // QA
+    expect(reachable.has('end')).toBe(true)
+    expect(validateTeamForLaunch(bp, def).valid).toBe(true)
+  })
+
+  it('backward compatible: agentId-only routes still work when agentIds are unique', () => {
+    const bp = makeBp({
+      members: [
+        { agentId: 'a', role: 'A', task: 't' },
+        { agentId: 'b', role: 'B', task: 't' },
+        { agentId: 'c', role: 'C', task: 't' },
+      ],
+      routes: [{ afterMemberId: 'a', branches: [
+        { condition: 'x', nextMemberId: 'c' },
+        { condition: '', nextMemberId: 'b' },
+      ]}],
+    })
+    const def = buildTeamProcessDef(bp, '/tmp/test.md')
+    const fromDecision = def.graph!.edges.filter(e => e.from === 'decision-0')
+    expect(fromDecision.map(e => e.to).sort()).toEqual(['agent-1', 'agent-2'])  // b, c
+    expect(validateTeamForLaunch(bp, def).valid).toBe(true)
+  })
+
+  it('validation rejects a route that resolves by neither role nor agentId', () => {
+    const bp = makeBp({ routes: [{ afterRole: 'Nonexistent Role', afterMemberId: 'also-missing', branches: [
+      { condition: '', nextMemberId: BRANCH_END },
+    ]}] })
+    const res = validateTeamForLaunch(bp, buildTeamProcessDef(bp, '/tmp/test.md'))
+    expect(res.valid).toBe(false)
+    expect(res.errors.some(e => /unknown member: "Nonexistent Role"/.test(e))).toBe(true)
+  })
+
+  it('validation still passes when afterRole is unset but afterMemberId resolves (backward compat)', () => {
+    const bp = makeBp({ routes: [{ afterMemberId: 'researcher', branches: [
+      { condition: '', nextMemberId: BRANCH_END },
+    ]}] })
+    expect(validateTeamForLaunch(bp, buildTeamProcessDef(bp, '/tmp/test.md')).valid).toBe(true)
+  })
+})
+
 // ── Compiler — additional branch coverage ─────────────────────────────────────
 
 describe('compiler — soul field and tags', () => {
@@ -953,10 +1035,9 @@ describe('compiler — soul field and tags', () => {
     expect(def.graph!.nodes.some(n => n.id === 'decision-0')).toBe(true)
   })
 
-  it('branch target not found in member index: description uses fallback role, edge is omitted', () => {
-    // Pass 1 (routingCondition description): `memberIdxByAgentId.get(id) ?? 0` uses index 0 as
-    //   fallback role when the target agentId is unknown — exercises the ?? 0 branch.
-    // Pass 2 (edge wiring): `if (targetIdx !== undefined)` skips adding the edge entirely.
+  it('branch target not found: description shows the raw target, edge is omitted', () => {
+    // An unresolvable branch target (neither role nor agentId matches): the description
+    // shows the actual unknown target — not a mislabel of member 0 — and no edge is wired.
     const bp = makeBp({
       members: [
         { agentId: 'a', role: 'A', task: 'do A' },
@@ -968,10 +1049,10 @@ describe('compiler — soul field and tags', () => {
     })
     const def = buildTeamProcessDef(bp, '/tmp/fallback.md')
     expect(def).toBeDefined()
-    // The routingCondition description uses the fallback role at index 0 ('A')
     const decNode = def.graph!.nodes.find(n => n.id === 'decision-0')
-    expect(decNode?.routingCondition).toContain('A')
-    // No edge is created for the unknown target (targetIdx === undefined → skipped)
+    expect(decNode?.routingCondition).toContain('nonexistent')   // the real target, not 'A'
+    expect(decNode?.routingCondition).not.toContain('→ A')
+    // No edge is created for the unknown target (resolveMemberIndex → -1 → skipped)
     const unknownEdge = def.graph!.edges.find(e => e.from === 'decision-0')
     expect(unknownEdge).toBeUndefined()
   })

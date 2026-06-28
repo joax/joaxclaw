@@ -12,7 +12,7 @@
 //   handles this without any new node types.
 
 import type { ProcessDef, ProcessGraph, GraphNode, GraphEdge, ProcessAgent } from './processParser'
-import type { TeamBlueprint, TeamRoute } from './teamBlueprint'
+import type { TeamBlueprint, TeamRoute, TeamMemberDef } from './teamBlueprint'
 import { BRANCH_END } from './teamBlueprint'
 
 // Re-export TeamMemberDef from teamBlueprint so existing imports of
@@ -20,6 +20,22 @@ import { BRANCH_END } from './teamBlueprint'
 export type { TeamMemberDef } from './teamBlueprint'
 
 const STEP_X = 220
+
+// Resolve a route/branch target to a UNIQUE member index. A `role` is preferred (it
+// uniquely identifies a step even when the same agentId is reused for several members);
+// `agentId` is the backward-compatible fallback (correct when agentIds are unique).
+// Returns -1 when nothing matches.
+function resolveMemberIndex(members: readonly TeamMemberDef[], target: { role?: string; agentId?: string }): number {
+  if (target.role) {
+    const i = members.findIndex(m => m.role === target.role)
+    if (i !== -1) return i
+  }
+  if (target.agentId) {
+    const i = members.findIndex(m => m.agentId === target.agentId)
+    if (i !== -1) return i
+  }
+  return -1
+}
 
 // ── Public entry point ────────────────────────────────────────────────────────
 
@@ -116,14 +132,17 @@ function buildBranchingTeamDef(bp: TeamBlueprint, compiledPath: string): Process
   const { id, name, description, controllerAgentId, members, outputContract, workspace } = bp
   const routes = bp.routes!
 
-  // Lookups
-  const routeByAgentId = new Map<string, TeamRoute>()
-  for (const r of routes) routeByAgentId.set(r.afterMemberId, r)
-
-  const memberIdxByAgentId = new Map<string, number>()
-  for (let i = 0; i < members.length; i++) {
-    if (!memberIdxByAgentId.has(members[i].agentId)) memberIdxByAgentId.set(members[i].agentId, i)
+  // Attach each route to the UNIQUE member index its `afterRole`/`afterMemberId` resolves
+  // to — not to every member sharing an agentId. This is what makes routing correct when
+  // the same agentId is reused across members.
+  const routeByMemberIdx = new Map<number, TeamRoute>()
+  for (const r of routes) {
+    const idx = resolveMemberIndex(members, { role: r.afterRole, agentId: r.afterMemberId })
+    if (idx !== -1 && !routeByMemberIdx.has(idx)) routeByMemberIdx.set(idx, r)
   }
+  // Resolve a branch's target member by role (preferred) or agentId.
+  const branchTargetIdx = (b: { nextRole?: string; nextMemberId: string }): number =>
+    resolveMemberIndex(members, { role: b.nextRole, agentId: b.nextMemberId })
 
   const nodes: GraphNode[] = []
   const edges: GraphEdge[] = []
@@ -139,7 +158,7 @@ function buildBranchingTeamDef(bp: TeamBlueprint, compiledPath: string): Process
 
   for (let i = 0; i < members.length; i++) {
     const m = members[i]
-    const route = routeByAgentId.get(m.agentId)
+    const route = routeByMemberIdx.get(i)
 
     if (m.reviewBefore && i > 0) {
       nodes.push({
@@ -162,9 +181,10 @@ function buildBranchingTeamDef(bp: TeamBlueprint, compiledPath: string): Process
       const branchDesc = route.branches
         .map(b => {
           const cond = b.condition || 'otherwise'
+          const idx = branchTargetIdx(b)
           const target = b.nextMemberId === BRANCH_END
             ? 'end'
-            : (members[memberIdxByAgentId.get(b.nextMemberId) ?? 0]?.role ?? b.nextMemberId)
+            : (members[idx]?.role ?? b.nextRole ?? b.nextMemberId)
           return `${cond} → ${target}`
         })
         .join('; ')
@@ -196,7 +216,7 @@ function buildBranchingTeamDef(bp: TeamBlueprint, compiledPath: string): Process
 
   for (let i = 0; i < members.length; i++) {
     const m = members[i]
-    const route = routeByAgentId.get(m.agentId)
+    const route = routeByMemberIdx.get(i)
 
     if (m.reviewBefore && i > 0 && prev !== '') {
       addEdge(prev, `review-${i}`)
@@ -213,8 +233,8 @@ function buildBranchingTeamDef(bp: TeamBlueprint, compiledPath: string): Process
         if (branch.nextMemberId === BRANCH_END) {
           addEdge(`decision-${i}`, 'end', branch.condition || undefined)
         } else {
-          const targetIdx = memberIdxByAgentId.get(branch.nextMemberId)
-          if (targetIdx !== undefined) {
+          const targetIdx = branchTargetIdx(branch)
+          if (targetIdx !== -1) {
             addEdge(`decision-${i}`, `agent-${targetIdx}`, branch.condition || undefined)
           }
         }
@@ -272,10 +292,10 @@ function buildBody(
   if (routes && routes.length > 0) {
     lines.push('', '## Conditional Routing', '')
     for (const r of routes) {
-      lines.push(`**After ${r.afterMemberId}:**`)
+      lines.push(`**After ${r.afterRole || r.afterMemberId}:**`)
       for (const b of r.branches) {
         const cond = b.condition || 'otherwise'
-        const target = b.nextMemberId === BRANCH_END ? 'end' : b.nextMemberId
+        const target = b.nextMemberId === BRANCH_END ? 'end' : (b.nextRole || b.nextMemberId)
         lines.push(`  - ${cond} → ${target}`)
       }
     }

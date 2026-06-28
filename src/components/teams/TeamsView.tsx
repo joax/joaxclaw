@@ -313,10 +313,14 @@ function RouteRow({ route, members, onChange, onRemove }: {
     color: 'var(--text-primary)', outline: 'none', width: '100%',
   }
 
-  const nextOptions = [
-    ...members.map(m => ({ value: m.agentId, label: m.role || m.agentId })),
-    { value: BRANCH_END, label: '⛳ End (finish)' },
-  ]
+  // Target a member by its index (unique even when an agentId is reused for several
+  // members). We write the member's role (primary) and agentId (legacy fallback) so the
+  // compiler/validation resolve the exact step. Resolve a route target back to an index
+  // for the controlled <select> value, role first then agentId.
+  const idxOf = (role: string | undefined, agentId: string): number => {
+    if (role) { const i = members.findIndex(m => m.role === role); if (i !== -1) return i }
+    return members.findIndex(m => m.agentId === agentId)
+  }
 
   const updateBranch = (i: number, b: TeamBranch) => {
     const next = [...route.branches]; next[i] = b
@@ -336,12 +340,12 @@ function RouteRow({ route, members, onChange, onRemove }: {
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
         <span style={{ fontSize: 11, color: 'var(--text-secondary)', flexShrink: 0 }}>After</span>
         <select
-          value={route.afterMemberId}
-          onChange={e => onChange({ ...route, afterMemberId: e.target.value })}
+          value={String(Math.max(0, idxOf(route.afterRole, route.afterMemberId)))}
+          onChange={e => { const m = members[Number(e.target.value)]; if (m) onChange({ ...route, afterRole: m.role, afterMemberId: m.agentId }) }}
           style={{ ...inp, flex: 1, maxWidth: 160 }}
         >
-          {members.map(m => (
-            <option key={m.agentId} value={m.agentId}>{m.role || m.agentId}</option>
+          {members.map((m, idx) => (
+            <option key={idx} value={idx}>{m.role || m.agentId}</option>
           ))}
         </select>
         <span style={{ fontSize: 11, color: 'var(--text-secondary)', flexShrink: 0 }}>route to:</span>
@@ -367,13 +371,18 @@ function RouteRow({ route, members, onChange, onRemove }: {
             style={inp}
           />
           <select
-            value={branch.nextMemberId}
-            onChange={e => updateBranch(i, { ...branch, nextMemberId: e.target.value })}
+            value={branch.nextMemberId === BRANCH_END ? BRANCH_END : String(Math.max(0, idxOf(branch.nextRole, branch.nextMemberId)))}
+            onChange={e => {
+              const v = e.target.value
+              if (v === BRANCH_END) updateBranch(i, { ...branch, nextMemberId: BRANCH_END, nextRole: undefined })
+              else { const m = members[Number(v)]; if (m) updateBranch(i, { ...branch, nextRole: m.role, nextMemberId: m.agentId }) }
+            }}
             style={inp}
           >
-            {nextOptions.map(opt => (
-              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            {members.map((m, idx) => (
+              <option key={idx} value={idx}>{m.role || m.agentId}</option>
             ))}
+            <option value={BRANCH_END}>⛳ End (finish)</option>
           </select>
           <button
             onClick={() => removeBranch(i)}
