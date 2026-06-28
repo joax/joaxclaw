@@ -300,19 +300,32 @@ function attachChatStream(convId: string, sessionKey: string, update: UpdateFn):
       const finalToolCalls = extractToolCalls(p.message)
       const finalAttachments = extractAttachments(p.message)
       const finalModel = extractModel(p.message) ?? (p as Record<string, unknown>).model as string | undefined
-      update(m => ({
-        ...m,
-        ...(finalText ? { content: finalText } : {}),
-        ...(finalReasoning ? { reasoning: finalReasoning } : {}),
-        // Freeze reasoning duration if the answer arrived only at final (no streamed deltas).
-        ...((finalReasoning || m.reasoning) && m.reasoningStartedAt && !m.reasoningDurationMs ? { reasoningDurationMs: Date.now() - m.reasoningStartedAt } : {}),
-        ...(finalToolCalls.length ? { toolCalls: finalToolCalls } : {}),
-        ...(finalAttachments.length ? { attachments: finalAttachments } : {}),
-        ...(finalModel ? { model: finalModel } : {}),
-        streaming: false,
-        reasoningStreaming: false,
-        waitingForSession: undefined
-      }))
+      // This gateway ends the agent's run with an EMPTY `final` at a sessions_yield (the
+      // pause to wait for a spawned sub-agent), then AUTO-RESUMES the agent and emits the
+      // real answer in a later, non-empty `final`. Treat an empty final while a sub-agent
+      // is still in flight as that yield boundary — stay subscribed so the resumed answer
+      // streams in, instead of finalizing the turn here (which made it look "stopped").
+      let yieldedWaitingForSubAgent = false
+      update(m => {
+        if (!finalText && (m.threads ?? []).some(t => t.status === 'running' || t.status === 'spawning')) {
+          yieldedWaitingForSubAgent = true
+          return { ...m, waitingForSession: undefined }
+        }
+        return {
+          ...m,
+          ...(finalText ? { content: finalText } : {}),
+          ...(finalReasoning ? { reasoning: finalReasoning } : {}),
+          // Freeze reasoning duration if the answer arrived only at final (no streamed deltas).
+          ...((finalReasoning || m.reasoning) && m.reasoningStartedAt && !m.reasoningDurationMs ? { reasoningDurationMs: Date.now() - m.reasoningStartedAt } : {}),
+          ...(finalToolCalls.length ? { toolCalls: finalToolCalls } : {}),
+          ...(finalAttachments.length ? { attachments: finalAttachments } : {}),
+          ...(finalModel ? { model: finalModel } : {}),
+          streaming: false,
+          reasoningStreaming: false,
+          waitingForSession: undefined
+        }
+      })
+      if (yieldedWaitingForSubAgent) return  // keep the stream open for the auto-resume
       finalizeThreads(update)
       activeStreams.delete(convId)
       unsub()
