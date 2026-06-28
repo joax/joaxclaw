@@ -78,9 +78,29 @@ export function ProcessMonitor({ def, run, onStop }: Props) {
   const elapsed = run ? (run.finishedAt ?? Date.now()) - run.startedAt : 0
   const isRunning = run?.status === 'running'
 
-  // Unified progress: explicit run.progress takes precedence over inferred stepsDone
-  const prog: RunProgress | undefined = run?.progress ?? (steps.length > 0
-    ? { current: run?.stepsDone ?? 0, total: steps.length }
+  // `run.stepsDone` counts completed AGENT turns, but `steps` interleaves handoff/review
+  // transition nodes. Map the agent-based progress onto the full node list so:
+  //  - a transition node is NEVER the "active" step (a handoff is instantaneous — it reads
+  //    as done the moment its preceding agent finishes), and
+  //  - the active marker lands on the next AGENT, which is what's actually working.
+  // Without this the marker sticks on the handoff while the next agent is already running.
+  const stepsDone = run?.stepsDone ?? 0
+  const agentStepTotal = steps.filter(n => n.type === 'agent').length
+  let agentsSeen = 0
+  const stepStates = steps.map(node => {
+    if (node.type === 'agent') {
+      const ordinal = agentsSeen++
+      return { isDone: ordinal < stepsDone, isActive: isRunning && ordinal === stepsDone }
+    }
+    // Transition node (handoff/review/decision): done once the agent before it has completed.
+    return { isDone: stepsDone >= agentsSeen, isActive: false }
+  })
+
+  // Unified progress: explicit run.progress takes precedence over inferred stepsDone.
+  // The denominator counts AGENT steps (matching stepsDone) so the bar reaches 100% on
+  // completion instead of stalling at agents/nodes (e.g. 3/5).
+  const prog: RunProgress | undefined = run?.progress ?? (agentStepTotal > 0
+    ? { current: stepsDone, total: agentStepTotal }
     : undefined)
   const progPct = prog ? Math.min(100, prog.total > 0 ? (prog.current / prog.total) * 100 : 0) : 0
 
@@ -187,8 +207,7 @@ export function ProcessMonitor({ def, run, onStop }: Props) {
             {steps.length === 0 ? (
               <p style={{ fontSize: 11, color: 'var(--text-secondary)', opacity: 0.5 }}>No steps defined</p>
             ) : steps.map((node, i) => {
-              const isDone   = i < run.stepsDone
-              const isActive = isRunning && i === run.stepsDone
+              const { isDone, isActive } = stepStates[i]
               const nodeColor = node.type === 'handoff' ? '#f59e0b' : node.type === 'review' ? '#8b5cf6' : undefined
               const stepColor = isDone ? 'var(--success)' : isActive ? 'var(--accent)' : 'var(--border)'
               return (
