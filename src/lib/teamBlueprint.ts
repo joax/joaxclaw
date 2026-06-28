@@ -32,6 +32,10 @@ export interface TeamMemberDef {
 export interface TeamBranch {
   condition: string       // natural-language condition for the controller to evaluate
   nextMemberId: string    // agentId of the member to invoke, or BRANCH_END to finish
+  // Target a member by its (unique) role instead of agentId. Takes precedence over
+  // nextMemberId when set — required to disambiguate when the same agentId is reused for
+  // several members (e.g. one agent acting as both "Code Agent" and "QA Agent").
+  nextRole?: string
   brief?: string          // optional context/task override passed to the next member
 }
 
@@ -41,6 +45,9 @@ export interface TeamBranch {
  */
 export interface TeamRoute {
   afterMemberId: string   // agentId whose completion triggers this decision
+  // Target the deciding member by its (unique) role instead of agentId. Takes precedence
+  // over afterMemberId when set — needed when the same agentId is reused across members.
+  afterRole?: string
   branches: TeamBranch[]  // ordered list of conditional branches
 }
 

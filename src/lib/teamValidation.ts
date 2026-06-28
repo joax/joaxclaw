@@ -25,17 +25,22 @@ export function validateTeamForLaunch(
   if (bp.members.length === 0) errors.push('Team has no members')
   if (bp.members.some(m => !m.agentId)) errors.push('Some members have no agent selected')
 
-  // Validate routes reference real members
+  // Validate routes reference real members. A route/branch may target a member by its
+  // (unique) role — preferred when an agentId is reused — or by agentId (legacy).
   if (bp.routes && bp.routes.length > 0) {
     const agentIds = new Set(bp.members.map(m => m.agentId))
+    const roles = new Set(bp.members.map(m => m.role))
+    const resolves = (role: string | undefined, agentId: string) =>
+      (role ? roles.has(role) : false) || agentIds.has(agentId)
     for (const route of bp.routes) {
-      if (!agentIds.has(route.afterMemberId))
-        errors.push(`Route references unknown member: "${route.afterMemberId}"`)
+      const afterLabel = route.afterRole || route.afterMemberId
+      if (!resolves(route.afterRole, route.afterMemberId))
+        errors.push(`Route references unknown member: "${afterLabel}"`)
       if (route.branches.length === 0)
-        errors.push(`Route after "${route.afterMemberId}" has no branches`)
+        errors.push(`Route after "${afterLabel}" has no branches`)
       for (const branch of route.branches) {
-        if (branch.nextMemberId !== BRANCH_END && !agentIds.has(branch.nextMemberId))
-          errors.push(`Branch references unknown member: "${branch.nextMemberId}"`)
+        if (branch.nextMemberId !== BRANCH_END && !resolves(branch.nextRole, branch.nextMemberId))
+          errors.push(`Branch references unknown member: "${branch.nextRole || branch.nextMemberId}"`)
       }
     }
   }
