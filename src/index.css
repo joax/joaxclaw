@@ -129,6 +129,39 @@ pre, code {
   font-size: 0.875em;
 }
 
+/* Syntax token colors inside the chat diff view (refractor / Prism classes).
+   Tuned for the dark surface; the +/- row tints sit behind these at low alpha. */
+.diffview .token.comment,
+.diffview .token.prolog,
+.diffview .token.cdata { color: #8b949e; font-style: italic; }
+.diffview .token.punctuation { color: #c9d1d9; }
+.diffview .token.keyword,
+.diffview .token.tag,
+.diffview .token.selector,
+.diffview .token.important,
+.diffview .token.atrule,
+.diffview .token.deleted { color: #ff7b72; }
+.diffview .token.function,
+.diffview .token.function-name,
+.diffview .token.class-name { color: #d2a8ff; }
+.diffview .token.string,
+.diffview .token.char,
+.diffview .token.attr-value,
+.diffview .token.regex,
+.diffview .token.url { color: #a5d6ff; }
+.diffview .token.number,
+.diffview .token.boolean,
+.diffview .token.constant,
+.diffview .token.symbol,
+.diffview .token.builtin,
+.diffview .token.property,
+.diffview .token.variable,
+.diffview .token.attr-name,
+.diffview .token.inserted { color: #79c0ff; }
+.diffview .token.operator,
+.diffview .token.entity { color: #c9d1d9; }
+.diffview .token.namespace { opacity: 0.7; }
+
 pre {
   background: var(--bg-primary);
   border: 1px solid var(--border);
