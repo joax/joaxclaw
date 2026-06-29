@@ -101,7 +101,10 @@ export default function App() {
   const notConnected = status !== 'connected'
   const ALL_GATEWAY_SECTIONS: NavSection[] = ['dashboard', 'chat', 'talk', 'agents', 'processes', 'teams', 'extensions', 'sessions', 'crons', 'obsidian', 'models', 'gateway']
   const disabledSections: NavSection[] = notConnected
-    ? ALL_GATEWAY_SECTIONS
+    // Keep Dashboard clickable while disconnected so it routes back to the connect
+    // screen — otherwise, opening the Theme editor (the one non-gateway view) would
+    // trap the user there with every other nav item disabled.
+    ? ALL_GATEWAY_SECTIONS.filter(s => s !== 'dashboard')
     : obsidianEnabled ? [] : ['obsidian']
 
   // While auto-reconnecting (e.g. the gateway reloaded after a channel change),
