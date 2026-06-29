@@ -725,14 +725,17 @@ function TeamItem({
         <button
           onClick={handleDelete} disabled={phase === 'deleting'}
           style={{
-            opacity: phase !== 'idle' ? 1 : 0,
+            // Idle visibility is controlled by the Tailwind classes below; an inline
+            // opacity:0 would override the group-hover rule and keep the delete button
+            // permanently invisible. Force visible only while confirming/deleting.
+            ...(phase !== 'idle' ? { opacity: 1 } : null),
             background: phase === 'confirm' ? 'color-mix(in srgb, var(--danger) 15%, transparent)' : 'none',
             border: phase === 'confirm' ? '1px solid color-mix(in srgb, var(--danger) 40%, transparent)' : 'none',
             borderRadius: 4, cursor: phase === 'deleting' ? 'default' : 'pointer',
             padding: '2px 5px', display: 'flex', alignItems: 'center', gap: 3,
-            color: 'var(--danger)', flexShrink: 0,
+            color: 'var(--danger)', flexShrink: 0, transition: 'opacity 0.15s',
           }}
-          className="group-hover:[opacity:1]"
+          className="opacity-0 group-hover:opacity-100"
         >
           <Trash2 size={11} />
           {phase === 'confirm'  && <span style={{ fontSize: 10 }}>Confirm?</span>}

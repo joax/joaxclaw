@@ -81,14 +81,18 @@ function ProcessItem({ def, active, run, onClick, onDelete }: {
           onClick={handleDelete}
           disabled={phase === 'deleting'}
           style={{
-            opacity: phase !== 'idle' ? 1 : 0,
+            // When idle, let the Tailwind classes below drive the hover-reveal. An
+            // inline opacity:0 here would override the group-hover class (inline styles
+            // beat stylesheet rules), leaving the button permanently invisible — i.e.
+            // "no way to delete". Force it visible only while confirming/deleting.
+            ...(phase !== 'idle' ? { opacity: 1 } : null),
             background: phase === 'confirm' ? 'color-mix(in srgb, var(--danger) 15%, transparent)' : 'none',
             border: phase === 'confirm' ? '1px solid color-mix(in srgb, var(--danger) 40%, transparent)' : 'none',
             borderRadius: 4, cursor: phase === 'deleting' ? 'default' : 'pointer',
             padding: '2px 5px', display: 'flex', alignItems: 'center', gap: 3,
             color: 'var(--danger)', flexShrink: 0, transition: 'opacity 0.15s',
           }}
-          className="group-hover:[opacity:1]"
+          className="opacity-0 group-hover:opacity-100"
         >
           <Trash2 size={11} />
           {phase === 'confirm'  && <span style={{ fontSize: 10, whiteSpace: 'nowrap' }}>Confirm?</span>}
