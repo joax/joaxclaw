@@ -128,7 +128,7 @@ export function GatewayView() {
         className="flex flex-col shrink-0 py-4 px-3 gap-1"
         style={{ width: 200, borderRight: '1px solid var(--border)', background: 'var(--bg-surface)' }}
       >
-        <h1 className="text-sm font-semibold px-2 mb-2" style={{ color: 'var(--text-primary)' }}>Settings</h1>
+        <h1 className="text-sm font-semibold px-2 mb-2" style={{ color: 'var(--text-primary)' }}>Gateway</h1>
         {SETTINGS_TABS.map(t => (
           <button
             key={t.id}
