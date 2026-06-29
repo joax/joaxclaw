@@ -172,6 +172,17 @@ ipcMain.handle('window:maximize', () => {
 })
 ipcMain.handle('window:close', () => mainWindow?.hide())
 
+// Recolour the native window-control overlay (min/max/close) so it tracks the app
+// theme — otherwise the OS-drawn buttons keep the dark colours baked in at creation.
+ipcMain.handle('window:setTitleBarOverlay', (_e, color: string, symbolColor: string) => {
+  if (!mainWindow || typeof mainWindow.setTitleBarOverlay !== 'function') return
+  try {
+    mainWindow.setTitleBarOverlay({ color, symbolColor, height: 36 })
+  } catch {
+    // titleBarOverlay isn't supported on every platform/WM — ignore there.
+  }
+})
+
 // ── IPC: Config file ─────────────────────────────────────────────────────────
 const configPath = join(homedir(), '.openclaw', 'openclaw.json')
 
