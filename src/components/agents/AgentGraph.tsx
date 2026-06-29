@@ -49,21 +49,27 @@ function suggestInstructions(fromAgent: Agent, toAgent: Agent): string {
 
 function computeLayout(agents: Agent[]): Map<string, { x: number; y: number }> {
   const allIds = new Set(agents.map(a => a.id))
+  const byId = new Map(agents.map(a => [a.id, a]))
   const hasParent = new Set<string>()
   for (const a of agents)
     for (const sub of a.allowedSubAgents ?? [])
       if (allIds.has(sub)) hasParent.add(sub)
 
+  // Place each agent at its SHORTEST distance from a root (breadth-first, visited
+  // once). This keeps the tree compact — depth = real hierarchy depth — and is
+  // inherently cycle-safe: allowedSubAgents can form a loop (A→B→A, or A→A), and
+  // visiting each node a single time both prevents the synchronous render from
+  // hanging and stops a back-edge from deepening a node to an absurd level (which
+  // made the graph render as a tall, tiny sliver).
   const level = new Map<string, number>()
   const roots = agents.filter(a => !hasParent.has(a.id))
-  const queue: Array<{ id: string; lvl: number }> = roots.map(a => ({ id: a.id, lvl: 0 }))
-  while (queue.length) {
-    const { id, lvl } = queue.shift()!
-    if ((level.get(id) ?? -1) >= lvl) continue
-    level.set(id, lvl)
-    const a = agents.find(x => x.id === id)
-    for (const sub of a?.allowedSubAgents ?? [])
-      if (allIds.has(sub)) queue.push({ id: sub, lvl: lvl + 1 })
+  const queue = roots.map(a => a.id)
+  for (const id of queue) level.set(id, 0)
+  for (let qi = 0; qi < queue.length; qi++) {
+    const id = queue[qi]
+    const lvl = level.get(id)!
+    for (const sub of byId.get(id)?.allowedSubAgents ?? [])
+      if (allIds.has(sub) && !level.has(sub)) { level.set(sub, lvl + 1); queue.push(sub) }
   }
   for (const a of agents) if (!level.has(a.id)) level.set(a.id, 0)
 
