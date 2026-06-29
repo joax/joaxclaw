@@ -98,74 +98,125 @@ function validateGraph(graph: ProcessGraph): string[] {
 
 // ── Auto-layout ───────────────────────────────────────────────────────────────
 
+// Layered (Sugiyama-style) auto-layout that handles loops and many-to-many edges:
+//   1. break cycles — find back-edges with a DFS and layer over the remaining DAG
+//      (the back-edges are still drawn, so a feedback loop arcs back cleanly);
+//   2. assign columns by longest path over that DAG (dependencies go left→right);
+//   3. order nodes within each column to minimise edge crossings (median heuristic);
+//   4. position columns and vertically centre them.
+// Edge ports are left to the renderer's geometry-based bestPortPair, so a back-edge
+// (target to the left) routes out the correct side instead of cutting across.
 function computeLayout(graph: ProcessGraph): ProcessGraph {
   const { nodes, edges } = graph
   if (nodes.length <= 1) return graph
 
-  const adj   = new Map<string, string[]>()
-  const inDeg = new Map<string, number>()
-  for (const n of nodes) { adj.set(n.id, []); inDeg.set(n.id, 0) }
-  for (const e of edges) {
-    adj.get(e.from)?.push(e.to)
-    inDeg.set(e.to, (inDeg.get(e.to) ?? 0) + 1)
-  }
+  const ids   = nodes.map(n => n.id)
+  const byId  = new Map(nodes.map(n => [n.id, n]))
+  const adj   = new Map<string, string[]>(ids.map(id => [id, []]))
+  for (const e of edges) if (adj.has(e.from) && adj.has(e.to)) adj.get(e.from)!.push(e.to)
 
-  // Assign column via longest-path BFS so dependencies always go left→right
-  const col   = new Map<string, number>()
-  const queue = nodes.filter(n => (inDeg.get(n.id) ?? 0) === 0).map(n => n.id)
-  for (const id of queue) col.set(id, 0)
-
-  let qi = 0
-  while (qi < queue.length) {
-    const id = queue[qi++]
-    const c  = col.get(id) ?? 0
-    for (const next of adj.get(id) ?? []) {
-      const nc = c + 1
-      if ((col.get(next) ?? -1) < nc) { col.set(next, nc); queue.push(next) }
+  // 1) Break cycles. Iterative DFS; an edge into a node still on the active stack
+  //    (GRAY) is a back-edge. Removing those yields a DAG to layer over — without
+  //    this, a loop (or a graph with no entry node) collapses every node into one
+  //    column, and a longest-path walk over a cycle would never terminate.
+  const WHITE = 0, GRAY = 1, BLACK = 2
+  const color = new Map<string, number>(ids.map(id => [id, WHITE]))
+  const backEdges = new Set<string>()             // "from→to"
+  const edgeKey = (from: string, to: string) => `${from}→${to}`
+  for (const start of ids) {
+    if (color.get(start) !== WHITE) continue
+    color.set(start, GRAY)
+    const stack: Array<{ id: string; i: number }> = [{ id: start, i: 0 }]
+    while (stack.length) {
+      const top = stack[stack.length - 1]
+      const neighbours = adj.get(top.id)!
+      if (top.i < neighbours.length) {
+        const v = neighbours[top.i++]
+        const c = color.get(v)
+        if (c === GRAY) backEdges.add(edgeKey(top.id, v))      // back-edge → drop for layering
+        else if (c === WHITE) { color.set(v, GRAY); stack.push({ id: v, i: 0 }) }
+      } else {
+        color.set(top.id, BLACK)
+        stack.pop()
+      }
     }
   }
-  for (const n of nodes) if (!col.has(n.id)) col.set(n.id, 0)
+  const forward = edges.filter(e => adj.has(e.from) && adj.has(e.to) && !backEdges.has(edgeKey(e.from, e.to)))
 
-  // Group nodes by column, preserving original order within each column
-  const byCol = new Map<number, GraphNode[]>()
-  for (const n of nodes) {
-    const c = col.get(n.id) ?? 0
-    if (!byCol.has(c)) byCol.set(c, [])
-    byCol.get(c)!.push(n)
+  // 2) Longest-path column assignment over the forward DAG (Kahn order → terminates).
+  const fAdj  = new Map<string, string[]>(ids.map(id => [id, []]))
+  const inDeg = new Map<string, number>(ids.map(id => [id, 0]))
+  for (const e of forward) { fAdj.get(e.from)!.push(e.to); inDeg.set(e.to, inDeg.get(e.to)! + 1) }
+  const col = new Map<string, number>(ids.map(id => [id, 0]))
+  const queue = ids.filter(id => inDeg.get(id) === 0)
+  for (let qi = 0; qi < queue.length; qi++) {
+    const id = queue[qi]
+    for (const next of fAdj.get(id)!) {
+      if (col.get(next)! < col.get(id)! + 1) col.set(next, col.get(id)! + 1)
+      inDeg.set(next, inDeg.get(next)! - 1)
+      if (inDeg.get(next) === 0) queue.push(next)
+    }
   }
 
-  const COL_GAP  = 280
-  const ROW_GAP  = 24
-  const ORIGIN_X = 60
-  const ORIGIN_Y = 60
+  // 3) Crossing minimisation. Order each column, then sweep down/up reordering a
+  //    column by the median position of its neighbours in the adjacent column.
+  const maxCol = Math.max(...col.values())
+  const cols: string[][] = Array.from({ length: maxCol + 1 }, () => [])
+  for (const id of ids) cols[col.get(id)!].push(id)   // seed with source order
 
-  // First pass: lay out each column top-down and measure total heights
+  const up = new Map<string, string[]>(ids.map(id => [id, []]))   // predecessors
+  const dn = new Map<string, string[]>(ids.map(id => [id, []]))   // successors
+  for (const e of forward) { dn.get(e.from)!.push(e.to); up.get(e.to)!.push(e.from) }
+
+  const pos = new Map<string, number>()
+  const reindex = () => cols.forEach(c => c.forEach((id, i) => pos.set(id, i)))
+  reindex()
+  const median = (xs: number[]): number => {
+    if (!xs.length) return -1
+    const s = [...xs].sort((a, b) => a - b)
+    const m = Math.floor(s.length / 2)
+    return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2
+  }
+  for (let sweep = 0; sweep < 6; sweep++) {
+    const downward = sweep % 2 === 0
+    const order = downward ? [...cols.keys()] : [...cols.keys()].reverse()
+    for (const c of order) {
+      const neigh = downward ? up : dn
+      // Keep a node with no neighbours in place by falling back to its current index.
+      const key = new Map(cols[c].map(id => {
+        const m = median(neigh.get(id)!.map(n => pos.get(n)!).filter(x => x >= 0))
+        return [id, m < 0 ? pos.get(id)! : m]
+      }))
+      cols[c].sort((a, b) => key.get(a)! - key.get(b)!)
+    }
+    reindex()
+  }
+
+  // 4) Positions: x by column, y by order index, columns vertically centred.
+  const COL_GAP = 280, ROW_GAP = 24, ORIGIN_X = 60, ORIGIN_Y = 60
   const rawPos = new Map<string, { x: number; y: number }>()
   const colH   = new Map<number, number>()
-
-  for (const [c, colNodes] of byCol) {
+  cols.forEach((colIds, c) => {
     let y = ORIGIN_Y
-    for (const n of colNodes) {
-      rawPos.set(n.id, { x: ORIGIN_X + c * COL_GAP, y })
-      y += nodeHeight(n) + ROW_GAP
+    for (const id of colIds) {
+      rawPos.set(id, { x: ORIGIN_X + c * COL_GAP, y })
+      y += nodeHeight(byId.get(id)!) + ROW_GAP
     }
     colH.set(c, y - ROW_GAP - ORIGIN_Y)
-  }
-
-  // Second pass: vertically centre shorter columns against the tallest
-  const maxH = Math.max(...colH.values())
+  })
+  const maxH = Math.max(...colH.values(), 0)
   const newPos = new Map<string, { x: number; y: number }>()
-  for (const [c, colNodes] of byCol) {
+  cols.forEach((colIds, c) => {
     const offset = snap((maxH - (colH.get(c) ?? 0)) / 2)
-    for (const n of colNodes) {
-      const p = rawPos.get(n.id)!
-      newPos.set(n.id, { x: snap(p.x), y: snap(p.y + offset) })
+    for (const id of colIds) {
+      const p = rawPos.get(id)!
+      newPos.set(id, { x: snap(p.x), y: snap(p.y + offset) })
     }
-  }
+  })
 
   return {
     nodes: nodes.map(n => ({ ...n, position: newPos.get(n.id) ?? n.position })),
-    edges: edges.map(e => ({ ...e, fromPort: 'right' as PortSide, toPort: 'left' as PortSide })),
+    edges,
   }
 }
 
@@ -668,10 +719,16 @@ export function ProcessGraphEditor({ def, onSave, onClose }: Props) {
     void loadVaults()
   }, [fetchAgents, loadVaults])
 
-  // Restore the saved graph as-is, then fit it into view.
-  // Manual layout should persist across tab switches and reopenings.
+  // Restore the saved graph, then fit it into view. The team/process compiler emits
+  // every node on a single row (a flat line), so when the restored graph has just one
+  // distinct Y we treat it as "never laid out" and auto-arrange it with the layered
+  // layout (which separates branches and loops). Once nodes have varied Ys — from a
+  // manual drag or an explicit auto-layout — we restore them as-is so the arrangement
+  // persists across tab switches and reopenings.
   useEffect(() => {
-    const current = initGraph()
+    const restored = initGraph()
+    const flat = restored.nodes.length > 2 && new Set(restored.nodes.map(n => n.position.y)).size <= 1
+    const current = flat ? computeLayout(restored) : restored
     setGraph(current)
     const frame = requestAnimationFrame(() => {
       if (!canvasRef.current) return
