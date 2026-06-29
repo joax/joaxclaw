@@ -9,6 +9,13 @@ Electron, React, and TypeScript.
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Built for OpenClaw](https://img.shields.io/badge/built%20for-OpenClaw-5b5bd6)
 
+## Screenshots
+
+|  |  |
+| :---: | :---: |
+| ![Connecting to a gateway](docs/screenshots/login.png)<br>**Connect** — local or remote gateway | ![Dashboard](docs/screenshots/dashboard.png)<br>**Dashboard** — quick-send, recent chats, live metrics |
+| ![Agent hierarchy](docs/screenshots/agents.png)<br>**Agents** — visual agent hierarchy | ![Talk](docs/screenshots/talk.png)<br>**Talk** — voice conversations |
+
 ## Features
 
 - **Chat** — streaming responses with reasoning blocks and tool-call visibility; inline
