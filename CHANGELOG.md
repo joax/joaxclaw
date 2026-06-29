@@ -5,6 +5,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.12.4] - 2026-06-28
+
+### Changed
+
+- **Clearer bottom-nav labels — "Updates" is now where you'd expect.** The bottom of the left nav had a gear labeled **Settings** that actually opened the *gateway* connection view, while the app's real settings (themes, icons, status bar, app prefs, and **Updates**) hid behind a palette icon labeled **Theme**. They're now named for what they do: a **Gateway** item (server icon) for the connection/devices/channels, and a **Settings** item (gear icon) for the app settings — so the auto-update controls live under the conventional Settings gear.
+
+### Fixed
+
+- **Release installers now publish correctly.** GitHub now makes a published release immutable, so the release workflow — which published the release *before* attaching the `.deb`/`.dmg` — could no longer upload them, leaving the release with only GitHub's auto-generated *Source code* archives. The workflow now creates the release as a draft, attaches the installers to the draft, then publishes it. (0.12.3's installers never attached for this reason; **0.12.4 supersedes 0.12.3** and includes all of its changes.)
+
 ## [0.12.3] - 2026-06-28
 
 ### Added
