@@ -1,4 +1,4 @@
-import { MessageSquare, Bot, ClipboardList, Settings, Palette, HelpCircle, Puzzle, Timer, Brain, Cpu, GitBranch, LayoutDashboard, UsersRound, Mic } from 'lucide-react'
+import { MessageSquare, Bot, ClipboardList, Settings, Server, HelpCircle, Puzzle, Timer, Brain, Cpu, GitBranch, LayoutDashboard, UsersRound, Mic } from 'lucide-react'
 import type { NavSection } from '../../App'
 import { HelpModal } from '../help/HelpModal'
 import { useHelpStore } from '../../store/help'
@@ -23,8 +23,8 @@ const GROUP_2: NavItem[] = [
 ]
 
 const GROUP_3: NavItem[] = [
-  { id: 'gateway',  icon: <Settings size={20} />, label: 'Settings' },
-  { id: 'settings', icon: <Palette size={20} />,  label: 'Theme' },
+  { id: 'gateway',  icon: <Server size={20} />,   label: 'Gateway' },
+  { id: 'settings', icon: <Settings size={20} />, label: 'Settings' },
 ]
 
 interface Props { section: NavSection; onNavigate: (s: NavSection) => void; disabledSections?: NavSection[] }
@@ -65,7 +65,7 @@ export function NavRail({ section, onNavigate, disabledSections = [] }: Props) {
 
       <Divider />
 
-      {/* Group 3: Settings, Theme + Help */}
+      {/* Group 3: Gateway, Settings + Help */}
       <div className="flex flex-col gap-1 w-full px-2 pb-1">
         {GROUP_3.map(item => (
           <NavBtn key={item.id} active={section === item.id} disabled={disabledSections.includes(item.id)} label={item.label} onClick={() => onNavigate(item.id)}>

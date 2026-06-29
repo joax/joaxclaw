@@ -104,7 +104,7 @@ function GettingStarted() {
       </Step>
       <Step n={4} title="Explore">
         <b>Sessions</b> shows live and past runs, <b>Models</b> manages providers, <b>Crons</b> schedules agent
-        turns, and <b>Settings</b> controls the gateway connection.
+        turns, and <b>Gateway</b> controls the gateway connection.
       </Step>
     </Section>
   )
@@ -380,7 +380,7 @@ function Troubleshooting() {
       </Issue>
       <Issue q="Agent or config changes didn't apply">
         The gateway hot-reloads its config on change. If something looks stale, restart it
-        (<Code>openclaw gateway restart</Code>) or use the controls in <b>Settings</b>.
+        (<Code>openclaw gateway restart</Code>) or use the controls in <b>Gateway</b>.
       </Issue>
     </Section>
   )
