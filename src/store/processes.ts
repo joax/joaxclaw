@@ -406,7 +406,9 @@ export const useProcessesStore = create<ProcessesState>((set, get) => ({
             set(s => {
               const run = s.runs[owner]
               if (!run) return s
-              return { runs: { ...s.runs, [owner]: { ...run, currentAgent: agentId, log: [...run.log, { ts: now, text: `Delegating to ${agentId}` }] } } }
+              const updated: ProcessRun = { ...run, currentAgent: agentId, log: [...run.log, { ts: now, text: `Delegating to ${agentId}` }] }
+              persistRun(updated)
+              return { runs: { ...s.runs, [owner]: updated } }
             })
           }
         }
@@ -426,7 +428,9 @@ export const useProcessesStore = create<ProcessesState>((set, get) => ({
             set(s => {
               const run = s.runs[processId]
               if (!run) return s
-              return { runs: { ...s.runs, [processId]: { ...run, currentAgent: subName } } }
+              const updated: ProcessRun = { ...run, currentAgent: subName }
+              persistRun(updated)
+              return { runs: { ...s.runs, [processId]: updated } }
             })
           } else if (data?.phase === 'result') {
             // Match by toolCallId — name field is not present on result events
@@ -475,17 +479,17 @@ export const useProcessesStore = create<ProcessesState>((set, get) => ({
           const newLog = progress?.label && progress.label !== run.progress?.label
             ? [...run.log, { ts: now, text: `→ ${progress.label}` }]
             : run.log
-          return {
-            runs: {
-              ...s.runs,
-              [processId]: {
-                ...run,
-                outputBuffer: run.outputBuffer + cleaned,
-                ...(progress && { progress, stepsDone: progress.current }),
-                log: newLog,
-              },
-            },
+          const updated: ProcessRun = {
+            ...run,
+            outputBuffer: run.outputBuffer + cleaned,
+            ...(progress && { progress, stepsDone: progress.current }),
+            log: newLog,
           }
+          // Persist on an explicit PROGRESS marker so a reconnect (or another app
+          // instance) restores the run mid-flight rather than at its launch snapshot.
+          // Plain deltas stream per-token and are deliberately NOT persisted.
+          if (progress) persistRun(updated)
+          return { runs: { ...s.runs, [processId]: updated } }
         })
         return
       }
@@ -506,18 +510,15 @@ export const useProcessesStore = create<ProcessesState>((set, get) => ({
         set(s => {
           const run = s.runs[processId]
           if (!run) return s
-          return {
-            runs: {
-              ...s.runs,
-              [processId]: {
-                ...run,
-                currentAgent: subKey || run.currentAgent,
-                stepsDone: trackingSubSessions ? run.stepsDone : run.stepsDone + 1,
-                outputBuffer: '',
-                log: [...run.log, entry],
-              },
-            },
+          const updated: ProcessRun = {
+            ...run,
+            currentAgent: subKey || run.currentAgent,
+            stepsDone: trackingSubSessions ? run.stepsDone : run.stepsDone + 1,
+            outputBuffer: '',
+            log: [...run.log, entry],
           }
+          persistRun(updated)
+          return { runs: { ...s.runs, [processId]: updated } }
         })
         return
       }
@@ -537,7 +538,9 @@ export const useProcessesStore = create<ProcessesState>((set, get) => ({
             set(s => {
               const run = s.runs[processId]
               if (!run) return s
-              return { runs: { ...s.runs, [processId]: { ...run, stepsDone: run.stepsDone + 1, currentAgent: undefined, log: [...run.log, { ts: now, text: `✓ ${agentId} done` }] } } }
+              const updated: ProcessRun = { ...run, stepsDone: run.stepsDone + 1, currentAgent: undefined, log: [...run.log, { ts: now, text: `✓ ${agentId} done` }] }
+              persistRun(updated)
+              return { runs: { ...s.runs, [processId]: updated } }
             })
           }
           return
@@ -738,9 +741,11 @@ export const useProcessesStore = create<ProcessesState>((set, get) => ({
       }
 
       set(s => {
-        // Preserve any in-memory running processes — they are never persisted mid-run,
-        // so a full replace would erase active team (or process) runs when load() is
-        // called by another view (e.g. ProcessesView, DashboardView) while they are live.
+        // Preserve any in-memory running processes — the on-disk snapshot only
+        // advances at progress points (steps, PROGRESS markers, delegations), so the
+        // live in-memory run is always at least as fresh. A full replace would
+        // discard the latest per-token output of active team (or process) runs when
+        // load() is called by another view (e.g. ProcessesView, DashboardView).
         const merged: Record<string, ProcessRun> = { ...restoredRuns }
         for (const [id, run] of Object.entries(s.runs)) {
           if (run.status === 'running') merged[id] = run
