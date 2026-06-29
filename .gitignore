@@ -24,6 +24,9 @@ coverage/
 *.log
 npm-debug.log*
 
+# Local runtime artifacts (e.g. a dev SQLite db dropped in the repo root)
+joaxclaw.db
+
 # Editor
 .vscode/settings.json
 .idea/
