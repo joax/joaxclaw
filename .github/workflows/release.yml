@@ -66,15 +66,17 @@ jobs:
             echo "RELEASE_NOTES_EOF"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Create GitHub Release (notes only)
+      - name: Create draft GitHub Release (notes only)
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ needs.check.outputs.version }}
           name: JoaxClaw v${{ needs.check.outputs.version }}
           body: ${{ steps.changelog.outputs.notes }}
-          draft: false
+          # GitHub makes a *published* release immutable — assets can only be added
+          # while it's still a draft. So create it as a draft here; the build jobs
+          # attach the installers, and the final publish job flips it to published.
+          draft: true
           prerelease: ${{ contains(needs.check.outputs.version, '-') }}
-          make_latest: ${{ !contains(needs.check.outputs.version, '-') }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -109,10 +111,14 @@ jobs:
       # No upload-artifact: the installer is attached to the GitHub Release below
       # (durable, and separate from the Actions storage quota). Keeping a 90-day
       # artifact copy too just burned through the account's Actions storage.
-      - name: Add DEB to GitHub Release
+      - name: Add DEB to the draft release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ needs.check.outputs.version }}
+          # Keep it a draft while attaching — the publish job flips it once both
+          # installers are in. (Omitting draft would default to false and publish
+          # the release early, re-locking it before the other installer uploads.)
+          draft: true
           files: dist/*.deb
           fail_on_unmatched_files: true
         env:
@@ -144,11 +150,29 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: false
 
       # No upload-artifact (see the DEB job) — the DMG is attached to the Release.
-      - name: Add DMG to GitHub Release
+      - name: Add DMG to the draft release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ needs.check.outputs.version }}
+          draft: true   # see build-linux — stay a draft until the publish job
           files: dist/*.dmg
           fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ── Publish: flip the draft to a real release once both installers are attached ─
+  # Assets can't be added after publish (immutable releases), so this runs last.
+  publish:
+    needs: [check, build-linux, build-mac]
+    if: needs.check.outputs.should_release == 'true'
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Publish the release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.check.outputs.version }}
+          draft: false
+          prerelease: ${{ contains(needs.check.outputs.version, '-') }}
+          make_latest: ${{ !contains(needs.check.outputs.version, '-') }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
