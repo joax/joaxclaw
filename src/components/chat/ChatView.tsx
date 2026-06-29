@@ -22,7 +22,7 @@ function sessionAgentId(key: string): string {
 export function ChatView() {
   const { conversations, activeConvId, newConversation, selectConversation, deleteConversation, loadSessionMessages, watchSession, setModelOverride, setThinkingLevel } = useChatStore()
   const { agents, fetch: fetchAgents } = useAgentsStore()
-  const { sessions, customLabels, fetch: fetchSessions } = useSessionsStore()
+  const { sessions, customLabels, derivedNames, fetch: fetchSessions } = useSessionsStore()
   const [search, setSearch] = useState('')
   const [showNewMenu, setShowNewMenu] = useState(false)
   const [showTools, setShowTools] = useState(true)
@@ -65,8 +65,10 @@ export function ChatView() {
     return a?.identity?.name ?? a?.name ?? id
   }
 
+  // Priority: user's explicit rename → app-derived name (e.g. Team sub-agents) →
+  // gateway display name/label → agent name parsed from the key.
   const sessionDisplayName = (s: Session) =>
-    customLabels[s.key] ?? s.displayName ?? s.label ?? agentName(s.key)
+    customLabels[s.key] ?? derivedNames[s.key] ?? s.displayName ?? s.label ?? agentName(s.key)
 
   const handleOpenSession = async (s: Session) => {
     const agentId = sessionAgentId(s.key)

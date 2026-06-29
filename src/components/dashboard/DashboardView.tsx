@@ -329,7 +329,7 @@ function RecentConversations({ onOpen, onNavigate }: { onOpen: (convId: string) 
 function ActiveSection({ onNavigate }: { onNavigate: (s: NavSection) => void }) {
   const { processes, runs } = useProcessesStore()
   const { blueprints } = useTeamsStore()
-  const { sessions } = useSessionsStore()
+  const { sessions, customLabels, derivedNames } = useSessionsStore()
 
   // Team runs live in the same `runs` store but have their own dedicated Teams section
   // (which navigates to the Teams tab). Exclude them here so a running team isn't
@@ -392,7 +392,7 @@ function ActiveSection({ onNavigate }: { onNavigate: (s: NavSection) => void }) 
       })}
 
       {activeSessions.map(sess => {
-        const label = sess.displayName ?? sess.label ?? sess.key
+        const label = customLabels[sess.key] ?? derivedNames[sess.key] ?? sess.displayName ?? sess.label ?? sess.key
         return (
           <div key={sess.key}
             style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 12px', marginBottom: 4, borderRadius: 'var(--radius)', border: '1px solid var(--border)', background: 'var(--bg-surface)' }}>

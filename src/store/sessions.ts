@@ -3,9 +3,17 @@ import type { Session } from '../lib/types'
 import { gatewayClient } from '../lib/gateway'
 
 const CUSTOM_LABELS_KEY = 'joaxclaw-session-labels'
+// App-derived friendly names for sessions the gateway only knows by an opaque key —
+// notably Team/Process sub-agents (keyed "agent:<id>:subagent:<uuid>"). Populated by
+// the processes store when it sees a spawn; persisted so the names survive a reload.
+const DERIVED_NAMES_KEY = 'joaxclaw-session-derived-names'
+
+function loadJson(key: string): Record<string, string> {
+  try { return JSON.parse(localStorage.getItem(key) ?? '{}') } catch { return {} }
+}
 
 function loadCustomLabels(): Record<string, string> {
-  try { return JSON.parse(localStorage.getItem(CUSTOM_LABELS_KEY) ?? '{}') } catch { return {} }
+  return loadJson(CUSTOM_LABELS_KEY)
 }
 
 function saveCustomLabels(labels: Record<string, string>) {
@@ -15,6 +23,7 @@ function saveCustomLabels(labels: Record<string, string>) {
 interface SessionsState {
   sessions: Session[]
   customLabels: Record<string, string>
+  derivedNames: Record<string, string>
   loading: boolean
   error: string | null
   aborting: Set<string>
@@ -24,6 +33,10 @@ interface SessionsState {
   abort: (key: string) => Promise<void>
   delete: (key: string) => Promise<void>
   rename: (key: string, name: string) => void
+  // Register an app-derived friendly name for a session key (e.g. a Team sub-agent).
+  // `force: false` keeps an existing name, so a richer source can't be overwritten by
+  // a weaker one that arrives later.
+  setDerivedName: (key: string, name: string, force?: boolean) => void
   _subscribed: boolean
   _startEventTracking: () => void
 }
@@ -31,6 +44,7 @@ interface SessionsState {
 export const useSessionsStore = create<SessionsState>((set, get) => ({
   sessions: [],
   customLabels: loadCustomLabels(),
+  derivedNames: loadJson(DERIVED_NAMES_KEY),
   loading: false,
   error: null,
   aborting: new Set(),
@@ -169,5 +183,16 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
     else delete next[key]
     saveCustomLabels(next)
     set({ customLabels: next })
+  },
+
+  setDerivedName(key, name, force = true) {
+    const trimmed = name.trim()
+    if (!key || !trimmed) return
+    const existing = get().derivedNames
+    if (!force && existing[key]) return
+    if (existing[key] === trimmed) return
+    const next = { ...existing, [key]: trimmed }
+    localStorage.setItem(DERIVED_NAMES_KEY, JSON.stringify(next))
+    set({ derivedNames: next })
   }
 }))

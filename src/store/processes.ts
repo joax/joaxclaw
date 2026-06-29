@@ -4,6 +4,7 @@ import { parseProcessFile } from '../lib/processParser'
 import { compileProcessToJob, buildLaunchPrompt } from '../lib/processCompiler'
 import { gatewayClient } from '../lib/gateway'
 import { isRemoteGatewayState } from './connection'
+import { useSessionsStore } from './sessions'
 import { nanoid } from '../lib/nanoid'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -146,9 +147,14 @@ const _runSessions = new Map<string, string>()
 // Sub-session tracking: processId → Set of worker keys spawned directly by the
 // controller that haven't fired 'final' yet. Drives the "currently delegating" display.
 const _pendingSubSessions = new Map<string, Set<string>>()
-// Maps toolCallId → processId for in-flight sessions_spawn calls.
-// data.name is only present on phase:'start', not phase:'result', so we match by id.
-const _spawnCallIds = new Map<string, string>()
+// Maps toolCallId → { processId, subName } for in-flight sessions_spawn calls.
+// data.name is only present on phase:'start', not phase:'result', so we match by id;
+// subName (the controller's task label for the worker) is carried from start to result
+// so the spawned session can be given a friendly name once its key is known.
+const _spawnCallIds = new Map<string, { processId: string; subName: string }>()
+// processId → the run's team/process display name, captured at startRun so spawned
+// sub-agents can be named "<Team> · <role>". Cleared on run teardown.
+const _runLabels = new Map<string, string>()
 // Maps toolCallId → the run + agent + tool name for every NON-spawn tool call in
 // flight, so a later phase:'result' (which omits the name) can be attributed to the
 // right run/agent/tool when reporting a failure. Cleared on result or run teardown.
@@ -161,6 +167,19 @@ function agentIdFromKey(key: string): string {
   if (parts[0] === 'agent' && parts[1]) return parts[1]
   const at = key.indexOf('@')   // legacy "agentId@…" shape
   return at > 0 ? key.slice(0, at) : key
+}
+
+// Friendly name for a sub-agent the gateway only knows by an opaque key. Combines the
+// run's team/process name (when known) with the worker's role/task: "Research Team ·
+// Web Searcher". The processes store owns the team↔worker link, so it registers these
+// names with the sessions store for the chat list / dashboard / sessions views to show.
+function registerSubagentName(sessionKey: string, processId: string, role: string, force: boolean): void {
+  if (!sessionKey) return
+  const team = _runLabels.get(processId)
+    ?? useProcessesStore.getState().processes.find(p => p.id === processId)?.name
+  const r = role.trim() || agentIdFromKey(sessionKey)
+  const name = team && !r.toLowerCase().startsWith(team.toLowerCase()) ? `${team} · ${r}` : r
+  useSessionsStore.getState().setDerivedName(sessionKey, name, force)
 }
 
 // Condense a tool call's args into a short one-liner for the activity log. Prefer a
@@ -196,7 +215,8 @@ function appendLog(log: RunLogEntry[], entry: RunLogEntry): RunLogEntry[] {
 function clearRunRouting(processId: string): void {
   for (const [k, pid] of _runSessions) if (pid === processId) _runSessions.delete(k)
   _pendingSubSessions.delete(processId)
-  for (const [cid, pid] of _spawnCallIds) if (pid === processId) _spawnCallIds.delete(cid)
+  _runLabels.delete(processId)
+  for (const [cid, c] of _spawnCallIds) if (c.processId === processId) _spawnCallIds.delete(cid)
   for (const [cid, t] of _toolCalls) if (t.pid === processId) _toolCalls.delete(cid)
 }
 
@@ -489,6 +509,9 @@ export const useProcessesStore = create<ProcessesState>((set, get) => ({
             tracked.add(sk)
             _pendingSubSessions.set(owner, tracked)
             const agentId = agentIdFromKey(sk)
+            // Give the spawned session a readable name (force:false — the spawn-result
+            // path below has the controller's task label, which is richer, so let it win).
+            registerSubagentName(sk, owner, agentId, false)
             set(s => {
               const run = s.runs[owner]
               if (!run) return s
@@ -509,8 +532,9 @@ export const useProcessesStore = create<ProcessesState>((set, get) => ({
           if (data?.phase === 'start' && data?.name === 'sessions_spawn') {
             const args = data.args as Record<string, unknown> | undefined
             const subName = String(args?.taskName ?? args?.agentId ?? 'sub-agent')
-            // Record the toolCallId so we can match the result event (name absent on result)
-            if (toolCallId) _spawnCallIds.set(toolCallId, processId)
+            // Record the toolCallId + task label so we can match the result event (which
+            // omits the name) and name the spawned session from the controller's label.
+            if (toolCallId) _spawnCallIds.set(toolCallId, { processId, subName })
             set(s => {
               const run = s.runs[processId]
               if (!run) return s
@@ -534,8 +558,8 @@ export const useProcessesStore = create<ProcessesState>((set, get) => ({
             })
           } else if (data?.phase === 'result') {
             // Match by toolCallId — name field is not present on result events
-            const ownerProcessId = toolCallId ? _spawnCallIds.get(toolCallId) : undefined
-            if (ownerProcessId) {
+            const spawn = toolCallId ? _spawnCallIds.get(toolCallId) : undefined
+            if (spawn) {
               _spawnCallIds.delete(toolCallId)
               if (!data.isError) {
                 const r = typeof data.result === 'string'
@@ -548,9 +572,11 @@ export const useProcessesStore = create<ProcessesState>((set, get) => ({
                 const rr = r as Record<string, unknown>
                 const subKey = String(rr.childSessionKey ?? rr.sessionKey ?? rr.key ?? '')
                 if (subKey) {
-                  _runSessions.set(subKey, ownerProcessId)
-                  if (!_pendingSubSessions.has(ownerProcessId)) _pendingSubSessions.set(ownerProcessId, new Set())
-                  _pendingSubSessions.get(ownerProcessId)!.add(subKey)
+                  _runSessions.set(subKey, spawn.processId)
+                  if (!_pendingSubSessions.has(spawn.processId)) _pendingSubSessions.set(spawn.processId, new Set())
+                  _pendingSubSessions.get(spawn.processId)!.add(subKey)
+                  // Authoritative name from the controller's task label for this worker.
+                  registerSubagentName(subKey, spawn.processId, spawn.subName, true)
                 }
               }
             } else if (toolCallId && _toolCalls.has(toolCallId)) {
@@ -615,6 +641,7 @@ export const useProcessesStore = create<ProcessesState>((set, get) => ({
           _runSessions.set(subKey, processId)
           if (!_pendingSubSessions.has(processId)) _pendingSubSessions.set(processId, new Set())
           _pendingSubSessions.get(processId)!.add(subKey)
+          registerSubagentName(subKey, processId, agentIdFromKey(subKey), false)
         }
         const entry: RunLogEntry = { ts: now, text: `Delegating to ${subKey || 'sub-agent'}` }
         // When sub-sessions are tracked, stepsDone is driven by sub-session 'final' events instead
@@ -732,6 +759,8 @@ export const useProcessesStore = create<ProcessesState>((set, get) => ({
   async startRun(processId, def, controllerAgentId, objective) {
     get()._startEventListening()
     const task = objective?.trim() || undefined
+    // Remember the team/process name so spawned sub-agents can be named "<Team> · <role>".
+    if (def.name) _runLabels.set(processId, def.name)
 
     let sessionKey: string
     try {
@@ -808,7 +837,7 @@ export const useProcessesStore = create<ProcessesState>((set, get) => ({
       }
       _pendingSubSessions.delete(processId)
     }
-    for (const [cid, pid] of _spawnCallIds) { if (pid === processId) _spawnCallIds.delete(cid) }
+    for (const [cid, c] of _spawnCallIds) { if (c.processId === processId) _spawnCallIds.delete(cid) }
     const run = get().runs[processId]
     if (!run?.sessionKey) return
     try {
