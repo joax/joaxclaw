@@ -210,6 +210,52 @@ async function persistRun(run: ProcessRun) {
   } catch { /* non-critical */ }
 }
 
+// ── localStorage cache (instant restore on renderer reload) ─────────────────────
+// The authoritative run state lives on the gateway (.runs/<id>.json), but reaching
+// it needs a reconnect + RPC round-trip, so on an app/renderer reload the monitor
+// goes blank until that lands. localStorage survives the reload and is synchronous,
+// so we ALSO mirror the runs here to repaint the monitor immediately; load() then
+// reconciles against the gateway (and re-attaches in-flight runs) as before.
+const RUNS_LS_KEY = 'joaxclaw-process-runs'
+
+function readCachedRuns(): Record<string, ProcessRun> {
+  try {
+    if (typeof localStorage === 'undefined') return {}
+    const raw = localStorage.getItem(RUNS_LS_KEY)
+    if (!raw) return {}
+    const parsed = JSON.parse(raw)
+    return parsed && typeof parsed === 'object' ? (parsed as Record<string, ProcessRun>) : {}
+  } catch { return {} }
+}
+
+function writeCachedRuns(runs: Record<string, ProcessRun>): void {
+  try {
+    if (typeof localStorage === 'undefined') return
+    // Trim the heavy fields — the live store keeps the full text; the cache only needs
+    // enough to repaint the monitor (progress, current agent, recent output + log).
+    const slim: Record<string, ProcessRun> = {}
+    for (const [id, r] of Object.entries(runs)) {
+      slim[id] = {
+        ...r,
+        outputBuffer: r.outputBuffer.length > 4000 ? r.outputBuffer.slice(-4000) : r.outputBuffer,
+        log: r.log.length > 200 ? r.log.slice(-200) : r.log,
+      }
+    }
+    localStorage.setItem(RUNS_LS_KEY, JSON.stringify(slim))
+  } catch { /* quota exceeded or unavailable — best effort */ }
+}
+
+// Throttle cache writes: runs mutate per streamed token, but we only need a snapshot
+// every second or so. A single trailing timer coalesces a burst into one write.
+let _cacheTimer: ReturnType<typeof setTimeout> | null = null
+function scheduleCacheWrite(): void {
+  if (_cacheTimer || typeof setTimeout === 'undefined') return
+  _cacheTimer = setTimeout(() => {
+    _cacheTimer = null
+    writeCachedRuns(useProcessesStore.getState().runs)
+  }, 1000)
+}
+
 // ── Gateway-authoritative completion + restart recovery ─────────────────────────
 // A team/process run executes on the GATEWAY (controller session + worker sub-
 // sessions), independent of the app. So we treat the gateway as the source of truth
@@ -364,7 +410,10 @@ interface ProcessesState {
 
 export const useProcessesStore = create<ProcessesState>((set, get) => ({
   processes: [],
-  runs: {},
+  // Hydrate from the localStorage cache so a renderer reload repaints the monitor
+  // instantly, before the gateway reconnects. load() reconciles this against the
+  // gateway's authoritative run files once connected.
+  runs: readCachedRuns(),
   loading: false,
   error: null,
   _subscribed: false,
@@ -376,6 +425,9 @@ export const useProcessesStore = create<ProcessesState>((set, get) => ({
   _startEventListening() {
     if (get()._subscribed) return
     set({ _subscribed: true })
+
+    // Mirror runs to localStorage (throttled) so the monitor survives a reload.
+    useProcessesStore.subscribe(scheduleCacheWrite)
 
     gatewayClient.on((frame) => {
       // Detect process sessions created externally (e.g. via the process-builder skill).
@@ -785,38 +837,40 @@ export const useProcessesStore = create<ProcessesState>((set, get) => ({
         if (def) defs.push(def)
       }
 
-      // Restore persisted run states
+      // Restore persisted run states. A persisted 'running' run means the gateway was
+      // still executing it when the app last closed; the team runs on the gateway,
+      // independent of the app, so we re-attach below instead of declaring it interrupted.
       const restoredRuns: Record<string, ProcessRun> = {}
-      const toReattach: ProcessRun[] = []
       for (const r of rawRuns) {
         if (!r.run) continue
         try {
           const run = JSON.parse(r.run) as ProcessRun
-          // A persisted 'running' run means the gateway was still executing it when the
-          // app last closed. The team runs on the gateway, independent of the app, so we
-          // re-attach instead of declaring it interrupted.
-          if (run.status === 'running' && run.sessionKey) toReattach.push(run)
           restoredRuns[run.processId] = run
         } catch { /* skip corrupt run files */ }
       }
 
       set(s => {
-        // Preserve any in-memory running processes — the on-disk snapshot only
-        // advances at progress points (steps, PROGRESS markers, delegations), so the
-        // live in-memory run is always at least as fresh. A full replace would
-        // discard the latest per-token output of active team (or process) runs when
-        // load() is called by another view (e.g. ProcessesView, DashboardView).
+        // Prefer the in-memory copy of a still-running run — between progress points it
+        // holds fresher per-token output than the on-disk snapshot, so a full replace
+        // would discard live output when load() is called by another view (ProcessesView,
+        // DashboardView). EXCEPTION: an in-memory 'running' run can be a stale
+        // localStorage snapshot from before a reload, so if the gateway's copy says it
+        // already finished, trust the gateway and let it win.
         const merged: Record<string, ProcessRun> = { ...restoredRuns }
         for (const [id, run] of Object.entries(s.runs)) {
-          if (run.status === 'running') merged[id] = run
+          if (run.status !== 'running') continue
+          const authoritative = restoredRuns[id]
+          if (!authoritative || authoritative.status === 'running') merged[id] = run
         }
         return { _backend: backend, processes: defs, runs: merged, loading: false, needsPlugin: false }
       })
 
-      // Re-route live events for each recovered run and reconcile its completion
-      // against the gateway (idempotent — runs at most once per run per app session).
-      for (const run of toReattach) {
-        if (get().runs[run.processId]?.status === 'running') reattachRunningRun(run)
+      // Re-route live events for every still-running run and reconcile its completion
+      // against the gateway. Covers both gateway-restored runs and cache-hydrated ones
+      // (a run that finished while the app was closed self-heals to done once the
+      // gateway shows its session tree idle). Idempotent — once per run per app session.
+      for (const run of Object.values(get().runs)) {
+        if (run.status === 'running' && run.sessionKey) reattachRunningRun(run)
       }
     } catch (e) {
       set({ loading: false, error: String(e) })
