@@ -5,6 +5,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.12.5] - 2026-06-29
+
+### Added
+
+- **Readable names for Team-spawned sub-agents.** A Team/Process sub-agent is only known to the gateway by an opaque key (`agent:<id>:subagent:<uuid>`), which surfaced verbatim in the chat list, the Sessions view, and the dashboard. They now show a friendly name derived from the team and the controller's task label for that worker (e.g. **"Research Team · Web Searcher"**), persisted across reloads. Resolution order is your explicit rename → the team-derived name → the gateway's own display name → the key.
+
+### Changed
+
+- **Team graph now lays out loops and branches instead of a flat line.** The graph editor used a longest-path pass that collapsed any team with a feedback loop (or no entry node) into a single column. It's now a layered (Sugiyama-style) layout: cycles are detected and their back-edges drawn as arcs, columns are assigned left→right over the resulting DAG, and node order within each column is chosen to minimise edge crossings. A freshly-compiled team auto-arranges on open, while a manual arrangement is preserved.
+
+### Fixed
+
+- **Agents graph no longer hangs or renders as a tall, tiny sliver.** The hierarchy layout runs during render; its longest-path walk increased a node's level on every longer path, so a cyclic `allowedSubAgents` relationship (A→B→A, or an agent that lists itself) looped forever and froze the tab — and a stop-gap cap then flung cycle nodes far down the canvas, shrinking everything. It now places each agent at its shortest distance from a root: compact, and cycle-safe by construction.
+
 ## [0.12.4] - 2026-06-28
 
 ### Changed
