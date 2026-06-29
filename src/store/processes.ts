@@ -149,6 +149,10 @@ const _pendingSubSessions = new Map<string, Set<string>>()
 // Maps toolCallId → processId for in-flight sessions_spawn calls.
 // data.name is only present on phase:'start', not phase:'result', so we match by id.
 const _spawnCallIds = new Map<string, string>()
+// Maps toolCallId → the run + agent + tool name for every NON-spawn tool call in
+// flight, so a later phase:'result' (which omits the name) can be attributed to the
+// right run/agent/tool when reporting a failure. Cleared on result or run teardown.
+const _toolCalls = new Map<string, { pid: string; agentId: string; name: string }>()
 
 // Session keys look like "agent:<agentId>:<kind>:<uuid>" (e.g.
 // "agent:research-worker:subagent:…"). Recover the human-readable agent id.
@@ -159,11 +163,41 @@ function agentIdFromKey(key: string): string {
   return at > 0 ? key.slice(0, at) : key
 }
 
+// Condense a tool call's args into a short one-liner for the activity log. Prefer a
+// single human-meaningful field (path/command/query/…); otherwise fall back to
+// compact JSON. Always trimmed to keep log lines scannable.
+function summarizeToolArgs(args: unknown): string {
+  if (!args || typeof args !== 'object') return ''
+  const a = args as Record<string, unknown>
+  const PRIMARY = ['path', 'filePath', 'file', 'command', 'cmd', 'query', 'url', 'pattern', 'prompt', 'name']
+  for (const k of PRIMARY) {
+    const v = a[k]
+    if (typeof v === 'string' && v.trim()) return truncateOneLine(v, 64)
+  }
+  let json = ''
+  try { json = JSON.stringify(args) } catch { /* circular/unserialisable */ }
+  return json && json !== '{}' ? truncateOneLine(json, 64) : ''
+}
+function truncateOneLine(s: string, n: number): string {
+  const flat = s.replace(/\s+/g, ' ').trim()
+  return flat.length > n ? flat.slice(0, n - 1) + '…' : flat
+}
+
+// Append to a run's activity log, keeping only the most recent entries. The action
+// trail can grow fast on tool-heavy runs, and the whole run is serialised on persist,
+// so we cap the history to keep memory and the persisted file bounded.
+const MAX_RUN_LOG = 1000
+function appendLog(log: RunLogEntry[], entry: RunLogEntry): RunLogEntry[] {
+  const next = [...log, entry]
+  return next.length > MAX_RUN_LOG ? next.slice(next.length - MAX_RUN_LOG) : next
+}
+
 // Drop all routing/bookkeeping for a finished run so stale keys can't reroute later frames.
 function clearRunRouting(processId: string): void {
   for (const [k, pid] of _runSessions) if (pid === processId) _runSessions.delete(k)
   _pendingSubSessions.delete(processId)
   for (const [cid, pid] of _spawnCallIds) if (pid === processId) _spawnCallIds.delete(cid)
+  for (const [cid, t] of _toolCalls) if (t.pid === processId) _toolCalls.delete(cid)
 }
 
 // ── Persist run state to disk ─────────────────────────────────────────────────
@@ -432,6 +466,20 @@ export const useProcessesStore = create<ProcessesState>((set, get) => ({
               persistRun(updated)
               return { runs: { ...s.runs, [processId]: updated } }
             })
+          } else if (data?.phase === 'start') {
+            // Every other tool the controller or a worker runs → live action trail,
+            // attributed to the emitting agent. Remember it so a later result (which
+            // omits the name) can report a failure against the right tool.
+            const agentId = agentIdFromKey(sk)
+            const toolName = String(data?.name ?? 'tool')
+            if (toolCallId) _toolCalls.set(toolCallId, { pid: processId, agentId, name: toolName })
+            const summary = summarizeToolArgs(data?.args)
+            const text = `🔧 ${agentId}: ${toolName}${summary ? ` (${summary})` : ''}`
+            set(s => {
+              const run = s.runs[processId]
+              if (!run) return s
+              return { runs: { ...s.runs, [processId]: { ...run, log: appendLog(run.log, { ts: now, text }) } } }
+            })
           } else if (data?.phase === 'result') {
             // Match by toolCallId — name field is not present on result events
             const ownerProcessId = toolCallId ? _spawnCallIds.get(toolCallId) : undefined
@@ -452,6 +500,18 @@ export const useProcessesStore = create<ProcessesState>((set, get) => ({
                   if (!_pendingSubSessions.has(ownerProcessId)) _pendingSubSessions.set(ownerProcessId, new Set())
                   _pendingSubSessions.get(ownerProcessId)!.add(subKey)
                 }
+              }
+            } else if (toolCallId && _toolCalls.has(toolCallId)) {
+              // A tracked non-spawn tool finished. Surface failures (successes would
+              // double every action line); drop the bookkeeping either way.
+              const t = _toolCalls.get(toolCallId)!
+              _toolCalls.delete(toolCallId)
+              if (data?.isError) {
+                set(s => {
+                  const run = s.runs[t.pid]
+                  if (!run) return s
+                  return { runs: { ...s.runs, [t.pid]: { ...run, log: appendLog(run.log, { ts: now, text: `⚠ ${t.agentId}: ${t.name} failed` }) } } }
+                })
               }
             }
           }
