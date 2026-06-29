@@ -32,7 +32,9 @@ contextBridge.exposeInMainWorld('api', {
   window: {
     minimize: () => ipcRenderer.invoke('window:minimize'),
     maximize: () => ipcRenderer.invoke('window:maximize'),
-    close: () => ipcRenderer.invoke('window:close')
+    close: () => ipcRenderer.invoke('window:close'),
+    setTitleBarOverlay: (color: string, symbolColor: string) =>
+      ipcRenderer.invoke('window:setTitleBarOverlay', color, symbolColor)
   },
 
   // Config file

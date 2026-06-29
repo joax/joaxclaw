@@ -4,7 +4,7 @@ import logoUrl from '../../assets/logo-dark.png'
 declare global {
   interface Window {
     api: {
-      window: { minimize(): void; maximize(): void; close(): void }
+      window: { minimize(): void; maximize(): void; close(): void; setTitleBarOverlay?(color: string, symbolColor: string): void }
       config: { read(): Promise<{ ok: boolean; text?: string; path?: string; error?: string }>; write(t: string): Promise<{ ok: boolean }> }
       gateway: { restart(): Promise<{ok:boolean;stdout:string;stderr:string}>; restartSafe(): Promise<{ok:boolean;stdout:string;stderr:string}>; stop(): Promise<{ok:boolean;stdout:string;stderr:string}>; status(): Promise<{ok:boolean;stdout:string;stderr:string}> }
       metrics: { get(): Promise<{ ok: boolean; cpu: number; ramUsed: number; ramTotal: number; gpu: { model: string; utilizationGpu: number; memUsed: number; memTotal: number; temperatureGpu: number }[] }> }

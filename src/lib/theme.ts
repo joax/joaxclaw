@@ -27,6 +27,13 @@ export function applyTheme(theme: ThemeSettings): void {
     : window.matchMedia('(prefers-color-scheme: dark)').matches
   root.classList.toggle('dark', dark)
   root.style.colorScheme = dark ? 'dark' : 'light'
+
+  // Sync the native window-control overlay (min/max/close drawn by the OS) with the
+  // theme — its colours are baked in at window creation and won't follow CSS variables.
+  // Match the custom title bar: overlay background = bg-primary, icons = text-secondary.
+  try {
+    window.api?.window?.setTitleBarOverlay?.(c.bgPrimary, c.textSecondary)
+  } catch { /* not in Electron, or overlay unsupported on this platform */ }
 }
 
 export function hexToRgb(hex: string): string {
