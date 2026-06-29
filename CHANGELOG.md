@@ -5,6 +5,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.12.3] - 2026-06-28
+
+### Added
+
+- **Live action trail of sub-agent work in the Team/Process monitor.** The monitor previously showed a member's streamed text but not what it actually *did* — every tool call except `sessions_spawn` was dropped. The activity log now records each tool call the controller and its workers run, attributed to the emitting agent with a short argument summary (e.g. `🔧 research-worker: read_file (src/lib/foo.ts)`), and surfaces failures (`⚠ research-worker: bash failed`). The trail is capped so it stays bounded on tool-heavy runs.
+- **Claude-style colored diffs for file edits in chat.** When the model modifies a file, the change renders as a rich diff instead of raw text/JSON — color-coded additions/deletions, old/new line numbers, a +N/−M summary, a unified⇄split toggle, collapse, and syntax highlighting. It's detected from every shape an edit arrives in: model-written ` ```diff ` blocks, gateway `<edit>`/`<write>` tags, edit tool-call args (`old_string`/`new_string`, `apply_patch`), and edit tool *results* that carry a unified patch.
+
+### Changed
+
+- **Native window controls (min/max/close) follow the app theme.** The OS-drawn title-bar buttons baked in their colors at window creation; they now re-tint to match the active theme. (Applies on Windows/macOS, where the OS draws the overlay; Linux uses the app's own title bar.)
+
+### Fixed
+
+- **Your theme selection persists across reloads.** `main.tsx` re-applied the default (dark) theme *after* the settings store had already restored your saved theme, so every reload reset it to dark. It now applies the saved theme, falling back to the default only on a fresh install.
+- **Team/Process run progress survives a reload and a reconnect.** Runs were persisted only at launch (`stepsDone: 0`) and on completion, so reconnecting to a gateway mid-run — or reloading the app — showed the monitor as if the run had just started. Progress is now persisted on each advancing event (steps, `[PROGRESS]` markers, delegations) and mirrored to localStorage, so the monitor repaints the real progress instantly on reload while the gateway reconciles the rest on reconnect (a run that finished while the app was closed self-heals to done).
+- **The Theme view no longer traps you while disconnected.** On the connect screen every section but Theme was disabled in the nav rail, so opening Theme left no way back to the connect screen. Dashboard stays clickable while disconnected and routes back.
+- **Dashboard no longer treats team runs as processes.** Team runs share the processes store, so the dashboard double-listed running teams under "Active", counted them in the "processes running" chip, and mis-navigated to the Processes tab. Team runs are now split out by blueprint id — they appear only in the Teams section (→ Teams tab), with their own "teams running" chip. Drawer times also roll up through hours/days (2h 5m, 1d 3h, 2d ago) instead of large minute counts.
+- **Monitor step marker no longer sticks on a handoff after a delegation.** The Team Progress marker used `i === stepsDone`, but the step list interleaves handoff/review transition nodes that `stepsDone` doesn't count — so a finished handoff held the marker while the next agent was already working. Transition nodes now read as done immediately and the marker follows to the next agent; the progress bar also reaches 100% instead of stalling at, e.g., 3/5.
+- **Chat no longer looks stopped when an agent delegates.** This gateway ends the run with an empty `final` at the `sessions_yield` (the pause to wait for a sub-agent), then auto-resumes and streams the real answer in a later `final`. The client treated that first empty `final` as "done" and unsubscribed, so the resumed answer never arrived until you sent another message. An empty `final` while a sub-agent thread is still in flight is now treated as a yield boundary — the stream stays attached and the resumed answer comes through.
+- **Reliable chat auto-scroll.** The auto-follow `ResizeObserver` attached on mount, but the empty-conversation state didn't render the scroll container, so it watched nothing and never re-attached when messages arrived — silently killing auto-scroll for that conversation. The container is now always mounted, and sending a message snaps to the bottom.
+- **Reused agentId no longer breaks conditional routing in teams.** A branching team that used the same agentId for multiple members (e.g. `coder-worker` as both a Code and QA agent) compiled a corrupt graph — a route landed on every member sharing that id and feedback edges resolved to the first match, orphaning steps. Routes/branches now resolve to a unique member by role (with agentId kept as a backward-compatible fallback), so reused-agentId members are distinguishable. Existing unique-agentId routes are unchanged.
+
 ## [0.12.2] - 2026-06-27
 
 ### Added
