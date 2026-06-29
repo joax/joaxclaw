@@ -14,8 +14,8 @@ function sessionAgentId(key: string): string {
   return atIdx > 0 ? key.slice(0, atIdx) : key
 }
 
-function sessionLabel(s: Session, customLabels: Record<string, string>): string {
-  return customLabels[s.key] ?? s.displayName ?? s.label ?? s.key
+function sessionLabel(s: Session, customLabels: Record<string, string>, derivedNames: Record<string, string>): string {
+  return customLabels[s.key] ?? derivedNames[s.key] ?? s.displayName ?? s.label ?? s.key
 }
 
 const TERMINAL_STATUSES = new Set(['idle', 'done', 'failed', 'killed', 'timeout'])
@@ -60,7 +60,7 @@ function formatTs(ts: number | undefined): string {
 }
 
 export function SessionsView({ onOpenChat }: Props) {
-  const { sessions, customLabels, loading, error, fetch, abort, delete: deleteSession, rename, aborting, abortError } = useSessionsStore()
+  const { sessions, customLabels, derivedNames, loading, error, fetch, abort, delete: deleteSession, rename, aborting, abortError } = useSessionsStore()
   const { loadSessionMessages } = useChatStore()
   const [sort, setSort] = useState<SortKey>('updatedAt')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
@@ -80,7 +80,7 @@ export function SessionsView({ onOpenChat }: Props) {
 
   const filtered = sessions
     .filter(s => filterStatus === 'all' || sessionStatus(s) === filterStatus)
-    .filter(s => !search || s.key.includes(search) || sessionLabel(s, customLabels).toLowerCase().includes(search.toLowerCase()))
+    .filter(s => !search || s.key.includes(search) || sessionLabel(s, customLabels, derivedNames).toLowerCase().includes(search.toLowerCase()))
     .sort((a, b) => {
       let cmp = 0
       if (sort === 'updatedAt') cmp = (a.updatedAt ?? 0) - (b.updatedAt ?? 0)
@@ -94,7 +94,7 @@ export function SessionsView({ onOpenChat }: Props) {
     setOpeningKey(s.key)
     setOpenError(null)
     try {
-      const convId = await loadSessionMessages(s.key, sessionAgentId(s.key), sessionLabel(s, customLabels))
+      const convId = await loadSessionMessages(s.key, sessionAgentId(s.key), sessionLabel(s, customLabels, derivedNames))
       if (convId) {
         onOpenChat()
       } else {
@@ -182,7 +182,7 @@ export function SessionsView({ onOpenChat }: Props) {
             <tbody>
               {filtered.map((s, i) => {
                 const agentId = sessionAgentId(s.key)
-                const label = sessionLabel(s, customLabels)
+                const label = sessionLabel(s, customLabels, derivedNames)
                 const status = sessionStatus(s)
                 const sc = statusColor(status)
                 return (
