@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { RotateCcw, Square, CheckCircle2, XCircle, AlertCircle, RefreshCw, Eye, EyeOff, Server, Plug, Cpu, Sparkles, MessageSquare, HelpCircle, MonitorSmartphone } from 'lucide-react'
+import { RotateCcw, Square, CheckCircle2, XCircle, AlertCircle, RefreshCw, Eye, EyeOff, Server, Plug, Cpu, Sparkles, MessageSquare, HelpCircle, MonitorSmartphone, ArrowUpCircle } from 'lucide-react'
 import Editor from '@monaco-editor/react'
 import { useConnectionStore, useIsRemoteGateway } from '../../store/connection'
 import { useMetricsStore } from '../../store/metrics'
@@ -11,6 +11,8 @@ import { useSkillsStore } from '../../store/skills'
 import { ChannelsPanel } from './ChannelsPanel'
 import { DevicesPanel } from './DevicesPanel'
 import { LocalEnginesCard } from './LocalEnginesCard'
+import { buildGatewayUpdatePrompt } from '../../lib/gatewayUpdate'
+import { sendViaAgent } from '../../lib/agentPrompt'
 
 type GwStatus = { running: boolean; pid?: number; uptime?: string }
 
@@ -27,7 +29,7 @@ const SETTINGS_TABS: { id: SettingsTab; label: string; icon: React.ReactNode }[]
   { id: 'skills',     label: 'Skills',     icon: <Sparkles size={15} /> },
 ]
 
-export function GatewayView() {
+export function GatewayView({ onOpenChat }: { onOpenChat?: () => void } = {}) {
   const { status, connection, connect, disconnect } = useConnectionStore()
   const remote = useIsRemoteGateway()
   const { ollamaModels } = useMetricsStore()
@@ -106,6 +108,21 @@ export function GatewayView() {
     setCmdOutput((res.stdout || res.stderr || (res.ok ? 'Success' : 'Failed')))
     setCmdRunning(false)
     setTimeout(() => checkStatus(), 1000)
+  }
+
+  // Update OpenClaw itself on the gateway host. Unlike restart/stop (which shell out
+  // locally), this asks the connected agent to run `openclaw update` on its host, so it
+  // works for a remote gateway too — the agent always runs on the gateway host.
+  const handleUpdate = async () => {
+    setCmdRunning(true)
+    const built = await buildGatewayUpdatePrompt()
+    setCmdRunning(false)
+    if (!built.ok || !built.prompt) {
+      setCmdOutput(built.error ?? 'Failed to prepare the update')
+      return
+    }
+    setCmdOutput('Update requested — opening a chat and asking the agent to run it on the gateway host.')
+    sendViaAgent(built.prompt, onOpenChat)
   }
 
   const handleConnect = () => {
@@ -205,6 +222,7 @@ export function GatewayView() {
                   <span>{gwStatus?.running ? 'Running' : 'Stopped'}</span>
                   {gwStatus?.pid && <span className="opacity-60">PID {gwStatus.pid}</span>}
                 </div>
+                <Btn variant="outline" size="sm" icon={<ArrowUpCircle size={12} />} loading={cmdRunning} disabled={status !== 'connected'} onClick={handleUpdate}>Update</Btn>
                 <Btn variant="outline" size="sm" icon={<RotateCcw size={12} />} loading={cmdRunning} onClick={() => runCmd(window.api.gateway.restart)}>Restart</Btn>
                 <Btn variant="outline" size="sm" icon={<RotateCcw size={12} />} loading={cmdRunning} onClick={() => runCmd(window.api.gateway.restartSafe)}>Safe</Btn>
                 <Btn variant="danger" size="sm" icon={<Square size={12} />} loading={cmdRunning} onClick={() => runCmd(window.api.gateway.stop)}>Stop</Btn>
