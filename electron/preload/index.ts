@@ -105,8 +105,9 @@ contextBridge.exposeInMainWorld('api', {
   // Obsidian installation detection + skill file management
   obsidian: {
     detect: () => ipcRenderer.invoke('obsidian:detect'),
-    writeSkill: (vaults: Array<{ name: string; url: string; apiKey: string }>) =>
-      ipcRenderer.invoke('obsidian:writeSkill', vaults)
+    writeSkill: (vaults: Array<{ name: string; url: string; apiKey: string }>, mode: 'read-only' | 'read-write' = 'read-write') =>
+      ipcRenderer.invoke('obsidian:writeSkill', vaults, mode),
+    removeSkill: () => ipcRenderer.invoke('obsidian:removeSkill'),
   },
 
   // App-native agent skills (process-builder, teams-blueprint)
