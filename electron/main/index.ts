@@ -1,6 +1,6 @@
 import { app, BrowserWindow, ipcMain, shell, Tray, Menu, nativeImage, session } from 'electron'
 import { join, dirname } from 'path'
-import { readFile, writeFile, mkdir, readdir, unlink } from 'fs/promises'
+import { readFile, writeFile, mkdir, readdir, unlink, rm } from 'fs/promises'
 import { existsSync, statSync, createReadStream, watch, type FSWatcher } from 'fs'
 import { homedir } from 'os'
 import { exec, spawn } from 'child_process'
@@ -628,7 +628,11 @@ ipcMain.handle('obsidian:detect', async () => {
   return { installed, platform }
 })
 
-ipcMain.handle('obsidian:writeSkill', async (_event, vaults: Array<{ name: string; url: string; apiKey: string }>) => {
+ipcMain.handle('obsidian:writeSkill', async (
+  _event,
+  vaults: Array<{ name: string; url: string; apiKey: string }>,
+  mode: 'read-only' | 'read-write' = 'read-write',
+) => {
   try {
     const skillDir = join(homedir(), '.openclaw', 'skills', 'obsidian-memory')
     await mkdir(skillDir, { recursive: true })
@@ -637,17 +641,39 @@ ipcMain.handle('obsidian:writeSkill', async (_event, vaults: Array<{ name: strin
       `### ${v.name}${i === 0 ? ' (primary)' : ''}\n- **URL**: ${v.url}\n- **API Key**: \`${v.apiKey}\``
     ).join('\n\n')
 
+    const readWrite = mode === 'read-write'
+    // The frontmatter `description` is the skill's "when to use" trigger AND its capability
+    // contract — read-only must not advertise writing, or an agent may try (and the table
+    // below won't list the endpoints, so it would fail confusingly).
+    const description = readWrite
+      ? 'Use when the user asks about their notes, knowledge base, vault, or memories.\n' +
+        '  Provides access to Obsidian vaults via the Local REST API.\n' +
+        '  You can list notes, read note content, search, and write notes.'
+      : 'Use when the user asks about their notes, knowledge base, vault, or memories.\n' +
+        '  Provides READ-ONLY access to Obsidian vaults via the Local REST API.\n' +
+        '  You can list notes, read note content, and search — but NOT modify the vault.'
+
+    const apiRows = [
+      '| List all files | `GET {url}/vault/` |',
+      '| Read a note | `GET {url}/vault/{path}` |',
+      '| Full-text search | `POST {url}/search/simple/?query={q}&contextLength=100` |',
+    ]
+    if (readWrite) {
+      apiRows.splice(2, 0,
+        '| Write/overwrite note | `PUT {url}/vault/{path}` (plain text body) |',
+        '| Append to note | `POST {url}/vault/{path}` (`Content-Type: text/markdown`) |',
+      )
+    }
+
     const content = [
       '---',
       'name: obsidian-memory',
-      'description: "Use when the user asks about their notes, knowledge base, vault, or memories.',
-      '  Provides access to Obsidian vaults via the Local REST API.',
-      '  You can list notes, read note content, search, and write notes."',
+      `description: "${description}"`,
       '---',
       '',
       '# Obsidian Memory Vaults',
       '',
-      'Access Obsidian vaults using the Local REST API plugin.',
+      `Access Obsidian vaults using the Local REST API plugin.${readWrite ? '' : ' This access is **read-only** — do not attempt to create, modify, or delete notes.'}`,
       'Always set `Authorization: Bearer {api_key}` header.',
       '',
       '## Registered Vaults',
@@ -658,17 +684,25 @@ ipcMain.handle('obsidian:writeSkill', async (_event, vaults: Array<{ name: strin
       '',
       '| Operation | Request |',
       '|-----------|---------|',
-      '| List all files | `GET {url}/vault/` |',
-      '| Read a note | `GET {url}/vault/{path}` |',
-      '| Write/overwrite note | `PUT {url}/vault/{path}` (plain text body) |',
-      '| Append to note | `POST {url}/vault/{path}` (`Content-Type: text/markdown`) |',
-      '| Full-text search | `POST {url}/search/simple/?query={q}&contextLength=100` |',
+      ...apiRows,
       '',
       'Note: URL-encode each path segment individually (not the slashes between them).',
       '',
     ].join('\n')
 
     await writeFile(join(skillDir, 'SKILL.md'), content, 'utf-8')
+    return { ok: true }
+  } catch (e) {
+    return { ok: false, error: String(e) }
+  }
+})
+
+// Remove the obsidian-memory skill so gateway agents lose vault access (used when the
+// user sets agent access to "Off", or removes the last vault).
+ipcMain.handle('obsidian:removeSkill', async () => {
+  try {
+    const skillDir = join(homedir(), '.openclaw', 'skills', 'obsidian-memory')
+    await rm(skillDir, { recursive: true, force: true })
     return { ok: true }
   } catch (e) {
     return { ok: false, error: String(e) }

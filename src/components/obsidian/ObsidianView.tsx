@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import {
   Brain, CheckCircle2, XCircle, Loader2, ChevronRight, ChevronDown,
-  FolderOpen, Globe, RefreshCw, Unlink, AlertTriangle, Puzzle, Plus
+  FolderOpen, Globe, RefreshCw, Unlink, AlertTriangle, Puzzle, Plus,
+  Bot, Eye, Pencil, Ban, Check
 } from 'lucide-react'
-import { useObsidianStore, type ObsidianConfig, type VaultInfo } from '../../store/obsidian'
+import { useObsidianStore, type ObsidianConfig, type VaultInfo, type AgentAccess } from '../../store/obsidian'
 import { useExtensionsStore } from '../../store/extensions'
 import { ForceGraph } from './ForceGraph'
 import { Btn } from '../ui/Btn'
@@ -417,6 +418,75 @@ function VaultSwitcher({ onAddVault }: { onAddVault: () => void }) {
 
 // ── Main view (graph + header) ────────────────────────────────────────────────
 
+// ── Agent access control ───────────────────────────────────────────────────────
+// Governs how much of the vault the gateway's AGENTS can reach (the app itself always
+// has full access). Writes/removes the obsidian-memory skill on the gateway host.
+const ACCESS_OPTIONS: { value: AgentAccess; label: string; desc: string; icon: React.ReactNode }[] = [
+  { value: 'off',        label: 'Off',          desc: "Agents can't access the vault",   icon: <Ban size={13} /> },
+  { value: 'read-only',  label: 'Read-only',    desc: 'Agents can read & search notes',   icon: <Eye size={13} /> },
+  { value: 'read-write', label: 'Read & write', desc: 'Agents can also create & edit notes', icon: <Pencil size={13} /> },
+]
+
+function AgentAccessControl() {
+  const { agentAccess, setAgentAccess } = useObsidianStore()
+  const [open, setOpen] = useState(false)
+  const current = ACCESS_OPTIONS.find(o => o.value === agentAccess) ?? ACCESS_OPTIONS[2]
+
+  useEffect(() => {
+    if (!open) return
+    const close = () => setOpen(false)
+    window.addEventListener('click', close)
+    return () => window.removeEventListener('click', close)
+  }, [open])
+
+  return (
+    <div className="relative" onClick={e => e.stopPropagation()}>
+      <button
+        onClick={() => setOpen(o => !o)}
+        className="flex items-center gap-1.5 px-2 py-1 rounded text-xs"
+        style={{
+          background: 'var(--bg-elevated)', border: '1px solid var(--border)',
+          color: agentAccess === 'off' ? 'var(--text-secondary)' : 'var(--text-primary)', cursor: 'pointer',
+        }}
+        title="Control what gateway agents can do with this vault"
+      >
+        <Bot size={13} style={{ color: agentAccess === 'off' ? 'var(--text-secondary)' : 'var(--accent)' }} />
+        <span className="hidden sm:inline" style={{ color: 'var(--text-secondary)' }}>Agents:</span>
+        {current.icon}
+        <span>{current.label}</span>
+        <ChevronDown size={12} style={{ color: 'var(--text-secondary)' }} />
+      </button>
+
+      {open && (
+        <div
+          className="absolute right-0 mt-1 z-20 rounded shadow-lg overflow-hidden"
+          style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', minWidth: 240 }}
+        >
+          {ACCESS_OPTIONS.map(o => (
+            <button
+              key={o.value}
+              onClick={() => { setAgentAccess(o.value); setOpen(false) }}
+              className="flex items-start gap-2.5 w-full px-3 py-2 text-left"
+              style={{ background: o.value === agentAccess ? 'color-mix(in srgb, var(--accent) 12%, transparent)' : 'transparent', cursor: 'pointer', border: 'none' }}
+              onMouseEnter={e => { if (o.value !== agentAccess) (e.currentTarget as HTMLElement).style.background = 'var(--bg-elevated)' }}
+              onMouseLeave={e => { if (o.value !== agentAccess) (e.currentTarget as HTMLElement).style.background = 'transparent' }}
+            >
+              <span style={{ color: o.value === agentAccess ? 'var(--accent)' : 'var(--text-secondary)', marginTop: 1 }}>{o.icon}</span>
+              <span className="flex-1 min-w-0">
+                <span className="flex items-center gap-1.5 text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
+                  {o.label}
+                  {o.value === agentAccess && <Check size={12} style={{ color: 'var(--accent)' }} />}
+                </span>
+                <span className="block text-xs mt-0.5" style={{ color: 'var(--text-secondary)' }}>{o.desc}</span>
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function MainView({ onAddVault }: { onAddVault: () => void }) {
   const { config, graph, loadingGraph, graphProgress, error, loadGraph } = useObsidianStore()
   const containerRef = useRef<HTMLDivElement>(null)
@@ -460,6 +530,7 @@ function MainView({ onAddVault }: { onAddVault: () => void }) {
               Loading graph… {Math.round(graphProgress * 100)}%
             </span>
           )}
+          <AgentAccessControl />
           <Btn size="sm" variant="ghost" icon={<RefreshCw size={12} />}
             onClick={loadGraph} loading={loadingGraph} title="Reload graph" />
           <Btn size="sm" variant="ghost" icon={<Unlink size={12} />}

@@ -2,7 +2,13 @@ import { create } from 'zustand'
 
 const VAULTS_KEY  = 'joaxclaw-obsidian-vaults'
 const ACTIVE_KEY  = 'joaxclaw-obsidian-active'
+const ACCESS_KEY  = 'joaxclaw-obsidian-agent-access'
 const LEGACY_KEY  = 'joaxclaw-obsidian'
+
+// How much of the vault the gateway's AGENTS may reach (via the obsidian-memory skill
+// the app writes to ~/.openclaw/skills). Distinct from the app's own access, which is
+// always full. 'off' removes the skill entirely so agents can't see the vault.
+export type AgentAccess = 'off' | 'read-only' | 'read-write'
 
 export interface ObsidianConfig {
   name: string      // display label, e.g. "Personal", "Work"
@@ -37,6 +43,7 @@ interface ObsidianState {
   vaults: ObsidianConfig[]
   activeVaultUrl: string | null
   config: ObsidianConfig | null   // = active vault
+  agentAccess: AgentAccess         // what gateway agents may do with the vault
   vaultInfo: VaultInfo | null
   graph: GraphData | null
   loadingGraph: boolean
@@ -47,6 +54,7 @@ interface ObsidianState {
   addVault: (config: ObsidianConfig) => void
   removeVault: (url: string) => void
   setActiveVault: (url: string) => void
+  setAgentAccess: (access: AgentAccess) => void
   saveConfig: (config: ObsidianConfig) => void  // alias for addVault
   clearConfig: () => void                        // removes active vault
   writeSkillFile: () => Promise<void>
@@ -73,6 +81,13 @@ function readVaults(): { vaults: ObsidianConfig[]; activeUrl: string | null } {
   } catch { /* fall through */ }
 
   return { vaults: [], activeUrl: null }
+}
+
+// Default 'read-write' preserves the prior behavior, where configuring a vault always
+// gave agents full read+write access via the skill file.
+function readAgentAccess(): AgentAccess {
+  const v = localStorage.getItem(ACCESS_KEY)
+  return v === 'off' || v === 'read-only' || v === 'read-write' ? v : 'read-write'
 }
 
 function persist(vaults: ObsidianConfig[], activeUrl: string | null) {
@@ -158,9 +173,23 @@ async function listAllFiles(
   }
 }
 
-function callWriteSkill(vaults: ObsidianConfig[]) {
-  const api = (window as unknown as { api?: { obsidian?: { writeSkill?: (v: Array<{ name: string; url: string; apiKey: string }>) => Promise<unknown> } } }).api
-  api?.obsidian?.writeSkill?.(vaults.map(v => ({ name: v.name, url: v.url, apiKey: v.apiKey })))
+// Sync the gateway-agent skill file to the current vaults + access level. 'off' (or no
+// vaults) removes the skill so agents can't reach the vault; otherwise the skill is
+// (re)written in read-only or read-write form. Best-effort — failures are non-fatal.
+function syncAgentSkill(vaults: ObsidianConfig[], access: AgentAccess) {
+  const api = (window as unknown as {
+    api?: {
+      obsidian?: {
+        writeSkill?: (v: Array<{ name: string; url: string; apiKey: string }>, mode: 'read-only' | 'read-write') => Promise<unknown>
+        removeSkill?: () => Promise<unknown>
+      }
+    }
+  }).api
+  if (access === 'off' || vaults.length === 0) {
+    api?.obsidian?.removeSkill?.()?.catch(() => { /* best-effort */ })
+    return
+  }
+  api?.obsidian?.writeSkill?.(vaults.map(v => ({ name: v.name, url: v.url, apiKey: v.apiKey })), access)
     ?.catch(() => { /* best-effort */ })
 }
 
@@ -168,6 +197,7 @@ export const useObsidianStore = create<ObsidianState>((set, get) => ({
   vaults: [],
   activeVaultUrl: null,
   config: null,
+  agentAccess: readAgentAccess(),
   vaultInfo: null,
   graph: null,
   loadingGraph: false,
@@ -176,7 +206,7 @@ export const useObsidianStore = create<ObsidianState>((set, get) => ({
 
   loadConfig() {
     const { vaults, activeUrl } = readVaults()
-    set({ vaults, activeVaultUrl: activeUrl, config: deriveConfig(vaults, activeUrl) })
+    set({ vaults, activeVaultUrl: activeUrl, config: deriveConfig(vaults, activeUrl), agentAccess: readAgentAccess() })
   },
 
   addVault(config) {
@@ -189,7 +219,7 @@ export const useObsidianStore = create<ObsidianState>((set, get) => ({
     const newActive = activeVaultUrl ?? config.url
     persist(updated, newActive)
     set({ vaults: updated, activeVaultUrl: newActive, config: deriveConfig(updated, newActive), error: null })
-    callWriteSkill(updated)
+    syncAgentSkill(updated, get().agentAccess)
   },
 
   removeVault(url) {
@@ -206,7 +236,7 @@ export const useObsidianStore = create<ObsidianState>((set, get) => ({
       vaultInfo: newConfig ? null : null,
       graph: newConfig ? get().graph : null,
     })
-    callWriteSkill(updated)
+    syncAgentSkill(updated, get().agentAccess)
   },
 
   setActiveVault(url) {
@@ -215,6 +245,12 @@ export const useObsidianStore = create<ObsidianState>((set, get) => ({
     if (!config) return
     localStorage.setItem(ACTIVE_KEY, url)
     set({ activeVaultUrl: url, config, graph: null, vaultInfo: null, error: null })
+  },
+
+  setAgentAccess(access) {
+    localStorage.setItem(ACCESS_KEY, access)
+    set({ agentAccess: access })
+    syncAgentSkill(get().vaults, access)
   },
 
   saveConfig(config) {
@@ -227,7 +263,7 @@ export const useObsidianStore = create<ObsidianState>((set, get) => ({
   },
 
   async writeSkillFile() {
-    callWriteSkill(get().vaults)
+    syncAgentSkill(get().vaults, get().agentAccess)
   },
 
   async testConnection(config) {
