@@ -2,6 +2,7 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App'
 import { ChatPopout } from './components/chat/ChatPopout'
+import { AboutWindow } from './components/layout/AboutWindow'
 import './index.css'
 import { DEFAULT_THEME } from './lib/types'
 import { applyTheme } from './lib/theme'
@@ -20,13 +21,16 @@ window.api?.window?.onMaximized?.(max => {
   document.documentElement.classList.toggle('win-maximized', max)
 })
 
-// A pop-out chat window is the same renderer deep-linked to one session
-// (?popout=chat&session=<key>) — render just that chat instead of the full app.
+// Secondary windows reuse this renderer via a ?popout=… query: a chat deep-linked to
+// one session, or the About window. Otherwise render the full app.
 const params = new URLSearchParams(window.location.search)
-const popoutSession = params.get('popout') === 'chat' ? (params.get('session') ?? '') : ''
+const popout = params.get('popout')
+const popoutSession = popout === 'chat' ? (params.get('session') ?? '') : ''
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    {popoutSession ? <ChatPopout sessionKey={popoutSession} /> : <App />}
+    {popout === 'about' ? <AboutWindow />
+      : popoutSession ? <ChatPopout sessionKey={popoutSession} />
+      : <App />}
   </React.StrictMode>
 )

@@ -4,7 +4,20 @@ import { homedir } from 'os'
 contextBridge.exposeInMainWorld('api', {
   // App info
   app: {
-    version: () => ipcRenderer.invoke('app:version')
+    version: () => ipcRenderer.invoke('app:version'),
+    // Tray menu asked to jump to a section (e.g. 'sessions', 'teams').
+    onNavigate: (cb: (section: string) => void) => {
+      const listener = (_: Electron.IpcRendererEvent, section: string) => cb(section)
+      ipcRenderer.on('app:navigate', listener)
+      return () => ipcRenderer.removeListener('app:navigate', listener)
+    },
+    // Open a URL in the user's default browser (repo, sponsors, etc.).
+    openExternal: (url: string) => ipcRenderer.invoke('app:openExternal', url)
+  },
+
+  // System tray: live run counts (agents / teams) shown in the tray menu + tooltip.
+  tray: {
+    update: (counts: { agents: number; teams: number }) => ipcRenderer.invoke('tray:update', counts)
   },
 
   // Auto-updater (GitHub Releases) — check / download / install per-OS

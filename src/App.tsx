@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { NavRail } from './components/layout/NavRail'
 import { StatusBar } from './components/layout/StatusBar'
 import { TitleBar } from './components/layout/TitleBar'
@@ -25,6 +25,8 @@ import { useMetricsStore } from './store/metrics'
 import { useSettingsStore, ZOOM_STEP } from './store/settings'
 import { useExtensionsStore } from './store/extensions'
 import { useProcessesStore } from './store/processes'
+import { useSessionsStore } from './store/sessions'
+import { useTeamsStore } from './store/teams'
 import { useSkillsStore } from './store/skills'
 
 export type NavSection = 'dashboard' | 'chat' | 'talk' | 'agents' | 'processes' | 'teams' | 'extensions' | 'sessions' | 'crons' | 'obsidian' | 'models' | 'gateway' | 'settings'
@@ -87,8 +89,34 @@ export default function App() {
       // Re-attach to any team/process run that was still executing on the gateway when
       // the app last closed, so a restart keeps tracking it (idempotent per run).
       useProcessesStore.getState().load()
+      // Seed sessions + teams (and start their live event tracking) so the tray's
+      // running counts are accurate regardless of which tab is open.
+      useSessionsStore.getState().fetch()
+      useTeamsStore.getState().load()
     }
   }, [status])
+
+  // Keep the system tray's run counts (agents running / teams running) up to date.
+  // The stores update on every gateway frame, so only push when a count changes.
+  const trayRuns     = useProcessesStore(s => s.runs)
+  const trayTeams    = useTeamsStore(s => s.blueprints)
+  const traySessions = useSessionsStore(s => s.sessions)
+  const lastTray     = useRef('')
+  useEffect(() => {
+    const teamIds = new Set(trayTeams.map(b => b.id))
+    const teams   = Object.values(trayRuns).filter(r => r.status === 'running' && teamIds.has(r.processId)).length
+    const agents  = traySessions.filter(s => s.hasActiveRun).length
+    const key = `${agents}:${teams}`
+    if (key === lastTray.current) return
+    lastTray.current = key
+    window.api?.tray?.update?.({ agents, teams })
+  }, [trayRuns, trayTeams, traySessions])
+
+  // Tray menu can jump the app to a section (e.g. clicking "Teams running").
+  useEffect(() => {
+    const off = window.api?.app?.onNavigate?.(s => setSection(s as NavSection))
+    return () => off?.()
+  }, [])
 
   // Install the app-native agent skills (process-builder, teams-blueprint) on
   // connect. Local gateways get a direct file write; remote gateways get an

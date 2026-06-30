@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell, Tray, Menu, nativeImage, session } from 'electron'
+import { app, BrowserWindow, ipcMain, shell, Tray, Menu, nativeImage, nativeTheme, session } from 'electron'
 import { join, dirname } from 'path'
 import { readFile, writeFile, mkdir, readdir, unlink } from 'fs/promises'
 import { existsSync, statSync, createReadStream, watch, type FSWatcher } from 'fs'
@@ -10,6 +10,7 @@ import WebSocket from 'ws'
 import { registerUpdater } from './updater'
 
 let mainWindow: BrowserWindow | null = null
+let aboutWindow: BrowserWindow | null = null
 let tray: Tray | null = null
 let isQuitting = false
 
@@ -25,9 +26,11 @@ process.on('unhandledRejection', (reason) => {
 })
 
 function getTrayIcon(): Electron.NativeImage {
-  // resources/ sits two levels above out/main/ in both dev and prod
-  const iconPath = join(__dirname, '../../resources/icons/joaxclaw-logo-dark.png')
-  const icon = nativeImage.createFromPath(iconPath)
+  // resources/ sits two levels above out/main/ in both dev and prod. Pick a white
+  // silhouette on a dark taskbar and a charcoal one on a light taskbar so the mark
+  // stays visible whatever the OS theme is.
+  const variant = nativeTheme.shouldUseDarkColors ? 'tray-light' : 'tray-dark'
+  const icon = nativeImage.createFromPath(join(__dirname, `../../resources/icons/tray/${variant}.png`))
   if (icon.isEmpty()) {
     // Fallback: 1×1 transparent PNG so the tray doesn't crash
     return nativeImage.createFromDataURL(
@@ -37,49 +40,68 @@ function getTrayIcon(): Electron.NativeImage {
   return icon.resize({ width: 22, height: 22 })
 }
 
-function createTray(): void {
-  tray = new Tray(getTrayIcon())
-  tray.setToolTip('JoaxClaw')
+// Live run counts surfaced in the tray. Pushed from the renderer (which sees the
+// gateway stream) via the tray:update IPC.
+let trayCounts = { agents: 0, teams: 0 }
 
-  const menu = Menu.buildFromTemplate([
-    {
-      label: 'Open JoaxClaw',
-      click: () => {
-        if (mainWindow) {
-          mainWindow.show()
-          mainWindow.focus()
-        }
-      }
-    },
+function plural(n: number, word: string): string {
+  return `${n} ${word}${n === 1 ? '' : 's'}`
+}
+
+function showMainWindow(): void {
+  if (mainWindow) { mainWindow.show(); mainWindow.focus() }
+  else createWindow()
+}
+
+function buildTrayMenu(): Menu {
+  const { agents, teams } = trayCounts
+  return Menu.buildFromTemplate([
+    { label: 'JoaxClaw', enabled: false },
     { type: 'separator' },
     {
-      label: 'Quit',
-      click: () => {
-        isQuitting = true
-        app.quit()
-      }
-    }
+      label: agents > 0 ? `🤖  ${plural(agents, 'agent')} running` : '🤖  No agents running',
+      enabled: agents > 0,
+      click: () => { showMainWindow(); mainWindow?.webContents.send('app:navigate', 'sessions') },
+    },
+    {
+      label: teams > 0 ? `👥  ${plural(teams, 'team')} running` : '👥  No teams running',
+      enabled: teams > 0,
+      click: () => { showMainWindow(); mainWindow?.webContents.send('app:navigate', 'teams') },
+    },
+    { type: 'separator' },
+    { label: 'Open JoaxClaw', click: () => showMainWindow() },
+    { label: 'About JoaxClaw', click: () => createAboutWindow() },
+    { type: 'separator' },
+    { label: 'Quit', click: () => { isQuitting = true; app.quit() } },
   ])
+}
 
-  tray.setContextMenu(menu)
+function refreshTray(): void {
+  if (!tray) return
+  tray.setImage(getTrayIcon())
+  const { agents, teams } = trayCounts
+  const parts: string[] = []
+  if (agents > 0) parts.push(plural(agents, 'agent'))
+  if (teams > 0) parts.push(plural(teams, 'team'))
+  tray.setToolTip(parts.length ? `JoaxClaw — ${parts.join(', ')} running` : 'JoaxClaw')
+  tray.setContextMenu(buildTrayMenu())
+}
+
+function createTray(): void {
+  tray = new Tray(getTrayIcon())
+  refreshTray()
+
+  // Re-tint the icon when the OS switches between light and dark.
+  nativeTheme.on('updated', () => tray?.setImage(getTrayIcon()))
 
   // Left-click / double-click shows the window
   tray.on('click', () => {
     if (mainWindow) {
-      if (mainWindow.isVisible()) {
-        mainWindow.focus()
-      } else {
-        mainWindow.show()
-      }
+      if (mainWindow.isVisible()) mainWindow.focus()
+      else mainWindow.show()
     }
   })
-
-  tray.on('double-click', () => {
-    if (mainWindow) {
-      mainWindow.show()
-      mainWindow.focus()
-    }
-  })
+  tray.on('double-click', () => showMainWindow())
 }
 
 function createWindow(): void {
@@ -210,6 +232,35 @@ function createChatWindow(sessionKey: string): void {
   broadcastPoppedOut()
 }
 
+// ── About window ──────────────────────────────────────────────────────────────
+function createAboutWindow(): void {
+  if (aboutWindow && !aboutWindow.isDestroyed()) { aboutWindow.show(); aboutWindow.focus(); return }
+
+  aboutWindow = new BrowserWindow({
+    width: 420,
+    height: 560,
+    resizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    frame: false,
+    titleBarStyle: 'hidden',
+    titleBarOverlay: { color: '#0f1117', symbolColor: '#94a3b8', height: 36 },
+    transparent: true,
+    roundedCorners: true,
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.js'),
+      sandbox: false,
+      contextIsolation: true,
+    },
+    backgroundColor: '#00000000',
+    show: false,
+  })
+  aboutWindow.webContents.setWindowOpenHandler(({ url }) => { shell.openExternal(url); return { action: 'deny' } })
+  aboutWindow.on('ready-to-show', () => aboutWindow?.show())
+  aboutWindow.on('closed', () => { aboutWindow = null })
+  loadRenderer(aboutWindow, '?popout=about')
+}
+
 app.whenReady().then(() => {
   // Trust self-signed certificates from loopback addresses (needed for Obsidian Local REST API HTTPS)
   session.defaultSession.setCertificateVerifyProc((request, callback) => {
@@ -242,6 +293,12 @@ app.on('before-quit', () => {
 
 // ── IPC: App info ─────────────────────────────────────────────────────────────
 ipcMain.handle('app:version', () => app.getVersion())
+
+// Open an external URL (repo, sponsors, …) in the user's default browser.
+ipcMain.handle('app:openExternal', (_e, url: string) => {
+  if (typeof url === 'string' && /^https?:\/\//i.test(url)) shell.openExternal(url)
+  return { ok: true }
+})
 
 // ── IPC: Auto-updater (GitHub Releases) ──────────────────────────────────────
 registerUpdater(
@@ -297,6 +354,15 @@ ipcMain.handle('chat:returnToMain', (_e, sessionKey: string) => {
 ipcMain.handle('chat:popoutInfo', () => ({ connection: lastConnection }))
 // The main window asks which chats are currently popped out (on (re)load).
 ipcMain.handle('chat:listPoppedOut', () => [...chatWindows.keys()])
+
+// ── IPC: Tray run counts ──────────────────────────────────────────────────────
+// The renderer pushes live counts (it sees the gateway stream); the tray reflects
+// them in its menu + tooltip.
+ipcMain.handle('tray:update', (_e, counts: { agents?: number; teams?: number }) => {
+  trayCounts = { agents: Math.max(0, counts?.agents ?? 0), teams: Math.max(0, counts?.teams ?? 0) }
+  refreshTray()
+  return { ok: true }
+})
 
 // ── IPC: Config file ─────────────────────────────────────────────────────────
 const configPath = join(homedir(), '.openclaw', 'openclaw.json')
