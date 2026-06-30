@@ -176,3 +176,13 @@ jobs:
           make_latest: ${{ !contains(needs.check.outputs.version, '-') }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ── Prune: keep only the 5 most recent releases (older releases removed; tags kept) ─
+  prune:
+    needs: [check, publish]
+    if: needs.check.outputs.should_release == 'true'
+    permissions:
+      contents: write
+    uses: ./.github/workflows/prune-releases.yml
+    with:
+      keep: '5'
