@@ -5,6 +5,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.13.0] - 2026-06-30
+
+### Added
+
+- **Pop-out chat windows.** Move a chat into its own window — and bring it back — so you can keep several conversations open side by side. Each pop-out connects to the same gateway and streams its session live and independently; it hides the sidebar and locks to that one chat, with a **Return** control (closing the window also returns the chat). The main window hides a chat while it's popped out and restores it on return ("move", not mirror). Along the way: the app windows now have **rounded corners**, and the chat header's Basic/Advanced switch and Reasoning / Actions / Context toggles are collapsed into a single compact **multi-select menu** so the header (especially in the narrow pop-out) stays uncluttered.
+- **System-tray activity + About window.** The tray menu and tooltip now show how many **agents** and **teams** are running (click either to jump to that tab); the tray icon uses the app logo. A new **About JoaxClaw** tray item opens an About window with the app version, a **check-for-updates** button, links to the **GitHub repository** and **sponsorship/donations**, and copyright.
+
+### Fixed
+
+- **The delete button on Processes and Team blueprints is reachable again.** The trash button was rendered with an inline `opacity:0` that overrode its hover-reveal class, leaving it permanently invisible — so there was no way to delete a process or a team. The hover reveal now works (hover a row → trash → confirm).
+- **Clean agent names instead of raw session keys.** A Team/Process sub-agent's opaque session key (`agent:<id>:subagent:<uuid>`) leaked verbatim into the chat title bar and as a `subagent · <uuid>` entry in the chat list, because the key parser only understood the legacy `<id>@<uuid>` form. Names now resolve consistently across the chat header, chat list, and Sessions view — your rename → the Team-derived name → the gateway's display name → the agent id parsed from the key — and existing conversations are fixed too, not just new ones.
+
+### Notes
+
+- CI: GitHub releases now self-trim to the **5 most recent** on each publish (older releases are removed; their git tags are kept), with an on-demand "Prune old releases" action.
+
 ## [0.12.5] - 2026-06-29
 
 ### Added
