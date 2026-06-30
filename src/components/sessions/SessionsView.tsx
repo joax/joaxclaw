@@ -4,18 +4,15 @@ import { ModelIcon } from '../ui/ModelIcon'
 import { useSessionsStore } from '../../store/sessions'
 import { useChatStore } from '../../store/chat'
 import type { Session } from '../../lib/types'
+import { agentIdFromSessionKey as sessionAgentId } from '../../lib/sessionName'
 import { Btn } from '../ui/Btn'
 
 type SortKey = 'updatedAt' | 'status' | 'key' | 'model'
 interface Props { onOpenChat: () => void }
 
-function sessionAgentId(key: string): string {
-  const atIdx = key.indexOf('@')
-  return atIdx > 0 ? key.slice(0, atIdx) : key
-}
 
 function sessionLabel(s: Session, customLabels: Record<string, string>, derivedNames: Record<string, string>): string {
-  return customLabels[s.key] ?? derivedNames[s.key] ?? s.displayName ?? s.label ?? s.key
+  return customLabels[s.key] ?? derivedNames[s.key] ?? s.displayName ?? s.label ?? sessionAgentId(s.key)
 }
 
 const TERMINAL_STATUSES = new Set(['idle', 'done', 'failed', 'killed', 'timeout'])

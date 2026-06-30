@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { nanoid } from '../lib/nanoid'
 import type { Conversation, ChatMessage, ContextOverflowInfo, ToolCall, SubThread, MediaAttachment, ThinkingLevel } from '../lib/types'
 import { gatewayClient } from '../lib/gateway'
+import { agentIdFromSessionKey as agentIdFromKey } from '../lib/sessionName'
 import { useExtensionsStore } from './extensions'
 import { useConnectionStore } from './connection'
 
@@ -46,11 +47,6 @@ type UpdateFn = (updater: (msg: ChatMessage) => ChatMessage) => void
 
 // ── Sub-agent threads ───────────────────────────────────────────────────────────
 
-// Session keys look like "agent:<agentId>:<kind>:<uuid>" → recover the agent id.
-function agentIdFromKey(key: string): string {
-  const parts = key.split(':')
-  return parts[0] === 'agent' && parts[1] ? parts[1] : key
-}
 
 function parseResult(result: unknown): Record<string, unknown> {
   if (typeof result === 'string') { try { return JSON.parse(result) as Record<string, unknown> } catch { return {} } }
@@ -381,21 +377,11 @@ function makeTitle(text: string): string {
 }
 
 function sessionTitle(sessionKey: string, agentName: string): string {
-  // Prefer a real display name when the caller has one
+  // Prefer a real display name when the caller has one; otherwise fall back to the
+  // agent id parsed from the key (e.g. "research-worker") rather than an opaque
+  // "subagent · <uuid>" rendering.
   if (agentName && agentName !== sessionKey) return agentName
-
-  // Parse common key formats into something readable:
-  // "agentId@uuid-or-id"  →  "agentId · uuid8"
-  // "scope:agent:name"    →  "agent · name"
-  const atIdx = sessionKey.indexOf('@')
-  if (atIdx > 0) {
-    const agent = sessionKey.slice(0, atIdx)
-    const suffix = sessionKey.slice(atIdx + 1, atIdx + 9)
-    return `${agent} · ${suffix}`
-  }
-  const parts = sessionKey.split(':').filter(Boolean)
-  if (parts.length >= 2) return parts.slice(-2).join(' · ')
-  return sessionKey.slice(0, 32)
+  return agentIdFromKey(sessionKey)
 }
 
 function extractModel(msg: unknown): string | undefined {
