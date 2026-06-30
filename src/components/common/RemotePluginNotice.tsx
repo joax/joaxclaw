@@ -3,10 +3,9 @@ import { UsersRound, GitBranch, Wrench, BookOpen, RefreshCw, Loader2 } from 'luc
 import { Btn } from '../ui/Btn'
 import { useConnectionStore } from '../../store/connection'
 import { useHelpStore } from '../../store/help'
-import { useAgentsStore } from '../../store/agents'
-import { useChatStore } from '../../store/chat'
 import { gatewayHost } from '../../lib/ollamaHealth'
 import { buildPluginInstallPrompt } from '../../lib/joaxclawFsInstall'
+import { sendViaAgent } from '../../lib/agentPrompt'
 
 // Shown in place of Teams or Processes on a remote gateway that doesn't have the
 // joaxclaw-fs plugin. Those features are files on the gateway host; the plugin's
@@ -32,14 +31,7 @@ export function RemotePluginNotice({ feature, onRetry, onOpenChat }: {
     const built = await buildPluginInstallPrompt()
     if (!built.ok || !built.prompt) { setPhase('error'); setErr(built.error ?? 'Failed to prepare the install'); return }
 
-    const { agents, defaultId } = useAgentsStore.getState()
-    const agent = agents.find(a => a.id === defaultId) ?? agents[0]
-    const agentId = agent?.id ?? defaultId ?? 'main'
-    const agentName = agent?.name ?? agent?.identity?.name ?? agentId
-    const chat = useChatStore.getState()
-    const convId = chat.newConversation(agentId, agentName)
-    onOpenChat?.()
-    chat.sendMessage(convId, built.prompt).catch(() => {})
+    sendViaAgent(built.prompt, onOpenChat)
     setPhase('idle')
   }
 
