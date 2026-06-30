@@ -1,0 +1,45 @@
+name: Prune old releases
+
+# Keeps only the most recent N published releases (default 5), deleting older ones.
+# The git tags are kept (history is preserved) — only the GitHub Release + its
+# installer assets are removed. Runs automatically after each release (called by
+# release.yml) and can be run on demand from the Actions tab.
+on:
+  workflow_dispatch:
+    inputs:
+      keep:
+        description: 'How many recent releases to keep'
+        default: '5'
+  workflow_call:
+    inputs:
+      keep:
+        type: string
+        default: '5'
+
+permissions:
+  contents: write
+
+jobs:
+  prune:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Delete releases beyond the most recent ${{ inputs.keep || '5' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          KEEP: ${{ inputs.keep || '5' }}
+        run: |
+          set -euo pipefail
+          # Newest-first list of real (non-draft) releases; everything past the first
+          # KEEP is removed. The git tag is intentionally kept (no --cleanup-tag).
+          OLD=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 200 \
+                  --json tagName,createdAt,isDraft \
+                  --jq "[.[] | select(.isDraft | not)] | sort_by(.createdAt) | reverse | .[${KEEP}:] | .[].tagName")
+          if [ -z "$OLD" ]; then
+            echo "Nothing to prune — at most ${KEEP} releases."
+            exit 0
+          fi
+          echo "$OLD" | while read -r tag; do
+            [ -z "$tag" ] && continue
+            echo "Removing release (keeping tag): $tag"
+            gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --yes
+          done
