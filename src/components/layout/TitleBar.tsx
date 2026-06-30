@@ -15,6 +15,8 @@ declare global {
         onFocusSession?(cb: (sessionKey: string) => void): () => void
         onMaximized?(cb: (maximized: boolean) => void): () => void
       }
+      app?: { version?(): Promise<string>; onNavigate?(cb: (section: string) => void): () => void; openExternal?(url: string): void }
+      tray?: { update?(counts: { agents: number; teams: number }): void }
       config: { read(): Promise<{ ok: boolean; text?: string; path?: string; error?: string }>; write(t: string): Promise<{ ok: boolean }> }
       gateway: { restart(): Promise<{ok:boolean;stdout:string;stderr:string}>; restartSafe(): Promise<{ok:boolean;stdout:string;stderr:string}>; stop(): Promise<{ok:boolean;stdout:string;stderr:string}>; status(): Promise<{ok:boolean;stdout:string;stderr:string}> }
       metrics: { get(): Promise<{ ok: boolean; cpu: number; ramUsed: number; ramTotal: number; gpu: { model: string; utilizationGpu: number; memUsed: number; memTotal: number; temperatureGpu: number }[] }> }
