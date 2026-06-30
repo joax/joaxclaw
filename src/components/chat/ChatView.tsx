@@ -13,11 +13,7 @@ import { ModelSelect, ThinkingSelect } from './ChatHeaderControls'
 import { Btn } from '../ui/Btn'
 import { formatRelativeDate } from '../../lib/dateUtils'
 import type { Session } from '../../lib/types'
-
-function sessionAgentId(key: string): string {
-  const i = key.indexOf('@')
-  return i > 0 ? key.slice(0, i) : key
-}
+import { agentIdFromSessionKey as sessionAgentId, isAutoKeyTitle } from '../../lib/sessionName'
 
 export function ChatView() {
   const { conversations, activeConvId, newConversation, selectConversation, deleteConversation, loadSessionMessages, watchSession, setModelOverride, setThinkingLevel } = useChatStore()
@@ -70,6 +66,19 @@ export function ChatView() {
   const sessionDisplayName = (s: Session) =>
     customLabels[s.key] ?? derivedNames[s.key] ?? s.displayName ?? s.label ?? agentName(s.key)
 
+  // Clean display name for a conversation, resolved at render so even conversations
+  // saved with a raw key (before this fix, or opened outside the Team flow) read well.
+  // A real title (a first message, or an already-clean agent name) is kept; only an
+  // auto-derived key-title is replaced with the parsed agent name.
+  const convDisplayName = (conv: { sessionKey?: string; title?: string; agentName?: string }) => {
+    const key = conv.sessionKey
+    if (!key) return conv.title || conv.agentName || ''
+    if (customLabels[key]) return customLabels[key]
+    if (derivedNames[key]) return derivedNames[key]
+    if (conv.title && !isAutoKeyTitle(conv.title, key)) return conv.title
+    return agentName(key)
+  }
+
   const handleOpenSession = async (s: Session) => {
     const agentId = sessionAgentId(s.key)
     const convId = await loadSessionMessages(s.key, agentId, sessionDisplayName(s))
@@ -78,10 +87,12 @@ export function ChatView() {
     }
   }
 
-  const filtered = conversations.filter(c =>
-    c.title.toLowerCase().includes(search.toLowerCase()) ||
-    c.agentName.toLowerCase().includes(search.toLowerCase())
-  )
+  const filtered = conversations.filter(c => {
+    const q = search.toLowerCase()
+    return c.title.toLowerCase().includes(q) ||
+      c.agentName.toLowerCase().includes(q) ||
+      convDisplayName(c).toLowerCase().includes(q)
+  })
 
   const activeConv = conversations.find(c => c.id === activeConvId)
 
@@ -198,6 +209,7 @@ export function ChatView() {
                 <ConvRow
                   key={conv.id}
                   conv={conv}
+                  displayName={convDisplayName(conv)}
                   active={conv.id === activeConvId}
                   onSelect={() => selectConversation(conv.id)}
                   onDelete={() => deleteConversation(conv.id)}
@@ -219,7 +231,7 @@ export function ChatView() {
             >
               <span>🤖</span>
               <span className="font-medium" style={{ color: 'var(--text-primary)' }}>
-                {(activeConv.sessionKey && customLabels[activeConv.sessionKey]) ?? activeConv.agentName}
+                {convDisplayName(activeConv)}
               </span>
               {activeConv.sessionKey && (
                 <span className="text-xs font-mono px-2 py-0.5 rounded" style={{ background: 'var(--bg-elevated)', color: 'var(--text-secondary)' }}>
@@ -476,8 +488,9 @@ function ToggleBtn({ active, onClick, icon, label, disabled = false }: { active:
   )
 }
 
-function ConvRow({ conv, active, onSelect, onDelete }: {
+function ConvRow({ conv, displayName, active, onSelect, onDelete }: {
   conv: { id: string; title: string; agentName: string; lastMessage?: string; lastAt?: string; messages: { createdAt: string }[] }
+  displayName: string
   active: boolean; onSelect: () => void; onDelete: () => void
 }) {
   const [hovered, setHovered] = useState(false)
@@ -496,7 +509,7 @@ function ConvRow({ conv, active, onSelect, onDelete }: {
     >
       <div className="flex items-center gap-1">
         <p className="text-sm flex-1 truncate font-medium" style={{ color: active ? 'var(--accent)' : 'var(--text-primary)' }}>
-          {conv.title}
+          {displayName || conv.title}
         </p>
         {date && <span className="text-xs shrink-0" style={{ color: 'var(--text-secondary)' }}>{formatRelativeDate(date)}</span>}
       </div>
