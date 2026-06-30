@@ -95,14 +95,19 @@ function createWindow(): void {
       symbolColor: '#94a3b8',
       height: 36
     },
+    // Rounded corners: native on macOS / Windows 11; on Linux it needs a transparent
+    // window with the app clipping its root to a radius (see #root in index.css).
+    transparent: true,
+    roundedCorners: true,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false,
       contextIsolation: true
     },
-    backgroundColor: '#0f1117',
+    backgroundColor: '#00000000',
     show: false
   })
+  wireMaximizeEvents(mainWindow)
 
   // Closing the window hides it to tray instead of quitting
   mainWindow.on('close', (event) => {
@@ -118,11 +123,91 @@ function createWindow(): void {
     return { action: 'deny' }
   })
 
+  loadRenderer(mainWindow)
+  mainWindow.webContents.on('destroyed', () => cleanupSocket(mainWindow!.webContents.id))
+}
+
+// Loads the bundled renderer, optionally with a query string (used to deep-link a
+// pop-out window to a single chat: ?popout=chat&session=<key>).
+function loadRenderer(win: BrowserWindow, query = ''): void {
   if (!app.isPackaged && process.env['ELECTRON_RENDERER_URL']) {
-    mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
+    win.loadURL(process.env['ELECTRON_RENDERER_URL'] + query)
   } else {
-    mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+    win.loadFile(join(__dirname, '../renderer/index.html'), query ? { search: query.replace(/^\?/, '') } : undefined)
   }
+}
+
+function cleanupSocket(wcId: number): void {
+  destroySocket(sockets.get(wcId))
+  sockets.delete(wcId)
+}
+
+// Tell a window's renderer when it's maximized / full-screen so it can flatten the
+// rounded corners — a maximized window should sit square against the screen edges.
+function wireMaximizeEvents(win: BrowserWindow): void {
+  const push = () => wcSend(win.webContents, 'window:maximized', win.isMaximized() || win.isFullScreen())
+  win.on('maximize', push)
+  win.on('unmaximize', push)
+  win.on('enter-full-screen', push)
+  win.on('leave-full-screen', push)
+  win.webContents.on('did-finish-load', push)
+}
+
+// ── Pop-out chat windows ──────────────────────────────────────────────────────
+// A chat can be "moved" into its own window. Each pop-out is a normal BrowserWindow
+// running the same renderer deep-linked to one session; it connects to the gateway
+// independently (per-window socket above). The main window hides moved chats and
+// restores them when the pop-out closes — so a chat is never lost.
+
+const chatWindows = new Map<string, BrowserWindow>()
+
+// Tell every window which sessions are currently popped out, so the main window can
+// hide them from its list (and show them again when a pop-out closes).
+function broadcastPoppedOut(): void {
+  const keys = [...chatWindows.keys()]
+  for (const w of BrowserWindow.getAllWindows()) {
+    if (!w.isDestroyed()) w.webContents.send('chat:poppedOut', keys)
+  }
+}
+
+function createChatWindow(sessionKey: string): void {
+  const existing = chatWindows.get(sessionKey)
+  if (existing && !existing.isDestroyed()) { existing.show(); existing.focus(); return }
+
+  const win = new BrowserWindow({
+    // Sized so the chat content (header controls + message composer) fits without
+    // overflowing; minWidth keeps it from being shrunk past where the header wraps.
+    width: 820,
+    height: 860,
+    minWidth: 560,
+    minHeight: 460,
+    frame: false,
+    titleBarStyle: 'hidden',
+    titleBarOverlay: { color: '#0f1117', symbolColor: '#94a3b8', height: 36 },
+    transparent: true,
+    roundedCorners: true,
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.js'),
+      sandbox: false,
+      contextIsolation: true,
+    },
+    backgroundColor: '#00000000',
+    show: false,
+  })
+  chatWindows.set(sessionKey, win)
+  wireMaximizeEvents(win)
+
+  win.webContents.setWindowOpenHandler(({ url }) => { shell.openExternal(url); return { action: 'deny' } })
+  win.on('ready-to-show', () => win.show())
+  win.webContents.on('destroyed', () => cleanupSocket(win.webContents.id))
+  win.on('closed', () => {
+    if (chatWindows.get(sessionKey) === win) chatWindows.delete(sessionKey)
+    // Closing a pop-out returns its chat to the main window's list (un-hidden).
+    broadcastPoppedOut()
+  })
+
+  loadRenderer(win, `?popout=chat&session=${encodeURIComponent(sessionKey)}`)
+  broadcastPoppedOut()
 }
 
 app.whenReady().then(() => {
@@ -165,23 +250,53 @@ registerUpdater(
 )
 
 // ── IPC: Window controls ──────────────────────────────────────────────────────
-ipcMain.handle('window:minimize', () => mainWindow?.minimize())
-ipcMain.handle('window:maximize', () => {
-  if (mainWindow?.isMaximized()) mainWindow.unmaximize()
-  else mainWindow?.maximize()
+// Operate on the window that made the call, so a pop-out window's title-bar buttons
+// control the pop-out (not the main window).
+ipcMain.handle('window:minimize', (e) => BrowserWindow.fromWebContents(e.sender)?.minimize())
+ipcMain.handle('window:maximize', (e) => {
+  const w = BrowserWindow.fromWebContents(e.sender)
+  if (w?.isMaximized()) w.unmaximize()
+  else w?.maximize()
 })
-ipcMain.handle('window:close', () => mainWindow?.hide())
+ipcMain.handle('window:close', (e) => {
+  const w = BrowserWindow.fromWebContents(e.sender)
+  // The main window lives in the tray (hide); a pop-out genuinely closes.
+  if (w === mainWindow) w?.hide()
+  else w?.close()
+})
 
 // Recolour the native window-control overlay (min/max/close) so it tracks the app
 // theme — otherwise the OS-drawn buttons keep the dark colours baked in at creation.
-ipcMain.handle('window:setTitleBarOverlay', (_e, color: string, symbolColor: string) => {
-  if (!mainWindow || typeof mainWindow.setTitleBarOverlay !== 'function') return
+ipcMain.handle('window:setTitleBarOverlay', (e, color: string, symbolColor: string) => {
+  const w = BrowserWindow.fromWebContents(e.sender)
+  if (!w || typeof w.setTitleBarOverlay !== 'function') return
   try {
-    mainWindow.setTitleBarOverlay({ color, symbolColor, height: 36 })
+    w.setTitleBarOverlay({ color, symbolColor, height: 36 })
   } catch {
     // titleBarOverlay isn't supported on every platform/WM — ignore there.
   }
 })
+
+// ── IPC: Pop-out chat windows ─────────────────────────────────────────────────
+ipcMain.handle('chat:popOut', (_e, sessionKey: string) => {
+  if (sessionKey) createChatWindow(String(sessionKey))
+  return { ok: true }
+})
+// Bring a popped-out chat back: focus the main window, tell it to open that chat,
+// then close the pop-out (its 'closed' handler un-hides the chat in the list).
+ipcMain.handle('chat:returnToMain', (_e, sessionKey: string) => {
+  const key = String(sessionKey)
+  mainWindow?.show()
+  mainWindow?.focus()
+  sendToRenderer('chat:focusSession', key)
+  const w = chatWindows.get(key)
+  if (w && !w.isDestroyed()) w.close()
+  return { ok: true }
+})
+// A pop-out window asks for its bootstrap info (the active gateway connection).
+ipcMain.handle('chat:popoutInfo', () => ({ connection: lastConnection }))
+// The main window asks which chats are currently popped out (on (re)load).
+ipcMain.handle('chat:listPoppedOut', () => [...chatWindows.keys()])
 
 // ── IPC: Config file ─────────────────────────────────────────────────────────
 const configPath = join(homedir(), '.openclaw', 'openclaw.json')
@@ -310,33 +425,45 @@ ipcMain.handle('plugins:list', async () => {
   }
 })
 
-// ── IPC: Gateway WebSocket proxy ──────────────────────────────────────────────
-// Connect from the main process so no Origin header is sent.
-// The gateway clears scopes for browser-origin connections, so this is required.
+// ── IPC: Gateway WebSocket proxy (per-window) ─────────────────────────────────
+// Connect from the main process so no Origin header is sent (the gateway clears
+// scopes for browser-origin connections). Each renderer WINDOW gets its own socket,
+// keyed by the calling webContents id, so a popped-out chat window streams from the
+// gateway independently of the main window. A socket's frames route back only to the
+// window that opened it.
 
-let gws: WebSocket | null = null
+const sockets = new Map<number, WebSocket>()
+// Most recent connection credentials, reused to bootstrap a pop-out window onto the
+// same gateway without making the user re-enter them.
+let lastConnection: { url: string; token: string } | null = null
 
 function sendToRenderer(channel: string, ...args: unknown[]) {
   mainWindow?.webContents.send(channel, ...args)
+}
+function wcSend(wc: Electron.WebContents, channel: string, ...args: unknown[]) {
+  if (!wc.isDestroyed()) wc.send(channel, ...args)
 }
 
 // Tears down a socket safely. Calling close() on a still-CONNECTING socket throws
 // ("WebSocket was closed before the connection was established"), so we use
 // terminate() and swallow any late 'error' the dying socket emits — an unhandled
 // 'error' on a ws socket would otherwise crash the whole main process.
-function destroySocket(sock: WebSocket | null) {
+function destroySocket(sock: WebSocket | null | undefined) {
   if (!sock) return
   sock.removeAllListeners()
   sock.on('error', () => { /* swallow late errors during teardown */ })
   try { sock.terminate() } catch { /* already closed / never connected */ }
 }
 
-ipcMain.handle('ws:connect', (_event, url: string, _token: string) => {
-  destroySocket(gws)
-  gws = null
+ipcMain.handle('ws:connect', (event, url: string, token: string) => {
+  const wc = event.sender
+  const id = wc.id
+  destroySocket(sockets.get(id))
+  sockets.delete(id)
+  lastConnection = { url, token }
 
-  sendToRenderer('ws:log', 'info', `Connecting to ${url}…`)
-  sendToRenderer('ws:status', 'connecting')
+  wcSend(wc, 'ws:log', 'info', `Connecting to ${url}…`)
+  wcSend(wc, 'ws:status', 'connecting')
 
   // ws package connects without an Origin header — gateway grants full scopes
   let sock: WebSocket
@@ -345,63 +472,64 @@ ipcMain.handle('ws:connect', (_event, url: string, _token: string) => {
   } catch (e: unknown) {
     // Malformed URL or synchronous construction failure — report, don't crash
     const msg = e instanceof Error ? e.message : String(e)
-    sendToRenderer('ws:log', 'info', `Invalid gateway URL: ${msg}`)
-    sendToRenderer('ws:status', 'error', msg)
+    wcSend(wc, 'ws:log', 'info', `Invalid gateway URL: ${msg}`)
+    wcSend(wc, 'ws:status', 'error', msg)
     return { ok: false, error: msg }
   }
-  gws = sock
+  sockets.set(id, sock)
 
   // Guard against an unreachable host that never refuses nor accepts (e.g. a down
   // VPN peer): the TCP connect can hang for the full OS timeout with no 'error'.
   // Fail fast with a clear message instead of an indefinite "Connecting…".
   const connectTimer = setTimeout(() => {
     if (sock.readyState === WebSocket.CONNECTING) {
-      sendToRenderer('ws:log', 'info', 'Connection timed out — no response from gateway')
-      sendToRenderer('ws:status', 'error', 'Connection timed out — gateway unreachable')
+      wcSend(wc, 'ws:log', 'info', 'Connection timed out — no response from gateway')
+      wcSend(wc, 'ws:status', 'error', 'Connection timed out — gateway unreachable')
       destroySocket(sock)
-      if (gws === sock) gws = null
+      if (sockets.get(id) === sock) sockets.delete(id)
     }
   }, 12000)
 
   sock.on('open', () => {
     clearTimeout(connectTimer)
-    sendToRenderer('ws:log', 'info', 'WebSocket open — waiting for server challenge')
+    wcSend(wc, 'ws:log', 'info', 'WebSocket open — waiting for server challenge')
   })
 
   sock.on('message', (data) => {
-    const raw = data.toString()
-    sendToRenderer('ws:message', raw)
+    wcSend(wc, 'ws:message', data.toString())
   })
 
   sock.on('error', (err) => {
     // Unreachable host, refused connection, TLS failure, etc. — surface, never throw
     clearTimeout(connectTimer)
-    sendToRenderer('ws:log', 'info', `Socket error: ${err.message}`)
-    sendToRenderer('ws:status', 'error', err.message)
+    wcSend(wc, 'ws:log', 'info', `Socket error: ${err.message}`)
+    wcSend(wc, 'ws:status', 'error', err.message)
   })
 
   sock.on('close', (code, reason) => {
     clearTimeout(connectTimer)
     const reasonStr = reason?.toString() || codeToReason(code)
-    sendToRenderer('ws:log', 'info', `Closed — code=${code}${reasonStr ? ` (${reasonStr})` : ''}`)
-    sendToRenderer('ws:status', 'disconnected', reasonStr || `code ${code}`)
-    if (gws === sock) gws = null
+    wcSend(wc, 'ws:log', 'info', `Closed — code=${code}${reasonStr ? ` (${reasonStr})` : ''}`)
+    wcSend(wc, 'ws:status', 'disconnected', reasonStr || `code ${code}`)
+    if (sockets.get(id) === sock) sockets.delete(id)
   })
 
   return { ok: true }
 })
 
-ipcMain.handle('ws:disconnect', () => {
-  destroySocket(gws)
-  gws = null
-  sendToRenderer('ws:status', 'disconnected')
+ipcMain.handle('ws:disconnect', (event) => {
+  const id = event.sender.id
+  destroySocket(sockets.get(id))
+  sockets.delete(id)
+  wcSend(event.sender, 'ws:status', 'disconnected')
   return { ok: true }
 })
 
-ipcMain.handle('ws:send', (_event, data: string) => {
-  if (!gws || gws.readyState !== WebSocket.OPEN) return { ok: false, error: 'Not connected' }
-  gws.send(data)
-  sendToRenderer('ws:log', 'out', data)
+ipcMain.handle('ws:send', (event, data: string) => {
+  const sock = sockets.get(event.sender.id)
+  if (!sock || sock.readyState !== WebSocket.OPEN) return { ok: false, error: 'Not connected' }
+  sock.send(data)
+  wcSend(event.sender, 'ws:log', 'out', data)
   return { ok: true }
 })
 

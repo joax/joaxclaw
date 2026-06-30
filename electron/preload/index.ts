@@ -34,7 +34,30 @@ contextBridge.exposeInMainWorld('api', {
     maximize: () => ipcRenderer.invoke('window:maximize'),
     close: () => ipcRenderer.invoke('window:close'),
     setTitleBarOverlay: (color: string, symbolColor: string) =>
-      ipcRenderer.invoke('window:setTitleBarOverlay', color, symbolColor)
+      ipcRenderer.invoke('window:setTitleBarOverlay', color, symbolColor),
+    // Pop-out chat windows
+    popOutChat: (sessionKey: string) => ipcRenderer.invoke('chat:popOut', sessionKey),
+    returnChat: (sessionKey: string) => ipcRenderer.invoke('chat:returnToMain', sessionKey),
+    popoutInfo: (): Promise<{ connection: { url: string; token: string } | null }> => ipcRenderer.invoke('chat:popoutInfo'),
+    listPoppedOut: (): Promise<string[]> => ipcRenderer.invoke('chat:listPoppedOut'),
+    // Main window: which chats are currently popped out (live updates)
+    onPoppedOut: (cb: (keys: string[]) => void) => {
+      const listener = (_: Electron.IpcRendererEvent, keys: string[]) => cb(keys)
+      ipcRenderer.on('chat:poppedOut', listener)
+      return () => ipcRenderer.removeListener('chat:poppedOut', listener)
+    },
+    // Main window: a pop-out asked to bring its chat back — open this session.
+    onFocusSession: (cb: (sessionKey: string) => void) => {
+      const listener = (_: Electron.IpcRendererEvent, key: string) => cb(key)
+      ipcRenderer.on('chat:focusSession', listener)
+      return () => ipcRenderer.removeListener('chat:focusSession', listener)
+    },
+    // Window maximized/full-screen state — used to flatten the rounded corners.
+    onMaximized: (cb: (maximized: boolean) => void) => {
+      const listener = (_: Electron.IpcRendererEvent, maximized: boolean) => cb(maximized)
+      ipcRenderer.on('window:maximized', listener)
+      return () => ipcRenderer.removeListener('window:maximized', listener)
+    }
   },
 
   // Config file

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Plus, Search, Trash2, MessageSquare, Wrench, Brain, Radio, Heart, Layers } from 'lucide-react'
+import { Plus, Search, Trash2, MessageSquare, Radio, Heart, ExternalLink, ArrowLeftToLine } from 'lucide-react'
 import { ModelIcon } from '../ui/ModelIcon'
 import { useChatStore } from '../../store/chat'
 import { useAgentsStore } from '../../store/agents'
@@ -9,13 +9,15 @@ import { useSettingsStore } from '../../store/settings'
 import { MessageThread } from './MessageThread'
 import { MessageInput } from './MessageInput'
 import logoUrl from '../../assets/logo-dark.png'
-import { ModelSelect, ThinkingSelect } from './ChatHeaderControls'
+import { ModelSelect, ThinkingSelect, DisplayMenu } from './ChatHeaderControls'
 import { Btn } from '../ui/Btn'
 import { formatRelativeDate } from '../../lib/dateUtils'
 import type { Session } from '../../lib/types'
 import { agentIdFromSessionKey as sessionAgentId, isAutoKeyTitle } from '../../lib/sessionName'
 
-export function ChatView() {
+// `solo` runs ChatView inside a popped-out window: the sidebar is hidden and the view
+// is locked to a single session (opened on mount), with a "return to main" control.
+export function ChatView({ solo }: { solo?: string } = {}) {
   const { conversations, activeConvId, newConversation, selectConversation, deleteConversation, loadSessionMessages, watchSession, setModelOverride, setThinkingLevel } = useChatStore()
   const { agents, fetch: fetchAgents } = useAgentsStore()
   const { sessions, customLabels, derivedNames, fetch: fetchSessions } = useSessionsStore()
@@ -24,6 +26,8 @@ export function ChatView() {
   const [showTools, setShowTools] = useState(true)
   const [showReasoning, setShowReasoning] = useState(true)
   const [showContext, setShowContext] = useState(true)
+  // Sessions moved into their own windows — hidden from this (main) window's list.
+  const [poppedOut, setPoppedOut] = useState<Set<string>>(new Set())
   const { load: loadModels } = useModelsStore()
   const chatMode = useSettingsStore(s => s.chatMode)
   const setChatMode = useSettingsStore(s => s.setChatMode)
@@ -39,6 +43,35 @@ export function ChatView() {
     return () => clearInterval(t)
   }, [])
 
+  // Solo (pop-out) window: open the target session as the active conversation.
+  useEffect(() => {
+    if (!solo) return
+    let cancelled = false
+    void (async () => {
+      const convId = await loadSessionMessages(solo, sessionAgentId(solo), sessionAgentId(solo))
+      if (cancelled || !convId) return
+      selectConversation(convId)
+      watchSession(convId, solo)
+    })()
+    return () => { cancelled = true }
+  }, [solo])
+
+  // Main window: track which chats are popped out, and respond to a pop-out asking
+  // to bring its chat back (open that session here).
+  useEffect(() => {
+    if (solo) return
+    const api = window.api?.window
+    api?.listPoppedOut?.().then(keys => setPoppedOut(new Set(keys)))
+    const offPopped = api?.onPoppedOut?.(keys => setPoppedOut(new Set(keys)))
+    const offFocus = api?.onFocusSession?.(async key => {
+      // Reload from the gateway so we show the latest state (it may have advanced in
+      // the pop-out); loadSessionMessages reuses the existing conversation if present.
+      const convId = await loadSessionMessages(key, sessionAgentId(key), sessionAgentId(key))
+      if (convId) selectConversation(convId)
+    })
+    return () => { offPopped?.(); offFocus?.() }
+  }, [solo])
+
   const conversationSessionKeys = new Set(conversations.map(c => c.sessionKey).filter(Boolean))
 
   const TERMINAL = new Set(['idle', 'done', 'failed', 'killed', 'timeout'])
@@ -50,9 +83,9 @@ export function ChatView() {
     return s.hasActiveRun ?? false
   }
 
-  // Sessions that are running but not yet opened as conversations
+  // Sessions that are running but not yet opened as conversations (and not popped out)
   const activeSessions = sessions.filter(s =>
-    isRunning(s) && !conversationSessionKeys.has(s.key)
+    isRunning(s) && !conversationSessionKeys.has(s.key) && !poppedOut.has(s.key)
   )
 
   const agentName = (sessionKey: string) => {
@@ -88,6 +121,7 @@ export function ChatView() {
   }
 
   const filtered = conversations.filter(c => {
+    if (c.sessionKey && poppedOut.has(c.sessionKey)) return false   // shown in its own window
     const q = search.toLowerCase()
     return c.title.toLowerCase().includes(q) ||
       c.agentName.toLowerCase().includes(q) ||
@@ -113,7 +147,8 @@ export function ChatView() {
 
   return (
     <div className="flex flex-1 min-h-0">
-      {/* Sidebar */}
+      {/* Sidebar — hidden in a popped-out (solo) window */}
+      {!solo && (
       <div
         className="flex flex-col shrink-0"
         style={{
@@ -219,6 +254,7 @@ export function ChatView() {
           ))}
         </div>
       </div>
+      )}
 
       {/* Chat area */}
       <div className="flex flex-1 flex-col min-w-0 min-h-0">
@@ -256,44 +292,35 @@ export function ChatView() {
               </div>
 
               <div className="ml-auto flex items-center gap-1.5">
-                {/* Basic vs Advanced presentation */}
-                <div className="flex items-center rounded overflow-hidden" style={{ border: '1px solid var(--border)' }} title="Basic shows a friendly activity summary; Advanced shows tool calls and reasoning">
-                  {(['basic', 'advanced'] as const).map(m => (
-                    <button
-                      key={m}
-                      onClick={() => setChatMode(m)}
-                      className="text-xs px-2 py-1 capitalize transition-colors"
-                      style={{
-                        background: chatMode === m ? 'var(--accent)' : 'transparent',
-                        color: chatMode === m ? '#fff' : 'var(--text-secondary)',
-                        border: 'none', cursor: 'pointer',
-                      }}
-                    >{m}</button>
-                  ))}
-                </div>
-                {/* Always mounted so the toggle row never reflows when switching modes,
-                    but disabled in Basic mode — these are Advanced-only controls. */}
-                <ToggleBtn
-                  active={showReasoning}
-                  onClick={() => setShowReasoning(v => !v)}
-                  icon={<Brain size={12} />}
-                  label="Reasoning"
-                  disabled={chatMode === 'basic'}
+                {/* Presentation mode + Advanced multi-select toggles, collapsed into a
+                    single popover so the header stays compact (esp. in the pop-out). */}
+                <DisplayMenu
+                  mode={chatMode}
+                  setMode={setChatMode}
+                  reasoning={showReasoning} setReasoning={setShowReasoning}
+                  actions={showTools}       setActions={setShowTools}
+                  context={showContext}     setContext={setShowContext}
                 />
-                <ToggleBtn
-                  active={showTools}
-                  onClick={() => setShowTools(v => !v)}
-                  icon={<Wrench size={12} />}
-                  label="Actions"
-                  disabled={chatMode === 'basic'}
-                />
-                <ToggleBtn
-                  active={showContext}
-                  onClick={() => setShowContext(v => !v)}
-                  icon={<Layers size={12} />}
-                  label="Context"
-                  disabled={chatMode === 'basic'}
-                />
+                {/* Move this chat to its own window — or, in a pop-out, bring it back. */}
+                {solo ? (
+                  <button
+                    onClick={() => window.api?.window?.returnChat?.(solo)}
+                    title="Return this chat to the main window"
+                    className="flex items-center gap-1 text-xs px-2 py-1 rounded transition-colors"
+                    style={{ border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer' }}
+                  >
+                    <ArrowLeftToLine size={12} /> Return
+                  </button>
+                ) : activeConv.sessionKey ? (
+                  <button
+                    onClick={() => { window.api?.window?.popOutChat?.(activeConv.sessionKey!); selectConversation('') }}
+                    title="Open this chat in a new window"
+                    className="flex items-center justify-center px-1.5 py-1 rounded transition-colors"
+                    style={{ border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer' }}
+                  >
+                    <ExternalLink size={13} />
+                  </button>
+                ) : null}
               </div>
             </div>
 
@@ -464,27 +491,6 @@ function SessionRow({ session, agentName, onClick }: { session: Session; agentNa
         {session.key.slice(0, 24)}{session.key.length > 24 ? '…' : ''}
       </p>
     </div>
-  )
-}
-
-function ToggleBtn({ active, onClick, icon, label, disabled = false }: { active: boolean; onClick: () => void; icon: React.ReactNode; label: string; disabled?: boolean }) {
-  return (
-    <button
-      onClick={disabled ? undefined : onClick}
-      disabled={disabled}
-      title={disabled ? `${label} — available in Advanced mode` : `${active ? 'Hide' : 'Show'} ${label}`}
-      className="flex items-center gap-1 px-2 py-1 rounded text-xs transition-opacity"
-      style={{
-        border: '1px solid var(--border)',
-        background: active && !disabled ? 'color-mix(in srgb, var(--accent) 15%, transparent)' : 'transparent',
-        color: active && !disabled ? 'var(--accent)' : 'var(--text-secondary)',
-        cursor: disabled ? 'not-allowed' : 'pointer',
-        opacity: disabled ? 0.35 : (active ? 1 : 0.6)
-      }}
-    >
-      {icon}
-      {label}
-    </button>
   )
 }
 
