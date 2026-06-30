@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell, Tray, Menu, nativeImage, nativeTheme, session } from 'electron'
+import { app, BrowserWindow, ipcMain, shell, Tray, Menu, nativeImage, session } from 'electron'
 import { join, dirname } from 'path'
 import { readFile, writeFile, mkdir, readdir, unlink } from 'fs/promises'
 import { existsSync, statSync, createReadStream, watch, type FSWatcher } from 'fs'
@@ -26,11 +26,9 @@ process.on('unhandledRejection', (reason) => {
 })
 
 function getTrayIcon(): Electron.NativeImage {
-  // resources/ sits two levels above out/main/ in both dev and prod. Pick a white
-  // silhouette on a dark taskbar and a charcoal one on a light taskbar so the mark
-  // stays visible whatever the OS theme is.
-  const variant = nativeTheme.shouldUseDarkColors ? 'tray-light' : 'tray-dark'
-  const icon = nativeImage.createFromPath(join(__dirname, `../../resources/icons/tray/${variant}.png`))
+  // resources/ sits two levels above out/main/ in both dev and prod. The tray uses
+  // the app logo (the same colored mark as the app icon).
+  const icon = nativeImage.createFromPath(join(__dirname, '../../resources/icons/tray/tray.png'))
   if (icon.isEmpty()) {
     // Fallback: 1×1 transparent PNG so the tray doesn't crash
     return nativeImage.createFromDataURL(
@@ -90,9 +88,6 @@ function refreshTray(): void {
 function createTray(): void {
   tray = new Tray(getTrayIcon())
   refreshTray()
-
-  // Re-tint the icon when the OS switches between light and dark.
-  nativeTheme.on('updated', () => tray?.setImage(getTrayIcon()))
 
   // Left-click / double-click shows the window
   tray.on('click', () => {
