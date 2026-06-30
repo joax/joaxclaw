@@ -34,9 +34,18 @@ html, body, #root {
   font-family: var(--font-family);
   font-size: var(--font-size);
   color: var(--text-primary);
-  background: var(--bg-primary);
   -webkit-font-smoothing: antialiased;
 }
+
+/* The window is transparent (for rounded corners on Linux, native elsewhere); the
+   app paints its background on #root and clips it to a radius. Corners are flattened
+   while maximized so the window sits square against the screen edges. */
+html, body { background: transparent; }
+#root {
+  background: var(--bg-primary);
+  border-radius: 12px;
+}
+html.win-maximized #root { border-radius: 0; }
 
 /* Scrollbars */
 ::-webkit-scrollbar { width: 6px; height: 6px; }

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { ChevronDown, Brain, Check } from 'lucide-react'
+import { ChevronDown, Brain, Check, SlidersHorizontal, Wrench, Layers } from 'lucide-react'
 import { ModelIcon } from '../ui/ModelIcon'
 import { useModelsStore } from '../../store/models'
 import { useMetricsStore } from '../../store/metrics'
@@ -182,6 +182,95 @@ function MenuRow({ selected, onClick, children }: { selected: boolean; onClick: 
     >
       {children}
       {selected && <Check size={12} style={{ flexShrink: 0 }} />}
+    </button>
+  )
+}
+
+// ── Display menu ──────────────────────────────────────────────────────────────
+// Collapses the presentation controls (Basic/Advanced + the multi-select Reasoning /
+// Actions / Context toggles) into one popover so the chat header stays uncluttered —
+// important in the narrow pop-out chat window.
+
+export function DisplayMenu({
+  mode, setMode, reasoning, setReasoning, actions, setActions, context, setContext,
+}: {
+  mode: 'basic' | 'advanced'
+  setMode: (m: 'basic' | 'advanced') => void
+  reasoning: boolean; setReasoning: (v: boolean) => void
+  actions: boolean;   setActions: (v: boolean) => void
+  context: boolean;   setContext: (v: boolean) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const ref = useClickOutside(() => setOpen(false))
+  const advanced = mode === 'advanced'
+
+  return (
+    <div ref={ref} style={{ position: 'relative' }}>
+      <button
+        style={triggerStyle}
+        onClick={() => setOpen(o => !o)}
+        title="Display options"
+      >
+        <SlidersHorizontal size={12} />
+        <span className="capitalize">{mode}</span>
+        <ChevronDown size={11} style={{ opacity: 0.6 }} />
+      </button>
+      {open && (
+        <div style={{ ...menuStyle, minWidth: 190 }}>
+          <p style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--text-secondary)', padding: '2px 10px' }}>
+            Presentation
+          </p>
+          <div style={{ padding: '2px 8px 6px' }}>
+            <div className="flex rounded overflow-hidden" style={{ border: '1px solid var(--border)' }}>
+              {(['basic', 'advanced'] as const).map(m => (
+                <button
+                  key={m}
+                  onClick={() => setMode(m)}
+                  className="flex-1 text-xs px-2 py-1 capitalize transition-colors"
+                  style={{
+                    background: mode === m ? 'var(--accent)' : 'transparent',
+                    color: mode === m ? '#fff' : 'var(--text-secondary)',
+                    border: 'none', cursor: 'pointer',
+                  }}
+                >{m}</button>
+              ))}
+            </div>
+          </div>
+          <div style={{ borderTop: '1px solid var(--border)', margin: '2px 0' }} />
+          <p style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--text-secondary)', padding: '4px 10px 2px' }}>
+            Show in messages
+          </p>
+          <CheckRow label="Reasoning" icon={<Brain size={12} />}  checked={reasoning} disabled={!advanced} onToggle={() => setReasoning(!reasoning)} />
+          <CheckRow label="Actions"   icon={<Wrench size={12} />} checked={actions}   disabled={!advanced} onToggle={() => setActions(!actions)} />
+          <CheckRow label="Context"   icon={<Layers size={12} />} checked={context}   disabled={!advanced} onToggle={() => setContext(!context)} />
+        </div>
+      )}
+    </div>
+  )
+}
+
+function CheckRow({ label, icon, checked, disabled, onToggle }: {
+  label: string; icon: React.ReactNode; checked: boolean; disabled?: boolean; onToggle: () => void
+}) {
+  return (
+    <button
+      onClick={disabled ? undefined : onToggle}
+      disabled={disabled}
+      className="flex items-center gap-2 w-full px-2.5 py-1.5 text-left text-xs"
+      style={{
+        background: 'none', border: 'none',
+        cursor: disabled ? 'default' : 'pointer',
+        color: disabled ? 'var(--text-secondary)' : 'var(--text-primary)',
+        opacity: disabled ? 0.45 : 1,
+      }}
+      onMouseEnter={e => { if (!disabled) (e.currentTarget as HTMLButtonElement).style.background = 'var(--bg-primary)' }}
+      onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = 'none' }}
+    >
+      <span style={{ width: 14, display: 'flex', justifyContent: 'center', flexShrink: 0 }}>
+        {checked && <Check size={12} style={{ color: 'var(--accent)' }} />}
+      </span>
+      {icon}
+      <span style={{ flex: 1 }}>{label}</span>
     </button>
   )
 }
