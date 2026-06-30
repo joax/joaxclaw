@@ -316,8 +316,14 @@ function NodeCard({
           </span>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontSize: 11, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: isHandoff ? COLOR_HANDOFF : isReview ? COLOR_REVIEW : 'var(--text-primary)' }}>
-              {isStart ? 'Start' : isEnd ? 'End' : isHandoff ? 'Handoff' : isReview ? 'Review' : (gwAgent?.identity?.name ?? gwAgent?.name ?? node.agentId ?? 'Select agent')}
+              {isStart ? 'Start' : isEnd ? 'End' : isHandoff ? 'Handoff' : isReview ? 'Review' : (node.role || gwAgent?.identity?.name || gwAgent?.name || node.agentId || 'Select agent')}
             </div>
+            {/* When a member has a title (role), show which agent fills it underneath. */}
+            {!isStart && !isEnd && !isHandoff && !isReview && node.role && (
+              <div style={{ fontSize: 9, color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 1 }}>
+                {gwAgent?.identity?.name ?? gwAgent?.name ?? node.agentId ?? 'Select agent'}
+              </div>
+            )}
             {!isStart && !isEnd && !isHandoff && !isReview && gwAgent?.model?.primary && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 3, marginTop: 1 }}>
                 <ModelIcon model={gwAgent.model.primary} size={8} />

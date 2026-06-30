@@ -81,6 +81,7 @@ function buildLinearTeamDef(bp: TeamBlueprint, compiledPath: string): ProcessDef
     nodes.push({
       id: aid, type: 'agent', position: { x, y: 200 },
       agentId: m.agentId, task: m.task,
+      ...(m.role ? { role: m.role } : {}),
       ...(m.soul ? { soul: m.soul } : {}),
     })
     addEdge(prev, aid)
@@ -172,6 +173,7 @@ function buildBranchingTeamDef(bp: TeamBlueprint, compiledPath: string): Process
     nodes.push({
       id: `agent-${i}`, type: 'agent', position: { x, y: 200 },
       agentId: m.agentId, task: m.task,
+      ...(m.role ? { role: m.role } : {}),
       ...(m.soul ? { soul: m.soul } : {}),
     })
     x += STEP_X
@@ -322,8 +324,10 @@ export function extractMembersFromDef(def: ProcessDef): TeamMemberDef[] {
     const prevEdge = def.graph?.edges.find(e => e.to === n.id)
     const prevNode = prevEdge ? def.graph?.nodes.find(nd => nd.id === prevEdge.from) : undefined
     return {
+      // Prefer the node's own role — it's correct even when the same agentId is reused
+      // for several members (the agents-array lookup returns the first match only).
       agentId,
-      role: processAgent?.role ?? agentId,
+      role: n.role ?? processAgent?.role ?? agentId,
       task: n.task ?? '',
       soul: n.soul,
       reviewBefore: i > 0 && prevNode?.type === 'review',

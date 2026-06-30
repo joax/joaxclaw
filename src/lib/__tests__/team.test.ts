@@ -262,6 +262,31 @@ describe('compile → extract members round-trip', () => {
     expect(members[0].agentId).toBe('researcher')
     expect(members[2].reviewBefore).toBe(true)
   })
+
+  it('stamps each member title (role) onto its agent node, surviving serialization', () => {
+    const bp = makeBp()
+    const def = buildTeamProcessDef(bp, '/tmp/test-team.md')
+    const agentNodes = (def.graph?.nodes ?? []).filter(n => n.type === 'agent')
+    expect(agentNodes.map(n => n.role)).toEqual(['Researcher', 'Analyst', 'Writer'])
+
+    // The title must survive the graph-data JSON round-trip so it still shows on the
+    // flow after a customized graph is reloaded.
+    const reparsed = parseProcessFile('/tmp/test-team.md', serializeProcess(def))
+    const reparsedAgents = (reparsed!.graph?.nodes ?? []).filter(n => n.type === 'agent')
+    expect(reparsedAgents.map(n => n.role)).toEqual(['Researcher', 'Analyst', 'Writer'])
+  })
+
+  it('extracts the node title even when the same agentId is reused for several members', () => {
+    // Two members share an agentId but hold different titles — the agents-array lookup
+    // would collapse both to the first role; the node-level role keeps them distinct.
+    const bp = makeBp({ members: [
+      { agentId: 'dev', role: 'Senior Developer', task: 'Build it' },
+      { agentId: 'dev', role: 'QA Manager', task: 'Test it' },
+    ] })
+    const def = buildTeamProcessDef(bp, '/tmp/reuse-team.md')
+    const members = extractMembersFromDef(def)
+    expect(members.map(m => m.role)).toEqual(['Senior Developer', 'QA Manager'])
+  })
 })
 
 // ── Path helpers ──────────────────────────────────────────────────────────────
