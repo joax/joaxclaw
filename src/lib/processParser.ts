@@ -34,6 +34,7 @@ export interface GraphNode {
   type: 'start' | 'agent' | 'end' | 'handoff' | 'review'
   position: { x: number; y: number }
   agentId?: string
+  role?: string          // the member's title within this team (e.g. "QA Manager")
   task?: string
   soul?: string
   deliverables?: Deliverable[]
