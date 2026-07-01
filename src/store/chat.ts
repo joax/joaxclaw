@@ -503,9 +503,14 @@ async function reconstructSubThreads(parentKey: string): Promise<SubThread[]> {
       !!r && (r['spawnedBy'] === parentKey || r['parentSessionKey'] === parentKey))
     if (!children.length) return []
 
+    const TERMINAL = new Set(['idle', 'done', 'failed', 'killed', 'timeout'])
     const built = await Promise.all(children.map(async (r): Promise<SubThread | null> => {
       const key = String(r['key'] ?? '')
       if (!key) return null
+      // A yield can still be pending/running at reconnect — mark it so instead of freezing
+      // it as done. Live frames (routed by spawnedBy) then patch the same thread by id.
+      const st = r['status']
+      const running = r['hasActiveRun'] === true || (typeof st === 'string' && !TERMINAL.has(st) && st !== '')
       try {
         const h = await gatewayClient.request<{ messages: unknown[] }>('chat.history', { sessionKey: key })
         const msgs = (h.messages ?? []).filter((m): m is Record<string, unknown> => !!m && typeof m === 'object')
@@ -513,7 +518,8 @@ async function reconstructSubThreads(parentKey: string): Promise<SubThread[]> {
         const content = asst.map(extractText).filter(Boolean).join('\n\n')
         const reasoning = asst.map(extractReasoning).filter(Boolean).join('\n') || undefined
         const toolCalls = asst.flatMap(extractToolCalls).filter(tc => tc.name !== 'sessions_spawn')
-        if (!content && !reasoning && !toolCalls.length) return null
+        // Drop only truly-empty finished children; keep running ones so pending yields show.
+        if (!running && !content && !reasoning && !toolCalls.length) return null
         // The sub-agent's brief = its first user message; makes a far better label than the
         // generic worker agent id (which is the same for every leaf).
         const firstUser = msgs.find(m => m['role'] === 'user')
@@ -523,12 +529,12 @@ async function reconstructSubThreads(parentKey: string): Promise<SubThread[]> {
           childSessionKey: key,
           agentId: (typeof r['subagentRole'] === 'string' && r['subagentRole']) || agentIdFromKey(key),
           task: brief || (r['label'] as string) || (r['displayName'] as string) || undefined,
-          status: 'done',
+          status: running ? 'running' : 'done',
           content,
           reasoning,
           toolCalls: toolCalls.length ? toolCalls : undefined,
           startedAt: typeof r['startedAt'] === 'number' ? new Date(r['startedAt'] as number).toISOString() : new Date().toISOString(),
-          finishedAt: typeof r['updatedAt'] === 'number' ? new Date(r['updatedAt'] as number).toISOString() : undefined,
+          ...(running ? {} : { finishedAt: typeof r['updatedAt'] === 'number' ? new Date(r['updatedAt'] as number).toISOString() : undefined }),
         }
       } catch { return null }
     }))
@@ -538,13 +544,18 @@ async function reconstructSubThreads(parentKey: string): Promise<SubThread[]> {
   }
 }
 
-// Attach reconstructed sub-agent threads to the assistant message that spawned them
-// (the last one carrying a sessions_spawn tool call, else the last assistant message),
-// de-duped by child session key so repeated reloads don't stack them.
+// Attach reconstructed sub-agent threads to the right assistant message, de-duped by
+// child session key so they don't stack (and so live frames, which key threads by the
+// same child session key, patch these in place rather than duplicating).
+//   1. a currently-streaming assistant turn (a live reconnect) — converges with the
+//      live placeholder watchSession creates;
+//   2. else the last turn that yielded/spawned (sessions_yield / sessions_spawn);
+//   3. else the last assistant message.
 function attachThreads(messages: ChatMessage[], threads: SubThread[]): ChatMessage[] {
-  let target = -1
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i].role === 'assistant' && messages[i].toolCalls?.some(t => t.name === 'sessions_spawn')) { target = i; break }
+  const YIELD = new Set(['sessions_yield', 'sessions_spawn'])
+  let target = messages.findIndex(m => m.role === 'assistant' && m.streaming)
+  if (target < 0) for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === 'assistant' && messages[i].toolCalls?.some(t => YIELD.has(t.name))) { target = i; break }
   }
   if (target < 0) for (let i = messages.length - 1; i >= 0; i--) { if (messages[i].role === 'assistant') { target = i; break } }
   if (target < 0) return messages
