@@ -1,7 +1,31 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import { type ThemeSettings, DEFAULT_THEME, PRESET_THEMES } from '../lib/types'
+import type { ThemeSettings, ThemeBgSlot, ThemeBackground } from '../lib/types'
+import { DEFAULT_THEME, PRESET_THEMES } from '../lib/presetThemes'
+import { parseThemeManifest, serializeTheme, THEME_BG_SLOTS } from '../lib/themeFormat'
 import { applyTheme } from '../lib/theme'
+
+interface ThemeApi {
+  import?: () => Promise<{ ok: boolean; canceled?: boolean; error?: string; theme?: unknown }>
+  export?: (manifest: unknown, bgFiles: Record<string, string>) => Promise<{ ok: boolean; canceled?: boolean; error?: string }>
+  deleteAssets?: (themeId: string) => Promise<unknown>
+}
+const themeApi = (): ThemeApi | undefined =>
+  (window as unknown as { api?: { theme?: ThemeApi } }).api?.theme
+
+const PRESET_IDS = new Set(PRESET_THEMES.map(t => t.id))
+
+// Fetch a bundled-asset / http / data URL and return it as a data URL, so the main
+// process can pack it into an exported theme zip (it can't read renderer asset URLs).
+async function urlToDataUrl(url: string): Promise<string> {
+  const blob = await (await fetch(url)).blob()
+  return await new Promise<string>((resolve, reject) => {
+    const r = new FileReader()
+    r.onload = () => resolve(r.result as string)
+    r.onerror = () => reject(r.error)
+    r.readAsDataURL(blob)
+  })
+}
 
 // UI zoom bounds (Electron webFrame zoom levels). ±0.5 per keypress ≈ ±10%.
 export const ZOOM_MIN = -3
@@ -43,6 +67,9 @@ interface SettingsState {
   saveTheme: (theme: ThemeSettings) => void
   deleteTheme: (id: string) => void
   updateActiveColors: (partial: Partial<ThemeSettings>) => void
+  updateActiveBackground: (slot: ThemeBgSlot, bg: ThemeBackground | null) => void
+  importTheme: () => Promise<{ ok: boolean; error?: string }>
+  exportTheme: (id: string) => Promise<{ ok: boolean; error?: string }>
   toggleMonitor: () => void
   setAppPref: <K extends keyof AppPrefs>(key: K, value: AppPrefs[K]) => void
 }
@@ -101,8 +128,10 @@ export const useSettingsStore = create<SettingsState>()(
         set(s => {
           const themes = s.themes.filter(t => t.id !== id)
           const activeThemeId = s.activeThemeId === id ? (themes[0]?.id ?? DEFAULT_THEME.id) : s.activeThemeId
+          if (s.activeThemeId === id) applyTheme(themes.find(t => t.id === activeThemeId) ?? DEFAULT_THEME)
           return { themes, activeThemeId }
         })
+        themeApi()?.deleteAssets?.(id)?.catch(() => { /* best-effort disk cleanup */ })
       },
 
       updateActiveColors(partial) {
@@ -112,12 +141,60 @@ export const useSettingsStore = create<SettingsState>()(
         get().saveTheme(updated)
       },
 
+      updateActiveBackground(slot, bg) {
+        const theme = get().themes.find(t => t.id === get().activeThemeId)
+        if (!theme) return
+        const backgrounds = { ...(theme.backgrounds ?? {}) }
+        if (bg) backgrounds[slot] = bg
+        else delete backgrounds[slot]
+        get().saveTheme({ ...theme, backgrounds: Object.keys(backgrounds).length ? backgrounds : undefined })
+      },
+
+      async importTheme() {
+        const api = themeApi()
+        if (!api?.import) return { ok: false, error: 'Theme import is unavailable' }
+        const res = await api.import()
+        if (res?.canceled) return { ok: true }
+        if (!res?.ok) return { ok: false, error: res?.error ?? 'Import failed' }
+        const theme = parseThemeManifest(res.theme)
+        if (!theme) return { ok: false, error: 'The package is not a valid theme' }
+        get().saveTheme(theme) // save, activate, and apply
+        return { ok: true }
+      },
+
+      async exportTheme(id) {
+        const theme = get().themes.find(t => t.id === id)
+        if (!theme) return { ok: false, error: 'Theme not found' }
+        const api = themeApi()
+        if (!api?.export) return { ok: false, error: 'Theme export is unavailable' }
+        const bgFiles: Record<string, string> = {}
+        for (const slot of THEME_BG_SLOTS) {
+          const f = theme.backgrounds?.[slot]?.file
+          if (!f) continue
+          // Disk paths pass through; bundled/remote assets are inlined as data URLs.
+          const direct = f.startsWith('asset:') ? f.slice(6) : /^(https?:|blob:|data:)/.test(f) ? f : null
+          bgFiles[slot] = direct ? await urlToDataUrl(direct) : f
+        }
+        const res = await api.export(serializeTheme(theme), bgFiles)
+        if (res?.canceled) return { ok: true }
+        return { ok: !!res?.ok, error: res?.error }
+      },
+
       toggleMonitor() { set(s => ({ monitorVisible: !s.monitorVisible })) },
 
       setAppPref(key, value) { set({ [key]: value } as Pick<SettingsState, typeof key>) },
     }),
     {
       name: 'joaxclaw-settings',
+      // Base themes always come from the repo files (PRESET_THEMES) — never localStorage —
+      // so updated presets and their bundled backgrounds take effect on upgrade and can't
+      // go stale. Only user-created themes are persisted.
+      partialize: (s) => ({ ...s, themes: s.themes.filter(t => !PRESET_IDS.has(t.id)) }),
+      merge: (persisted, current) => {
+        const p = (persisted ?? {}) as Partial<SettingsState>
+        const custom = (p.themes ?? []).filter(t => !PRESET_IDS.has(t.id))
+        return { ...current, ...p, themes: [...PRESET_THEMES, ...custom] }
+      },
       onRehydrateStorage: () => (state) => {
         if (state) {
           const theme = state.themes.find(t => t.id === state.activeThemeId) ?? DEFAULT_THEME

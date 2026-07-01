@@ -8,6 +8,8 @@ import { AgentsView } from './components/agents/AgentsView'
 import { SessionsView } from './components/sessions/SessionsView'
 import { GatewayView } from './components/gateway/GatewayView'
 import { SettingsView } from './components/settings/SettingsView'
+import { ThemesView } from './components/theme/ThemesView'
+import { ThemeBackground } from './components/theme/ThemeBackground'
 import { ExtensionsView } from './components/extensions/ExtensionsView'
 import { CronsView } from './components/crons/CronsView'
 import { ProcessesView } from './components/processes/ProcessesView'
@@ -29,7 +31,7 @@ import { useSessionsStore } from './store/sessions'
 import { useTeamsStore } from './store/teams'
 import { useSkillsStore } from './store/skills'
 
-export type NavSection = 'dashboard' | 'chat' | 'talk' | 'agents' | 'processes' | 'teams' | 'extensions' | 'sessions' | 'crons' | 'obsidian' | 'models' | 'gateway' | 'settings'
+export type NavSection = 'dashboard' | 'chat' | 'talk' | 'agents' | 'processes' | 'teams' | 'extensions' | 'sessions' | 'crons' | 'obsidian' | 'models' | 'gateway' | 'themes' | 'settings'
 
 export default function App() {
   const [section, setSection] = useState<NavSection>('dashboard')
@@ -137,7 +139,7 @@ export default function App() {
 
   // While auto-reconnecting (e.g. the gateway reloaded after a channel change),
   // show the explanatory overlay instead of bouncing to the manual connect screen.
-  const showConnect = notConnected && !reconnecting && section !== 'settings'
+  const showConnect = notConnected && !reconnecting && section !== 'settings' && section !== 'themes'
 
   return (
     <div className="flex flex-col h-screen select-none">
@@ -146,6 +148,8 @@ export default function App() {
       <div className="flex flex-1 min-h-0">
         <NavRail section={section} onNavigate={setSection} disabledSections={disabledSections} />
         <main className="flex-1 min-w-0 flex flex-col relative" style={{ background: 'var(--bg-primary)' }}>
+          <ThemeBackground slot="app" />
+          <div className="relative z-[1] flex-1 min-w-0 min-h-0 flex flex-col">
           {reconnecting ? (
             <ReconnectOverlay />
           ) : showConnect ? (
@@ -164,6 +168,7 @@ export default function App() {
               {section === 'obsidian' && <ObsidianView onNavigateExtensions={() => setSection('extensions')} />}
               {section === 'models' && <ModelsView />}
               {section === 'gateway' && <GatewayView onOpenChat={() => setSection('chat')} />}
+              {section === 'themes' && <ThemesView />}
               {section === 'settings' && <SettingsView />}
             </>
           )}
@@ -172,6 +177,7 @@ export default function App() {
               <SystemMonitorHUD />
             </div>
           )}
+          </div>
         </main>
       </div>
       <StatusBar />

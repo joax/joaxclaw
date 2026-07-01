@@ -8,6 +8,7 @@ import { createHash } from 'crypto'
 import si from 'systeminformation'
 import WebSocket from 'ws'
 import { registerUpdater } from './updater'
+import { registerThemeIpc } from './themes'
 
 let mainWindow: BrowserWindow | null = null
 let aboutWindow: BrowserWindow | null = null
@@ -267,6 +268,7 @@ app.whenReady().then(() => {
     }
   })
 
+  registerThemeIpc()
   createTray()
   createWindow()
   app.on('activate', () => {
