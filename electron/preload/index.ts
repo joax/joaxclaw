@@ -97,6 +97,14 @@ contextBridge.exposeInMainWorld('api', {
     readBinary: (filePath: string)                => ipcRenderer.invoke('file:readBinary', filePath)
   },
 
+  // Theme packages (.joaxtheme zips) + background-image picking
+  theme: {
+    import: () => ipcRenderer.invoke('theme:import'),
+    export: (manifest: unknown, bgFiles: Record<string, string>) => ipcRenderer.invoke('theme:export', manifest, bgFiles),
+    pickImage: (themeId: string, slot: string) => ipcRenderer.invoke('theme:pickImage', themeId, slot),
+    deleteAssets: (themeId: string) => ipcRenderer.invoke('theme:deleteAssets', themeId),
+  },
+
   // Plugin metadata (from openclaw plugins list --json)
   plugins: {
     list: () => ipcRenderer.invoke('plugins:list')

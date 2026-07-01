@@ -7,6 +7,7 @@ import { useSessionsStore } from '../../store/sessions'
 import { useModelsStore } from '../../store/models'
 import { useSettingsStore } from '../../store/settings'
 import { MessageThread } from './MessageThread'
+import { ThemeBackground } from '../theme/ThemeBackground'
 import { MessageInput } from './MessageInput'
 import logoUrl from '../../assets/logo-dark.png'
 import { ModelSelect, ThinkingSelect, DisplayMenu } from './ChatHeaderControls'
@@ -257,7 +258,9 @@ export function ChatView({ solo }: { solo?: string } = {}) {
       )}
 
       {/* Chat area */}
-      <div className="flex flex-1 flex-col min-w-0 min-h-0">
+      <div className="flex flex-1 flex-col min-w-0 min-h-0 relative">
+        <ThemeBackground slot="chat" />
+        <div className="relative z-[1] flex flex-1 flex-col min-w-0 min-h-0">
         {activeConv ? (
           <>
             {/* Chat header */}
@@ -339,6 +342,7 @@ export function ChatView({ solo }: { solo?: string } = {}) {
             </p>
           </div>
         )}
+        </div>
       </div>
     </div>
   )
