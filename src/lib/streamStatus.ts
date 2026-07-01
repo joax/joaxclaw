@@ -31,9 +31,9 @@ export interface StreamStatusInput {
   connected: boolean            // connection status === 'connected'
   lastHeartbeat: number | null  // ms epoch of the last gateway tick, or null
   now: number
-  turnStart: number             // ms epoch the current turn began
   lastActivity: number          // ms epoch of the last activity-fingerprint change
   sawActivity: boolean          // has the turn produced any output/reasoning/tool/delegation yet
+  activelyWorking: boolean       // a tool / sub-agent / delegation is running right now
   stallMs: number               // inter-token stall budget (user setting)
 }
 
@@ -41,21 +41,32 @@ export interface StreamStatusInput {
 export function computeStreamStatus(i: StreamStatusInput): { status: StreamStatus; elapsedSeconds: number } {
   if (!i.isStreaming) return { status: 'idle', elapsedSeconds: 0 }
 
+  const elapsedSeconds = Math.max(0, Math.round((i.now - i.lastActivity) / 1000))
+
   // Connection liveness first: never say "the model stopped" when the pipe is dead.
   const heartbeatStale = i.lastHeartbeat != null && i.now - i.lastHeartbeat > HEARTBEAT_STALE_MS
-  if (!i.connected || heartbeatStale) {
-    return { status: 'disconnected', elapsedSeconds: Math.max(0, Math.round((i.now - i.lastActivity) / 1000)) }
-  }
+  if (!i.connected || heartbeatStale) return { status: 'disconnected', elapsedSeconds }
 
-  if (!i.sawActivity) {
-    // Time-to-first-token phase — be patient (slow model load / large context).
-    const since = i.now - i.turnStart
-    return { status: since > i.stallMs * TTFT_MULTIPLIER ? 'stalled' : 'warming', elapsedSeconds: Math.max(0, Math.round(since / 1000)) }
-  }
+  // Before the first output we're in the time-to-first-token phase (model load, context
+  // encoding, initial reasoning) and grant a longer budget; after output starts, a
+  // tighter inter-activity gap. Ollama prompt-ingestion progress counts as activity, so
+  // it keeps resetting `lastActivity` and stays in `warming`.
+  const phase: StreamStatus = i.sawActivity ? 'streaming' : 'warming'
 
-  // Streaming phase — watch the inter-activity gap.
-  const since = i.now - i.lastActivity
-  return { status: since > i.stallMs ? 'stalled' : 'streaming', elapsedSeconds: Math.max(0, Math.round(since / 1000)) }
+  // A running tool, spawned sub-agent, or delegation is legitimate work — never a stall.
+  if (i.activelyWorking) return { status: phase, elapsedSeconds }
+
+  const budget = i.sawActivity ? i.stallMs : i.stallMs * TTFT_MULTIPLIER
+  return { status: i.now - i.lastActivity > budget ? 'stalled' : phase, elapsedSeconds }
+}
+
+// True while a tool call, spawned sub-agent, or delegation is running — the turn is
+// making progress even if no tokens are flowing, so it must not be flagged as stalled.
+export function isActivelyWorking(m: ChatMessage | undefined): boolean {
+  if (!m) return false
+  const runningTool = (m.toolCalls ?? []).some(tc => tc.status === 'running')
+  const runningThread = (m.threads ?? []).some(t => t.status === 'running' || t.status === 'spawning')
+  return runningTool || runningThread || !!m.waitingForSession
 }
 
 // The activity fingerprint: every signal that means "the turn is making progress" —

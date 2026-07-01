@@ -11,9 +11,9 @@ function input(over: Partial<StreamStatusInput> = {}): StreamStatusInput {
     connected: true,
     lastHeartbeat: NOW - 5_000, // fresh tick
     now: NOW,
-    turnStart: NOW,
     lastActivity: NOW,
     sawActivity: false,
+    activelyWorking: false,
     stallMs: T,
     ...over,
   }
@@ -26,14 +26,19 @@ describe('computeStreamStatus', () => {
 
   // ── Time-to-first-token phase (no output yet) ──
   it('warms (not stalled) while waiting for the first token within 2× budget', () => {
-    const r = computeStreamStatus(input({ sawActivity: false, turnStart: NOW - (T + 5_000) })) // 65s, < 120s
+    const r = computeStreamStatus(input({ sawActivity: false, lastActivity: NOW - (T + 5_000) })) // 65s, < 120s
     expect(r.status).toBe('warming')
     expect(r.elapsedSeconds).toBe(65)
   })
 
   it('stalls once the first-token budget (2× stall) is exceeded', () => {
-    const r = computeStreamStatus(input({ sawActivity: false, turnStart: NOW - (2 * T + 1_000) })) // 121s
+    const r = computeStreamStatus(input({ sawActivity: false, lastActivity: NOW - (2 * T + 1_000) })) // 121s
     expect(r.status).toBe('stalled')
+  })
+
+  it('never stalls while a tool / sub-agent is actively working, even past budget', () => {
+    const r = computeStreamStatus(input({ sawActivity: true, activelyWorking: true, lastActivity: NOW - 90_000 }))
+    expect(r.status).toBe('streaming')
   })
 
   // ── Streaming phase (output has started) ──
