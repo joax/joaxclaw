@@ -20,5 +20,9 @@
   "borderRadius": 12,
   "fontSize": 14,
   "fontFamily": "Inter, system-ui, sans-serif",
-  "iconFamily": "lucide"
+  "iconFamily": "lucide",
+  "backgrounds": {
+    "app": { "file": "backgrounds/app.jpg", "opacity": 0.22, "blur": 0, "fit": "cover", "position": "center" },
+    "chat": { "file": "backgrounds/chat.jpg", "opacity": 0.25, "blur": 0, "fit": "cover", "position": "center" }
+  }
 }
