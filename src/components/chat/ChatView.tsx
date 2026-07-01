@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react'
-import { Plus, Search, Trash2, MessageSquare, Radio, Heart, ExternalLink, ArrowLeftToLine } from 'lucide-react'
+import { useState, useEffect, type ReactNode, type MouseEvent as ReactMouseEvent } from 'react'
+import { Plus, Search, Trash2, MessageSquare, Radio, Heart, ExternalLink, ArrowLeftToLine, ChevronDown, Pencil } from 'lucide-react'
 import { ModelIcon } from '../ui/ModelIcon'
 import { useChatStore } from '../../store/chat'
 import { useAgentsStore } from '../../store/agents'
@@ -11,19 +11,38 @@ import { ThemeBackground } from '../theme/ThemeBackground'
 import { MessageInput } from './MessageInput'
 import logoUrl from '../../assets/logo-dark.png'
 import { ModelSelect, ThinkingSelect, DisplayMenu } from './ChatHeaderControls'
-import { Btn } from '../ui/Btn'
 import { formatRelativeDate } from '../../lib/dateUtils'
 import type { Session } from '../../lib/types'
 import { agentIdFromSessionKey as sessionAgentId, isAutoKeyTitle } from '../../lib/sessionName'
+
+// A single row in the unified chat list — an opened conversation or a running-but-
+// unopened gateway session, normalized to one shape.
+interface ChatItem {
+  key: string
+  sessionKey?: string
+  emoji: string
+  name: string
+  ts: number
+  time?: string
+  subtitle?: string
+  running: boolean
+  isActive: boolean
+  heartbeat?: boolean
+  onOpen: () => void
+  onDelete?: () => void
+  onPopOut?: () => void
+  onRename?: (name: string) => void
+}
 
 // `solo` runs ChatView inside a popped-out window: the sidebar is hidden and the view
 // is locked to a single session (opened on mount), with a "return to main" control.
 export function ChatView({ solo }: { solo?: string } = {}) {
   const { conversations, activeConvId, newConversation, selectConversation, deleteConversation, loadSessionMessages, watchSession, setModelOverride, setThinkingLevel } = useChatStore()
-  const { agents, fetch: fetchAgents } = useAgentsStore()
-  const { sessions, customLabels, derivedNames, fetch: fetchSessions } = useSessionsStore()
+  const { agents, defaultId, fetch: fetchAgents } = useAgentsStore()
+  const { sessions, customLabels, derivedNames, rename: renameSession, fetch: fetchSessions } = useSessionsStore()
   const [search, setSearch] = useState('')
   const [showNewMenu, setShowNewMenu] = useState(false)
+  const [filter, setFilter] = useState<'all' | 'active'>('all')
   const [showTools, setShowTools] = useState(true)
   const [showReasoning, setShowReasoning] = useState(true)
   const [showContext, setShowContext] = useState(true)
@@ -121,6 +140,12 @@ export function ChatView({ solo }: { solo?: string } = {}) {
     }
   }
 
+  // "+ New" primary: start a chat with the default agent (or the first available).
+  const startNewChat = () => {
+    const a = agents.find(x => x.id === defaultId) ?? agents[0]
+    if (a) newConversation(a.id, a.identity?.name ?? a.name ?? a.id)
+  }
+
   const filtered = conversations.filter(c => {
     if (c.sessionKey && poppedOut.has(c.sessionKey)) return false   // shown in its own window
     const q = search.toLowerCase()
@@ -131,20 +156,65 @@ export function ChatView({ solo }: { solo?: string } = {}) {
 
   const activeConv = conversations.find(c => c.id === activeConvId)
 
-  // Group by date
-  type ConvGroup = { label: string; convs: typeof filtered }
-  const groups: ConvGroup[] = []
+  // ── Unified chat list ──────────────────────────────────────────────────────
+  // One model instead of two zones: opened conversations + running-but-unopened
+  // gateway sessions, normalized into ChatItems. Running items float to an "Active"
+  // group at the top (a chat never "disappears" when you open it); everything else
+  // falls into light date groups.
+  const agentEmoji = (agentId: string) => agents.find(a => a.id === agentId)?.identity?.emoji ?? '🤖'
+  const popOut = (key: string) => { window.api?.window?.popOutChat?.(key); selectConversation('') }
+
+  const convItems: ChatItem[] = filtered.map(conv => {
+    const sess = conv.sessionKey ? sessions.find(s => s.key === conv.sessionKey) : undefined
+    const running = (!!sess && isRunning(sess)) || conv.messages.some(m => m.streaming)
+    const at = conv.lastAt ?? conv.messages[0]?.createdAt
+    return {
+      key: conv.id,
+      sessionKey: conv.sessionKey || undefined,
+      emoji: agentEmoji(conv.agentId),
+      name: convDisplayName(conv) || conv.title,
+      ts: at ? new Date(at).getTime() : Date.now(),
+      time: at ? formatRelativeDate(at) : undefined,
+      subtitle: conv.lastMessage || (running ? 'Working…' : undefined),
+      running,
+      isActive: conv.id === activeConvId,
+      onOpen: () => selectConversation(conv.id),
+      onDelete: () => deleteConversation(conv.id),
+      onPopOut: conv.sessionKey ? () => popOut(conv.sessionKey!) : undefined,
+      onRename: conv.sessionKey ? (name: string) => renameSession(conv.sessionKey!, name) : undefined,
+    }
+  })
+
+  const sessionItems: ChatItem[] = activeSessions.map(s => ({
+    key: `session:${s.key}`,
+    sessionKey: s.key,
+    emoji: agentEmoji(sessionAgentId(s.key)),
+    name: sessionDisplayName(s),
+    ts: s.updatedAt ?? s.startedAt ?? Date.now(),
+    time: s.startedAt ? formatRelativeDate(new Date(s.startedAt).toISOString()) : undefined,
+    subtitle: s.lastMessage || 'Working…',
+    running: true,
+    isActive: false,
+    heartbeat: s.isHeartbeat || s.key.includes(':heartbeat'),
+    onOpen: () => handleOpenSession(s),
+    onPopOut: () => popOut(s.key),
+    onRename: (name: string) => renameSession(s.key, name),
+  }))
+
+  const activeItems = [...convItems.filter(i => i.running), ...sessionItems].sort((a, b) => b.ts - a.ts)
+  const restItems = convItems.filter(i => !i.running)
+
   const today = new Date().toDateString()
   const yesterday = new Date(Date.now() - 86400000).toDateString()
-  const todayConvs = filtered.filter(c => new Date(c.lastAt ?? c.messages[0]?.createdAt ?? Date.now()).toDateString() === today)
-  const yestConvs = filtered.filter(c => new Date(c.lastAt ?? c.messages[0]?.createdAt ?? Date.now()).toDateString() === yesterday)
-  const olderConvs = filtered.filter(c => {
-    const d = new Date(c.lastAt ?? c.messages[0]?.createdAt ?? Date.now()).toDateString()
-    return d !== today && d !== yesterday
-  })
-  if (todayConvs.length) groups.push({ label: 'Today', convs: todayConvs })
-  if (yestConvs.length) groups.push({ label: 'Yesterday', convs: yestConvs })
-  if (olderConvs.length) groups.push({ label: 'Earlier', convs: olderConvs })
+  const dayLabel = (ts: number) => {
+    const d = new Date(ts).toDateString()
+    return d === today ? 'Today' : d === yesterday ? 'Yesterday' : 'Earlier'
+  }
+  const dateGroups = (['Today', 'Yesterday', 'Earlier'] as const)
+    .map(label => ({ label, items: restItems.filter(i => dayLabel(i.ts) === label) }))
+    .filter(g => g.items.length)
+
+  const isEmpty = !activeItems.length && !dateGroups.length
 
   return (
     <div className="flex flex-1 min-h-0">
@@ -173,13 +243,28 @@ export function ChatView({ solo }: { solo?: string } = {}) {
             />
           </div>
           <div className="relative">
-            <Btn size="sm" icon={<Plus size={13} />} onClick={() => setShowNewMenu(s => !s)} style={{ padding: '5px 8px' }}>
-              {''}
-            </Btn>
+            {/* Split button: primary starts a chat with the default agent; caret picks one. */}
+            <div className="flex" style={{ borderRadius: 'var(--radius)', overflow: 'hidden' }}>
+              <button
+                onClick={startNewChat}
+                title="New chat"
+                className="flex items-center gap-1 text-xs font-medium"
+                style={{ padding: '6px 8px', background: 'var(--accent)', color: 'var(--accent-fg)', border: 'none', cursor: 'pointer' }}
+              >
+                <Plus size={13} /> New
+              </button>
+              <button
+                onClick={() => setShowNewMenu(s => !s)}
+                title="Start with a specific agent"
+                style={{ padding: '6px 4px', background: 'var(--accent)', color: 'var(--accent-fg)', border: 'none', borderLeft: '1px solid color-mix(in srgb, var(--accent-fg) 25%, transparent)', cursor: 'pointer' }}
+              >
+                <ChevronDown size={12} />
+              </button>
+            </div>
             {showNewMenu && (
               <div
                 className="absolute right-0 top-full mt-1 z-50 py-1 min-w-max"
-                style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 'var(--radius)' }}
+                style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', maxHeight: 280, overflowY: 'auto' }}
               >
                 {agents.map(agent => (
                   <button
@@ -190,7 +275,7 @@ export function ChatView({ solo }: { solo?: string } = {}) {
                     onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = 'none' }}
                     onClick={() => { newConversation(agent.id, agent.identity?.name ?? agent.name ?? agent.id); setShowNewMenu(false) }}
                   >
-                    <span>🤖</span>
+                    <span>{agent.identity?.emoji ?? '🤖'}</span>
                     <span>{agent.identity?.name ?? agent.name ?? agent.id}</span>
                   </button>
                 ))}
@@ -199,65 +284,42 @@ export function ChatView({ solo }: { solo?: string } = {}) {
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto px-2 pb-2">
-          {/* Active sessions from the gateway */}
-          {activeSessions.length > 0 && (
-            <div className="mb-3">
-              <div className="flex items-center gap-1.5 px-2 py-1.5">
-                <Radio size={11} className="animate-pulse-dot" style={{ color: 'var(--success)' }} />
-                <p className="text-xs font-medium" style={{ color: 'var(--success)' }}>
-                  Live Sessions
-                </p>
-                <span
-                  className="text-xs px-1.5 py-0 rounded-full ml-auto"
-                  style={{ background: 'color-mix(in srgb, var(--success) 20%, transparent)', color: 'var(--success)', fontSize: 10 }}
-                >
-                  {activeSessions.length}
-                </span>
-              </div>
-              {activeSessions.map(s => (
-                <SessionRow
-                  key={s.key}
-                  session={s}
-                  agentName={sessionDisplayName(s)}
-                  onClick={() => handleOpenSession(s)}
-                />
-              ))}
-              <div style={{ borderBottom: '1px solid var(--border)', margin: '8px 8px 4px' }} />
-            </div>
-          )}
+        {/* Segmented filter */}
+        <div className="flex items-center gap-1 px-3 pb-2">
+          <FilterTab label="All" active={filter === 'all'} onClick={() => setFilter('all')} />
+          <FilterTab label="Active" count={activeItems.length} active={filter === 'active'} onClick={() => setFilter('active')} />
+        </div>
 
-          {groups.length === 0 && activeSessions.length === 0 && (
+        <div className="flex-1 overflow-y-auto px-2 pb-2">
+          {isEmpty && (
             <div className="flex flex-col items-center justify-center h-32 text-center px-4">
               <MessageSquare size={24} className="mb-2 opacity-30" style={{ color: 'var(--text-secondary)' }} />
               <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
-                {search ? 'No chats found' : 'Start a chat by clicking +'}
+                {search ? 'No chats found' : 'Start a chat with + New'}
               </p>
             </div>
           )}
 
-          {groups.map(group => (
+          {/* Active: running chats (opened or not), pinned to the top and never moved. */}
+          {activeItems.length > 0 && (
+            <div className="mb-2">
+              <div className="flex items-center gap-1.5 px-2 py-1.5">
+                <Radio size={11} className="animate-pulse-dot" style={{ color: 'var(--success)' }} />
+                <p className="text-xs font-semibold" style={{ color: 'var(--success)' }}>Active</p>
+                <span className="text-xs px-1.5 rounded-full ml-auto" style={{ background: 'color-mix(in srgb, var(--success) 20%, transparent)', color: 'var(--success)', fontSize: 10 }}>
+                  {activeItems.length}
+                </span>
+              </div>
+              {activeItems.map(item => <ChatRow key={item.key} item={item} />)}
+            </div>
+          )}
+
+          {filter === 'all' && dateGroups.map(group => (
             <div key={group.label} className="mb-2">
               <p className="text-xs font-medium px-2 py-1.5" style={{ color: 'var(--text-secondary)' }}>
                 {group.label}
               </p>
-              {group.convs.map(conv => {
-                // An opened chat can still be a live run — keep showing that on the row
-                // even though it now lives under a dated group rather than Live Sessions.
-                const sess = conv.sessionKey ? sessions.find(s => s.key === conv.sessionKey) : undefined
-                const running = (!!sess && isRunning(sess)) || conv.messages.some(m => m.streaming)
-                return (
-                  <ConvRow
-                    key={conv.id}
-                    conv={conv}
-                    displayName={convDisplayName(conv)}
-                    active={conv.id === activeConvId}
-                    running={running}
-                    onSelect={() => selectConversation(conv.id)}
-                    onDelete={() => deleteConversation(conv.id)}
-                  />
-                )
-              })}
+              {group.items.map(item => <ChatRow key={item.key} item={item} />)}
             </div>
           ))}
         </div>
@@ -467,87 +529,84 @@ function ContextBar({ sessionKey }: { sessionKey: string }) {
   )
 }
 
-function SessionRow({ session, agentName, onClick }: { session: Session; agentName: string; onClick: () => void }) {
-  const [hovered, setHovered] = useState(false)
-  const age = session.startedAt ? formatRelativeDate(new Date(session.startedAt).toISOString()) : null
-
+function FilterTab({ label, count, active, onClick }: { label: string; count?: number; active: boolean; onClick: () => void }) {
   return (
-    <div
-      className="flex flex-col px-2 py-2 rounded cursor-pointer"
-      style={{
-        background: hovered ? 'color-mix(in srgb, var(--success) 8%, var(--bg-elevated))' : 'transparent',
-        borderRadius: 'var(--radius)',
-        marginBottom: 1
-      }}
+    <button
       onClick={onClick}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
+      className="text-xs font-medium"
+      style={{
+        padding: '3px 10px', borderRadius: 999, cursor: 'pointer', border: 'none',
+        background: active ? 'color-mix(in srgb, var(--accent) 15%, var(--bg-elevated))' : 'transparent',
+        color: active ? 'var(--accent)' : 'var(--text-secondary)',
+      }}
     >
-      <div className="flex items-center gap-1.5">
-        <span
-          className="w-1.5 h-1.5 rounded-full animate-pulse-dot flex-shrink-0"
-          style={{ background: 'var(--success)' }}
-        />
-        <p className="text-sm flex-1 truncate font-medium" style={{ color: 'var(--text-primary)' }}>
-          {agentName}
-        </p>
-        {(session.isHeartbeat || session.key.includes(':heartbeat')) && (
-          <Heart size={11} title="Heartbeat session" style={{ color: 'var(--accent)', opacity: 0.8, flexShrink: 0 }} />
-        )}
-        {age && (
-          <span className="text-xs shrink-0" style={{ color: 'var(--text-secondary)' }}>{age}</span>
-        )}
-      </div>
-      <p className="text-xs font-mono truncate ml-3" style={{ color: 'var(--text-secondary)' }}>
-        {session.key.slice(0, 24)}{session.key.length > 24 ? '…' : ''}
-      </p>
-    </div>
+      {label}{count ? ` · ${count}` : ''}
+    </button>
   )
 }
 
-function ConvRow({ conv, displayName, active, running, onSelect, onDelete }: {
-  conv: { id: string; title: string; agentName: string; lastMessage?: string; lastAt?: string; messages: { createdAt: string }[] }
-  displayName: string
-  active: boolean; running?: boolean; onSelect: () => void; onDelete: () => void
-}) {
+function RowBtn({ children, title, danger, onClick }: { children: ReactNode; title: string; danger?: boolean; onClick: (e: ReactMouseEvent) => void }) {
+  return (
+    <button title={title} onClick={onClick} className="flex items-center justify-center rounded p-1"
+      style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: danger ? 'var(--danger)' : 'var(--text-secondary)' }}>
+      {children}
+    </button>
+  )
+}
+
+// One row for any chat — opened conversation or a running gateway session. Running
+// items show a live dot (in place of the agent emoji); hover reveals rename / pop-out /
+// delete; the name is inline-editable.
+function ChatRow({ item }: { item: ChatItem }) {
   const [hovered, setHovered] = useState(false)
-  const date = conv.lastAt ?? conv.messages[0]?.createdAt
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(item.name)
+
+  const commit = () => { setEditing(false); const v = draft.trim(); if (v && v !== item.name) item.onRename?.(v) }
+
   return (
     <div
       className="relative flex flex-col px-2 py-2 rounded cursor-pointer"
       style={{
-        background: active ? 'color-mix(in srgb, var(--accent) 15%, var(--bg-elevated))' : hovered ? 'var(--bg-elevated)' : 'transparent',
-        borderRadius: 'var(--radius)',
-        marginBottom: 1
+        background: item.isActive ? 'color-mix(in srgb, var(--accent) 15%, var(--bg-elevated))' : hovered ? 'var(--bg-elevated)' : 'transparent',
+        borderRadius: 'var(--radius)', marginBottom: 1,
       }}
-      onClick={onSelect}
+      onClick={() => { if (!editing) item.onOpen() }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
       <div className="flex items-center gap-1.5">
-        {running && (
-          <span
-            title="Running"
-            className="animate-pulse-dot"
-            style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--success)', flexShrink: 0 }}
+        {item.running
+          ? <span title="Running" className="animate-pulse-dot" style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--success)', flexShrink: 0 }} />
+          : <span style={{ fontSize: 12, lineHeight: 1, flexShrink: 0 }}>{item.emoji}</span>}
+        {editing ? (
+          <input
+            autoFocus value={draft}
+            onChange={e => setDraft(e.target.value)}
+            onClick={e => e.stopPropagation()}
+            onKeyDown={e => { if (e.key === 'Enter') commit(); else if (e.key === 'Escape') { setEditing(false); setDraft(item.name) } }}
+            onBlur={commit}
+            className="text-sm flex-1 font-medium"
+            style={{ background: 'var(--bg-primary)', border: '1px solid var(--accent)', borderRadius: 4, color: 'var(--text-primary)', padding: '1px 5px', outline: 'none', minWidth: 0 }}
           />
+        ) : (
+          <p className="text-sm flex-1 truncate font-medium" style={{ color: item.isActive ? 'var(--accent)' : 'var(--text-primary)' }}>
+            {item.name}
+          </p>
         )}
-        <p className="text-sm flex-1 truncate font-medium" style={{ color: active ? 'var(--accent)' : 'var(--text-primary)' }}>
-          {displayName || conv.title}
-        </p>
-        {date && <span className="text-xs shrink-0" style={{ color: 'var(--text-secondary)' }}>{formatRelativeDate(date)}</span>}
+        {item.heartbeat && !editing && <Heart size={11} title="Heartbeat session" style={{ color: 'var(--accent)', opacity: 0.8, flexShrink: 0 }} />}
+        {!editing && !hovered && item.time && <span className="text-xs shrink-0" style={{ color: 'var(--text-secondary)' }}>{item.time}</span>}
       </div>
-      {conv.lastMessage && (
-        <p className="text-xs truncate mt-0.5" style={{ color: 'var(--text-secondary)' }}>{conv.lastMessage}</p>
+      {item.subtitle && !editing && (
+        <p className="text-xs truncate mt-0.5" style={{ color: 'var(--text-secondary)', marginLeft: 15 }}>{item.subtitle}</p>
       )}
-      {hovered && (
-        <button
-          className="absolute right-1.5 top-1.5 p-1 rounded"
-          style={{ background: 'var(--bg-primary)', border: 'none', cursor: 'pointer', color: 'var(--danger)' }}
-          onClick={e => { e.stopPropagation(); onDelete() }}
-        >
-          <Trash2 size={11} />
-        </button>
+      {hovered && !editing && (
+        <div className="absolute right-1.5 top-1.5 flex items-center gap-0.5"
+          style={{ background: item.isActive ? 'color-mix(in srgb, var(--accent) 15%, var(--bg-elevated))' : 'var(--bg-elevated)', borderRadius: 4 }}>
+          {item.onRename && <RowBtn title="Rename" onClick={e => { e.stopPropagation(); setDraft(item.name); setEditing(true) }}><Pencil size={11} /></RowBtn>}
+          {item.onPopOut && <RowBtn title="Pop out to a window" onClick={e => { e.stopPropagation(); item.onPopOut!() }}><ExternalLink size={11} /></RowBtn>}
+          {item.onDelete && <RowBtn title="Delete" danger onClick={e => { e.stopPropagation(); item.onDelete!() }}><Trash2 size={11} /></RowBtn>}
+        </div>
       )}
     </div>
   )
