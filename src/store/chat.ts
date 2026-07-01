@@ -491,6 +491,67 @@ function extractToolCalls(msg: unknown): ToolCall[] {
     }))
 }
 
+// On reload, the sub-agent "threads" (session yields) are NOT in the parent's
+// chat.history — each sub-agent ran in its own child session, and the threads were built
+// live from spawnedBy-routed events. Rebuild them by finding the children this session
+// spawned (sessions.list carries spawnedBy / parentSessionKey) and loading each child's
+// history. Fully guarded: any failure just yields no threads, never breaking the reload.
+async function reconstructSubThreads(parentKey: string): Promise<SubThread[]> {
+  try {
+    const list = await gatewayClient.request<{ sessions?: Record<string, unknown>[] }>('sessions.list', {})
+    const children = (list.sessions ?? []).filter(r =>
+      !!r && (r['spawnedBy'] === parentKey || r['parentSessionKey'] === parentKey))
+    if (!children.length) return []
+
+    const built = await Promise.all(children.map(async (r): Promise<SubThread | null> => {
+      const key = String(r['key'] ?? '')
+      if (!key) return null
+      try {
+        const h = await gatewayClient.request<{ messages: unknown[] }>('chat.history', { sessionKey: key })
+        const asst = (h.messages ?? []).filter((m): m is Record<string, unknown> =>
+          !!m && typeof m === 'object' && (m as Record<string, unknown>)['role'] === 'assistant')
+        const content = asst.map(extractText).filter(Boolean).join('\n\n')
+        const reasoning = asst.map(extractReasoning).filter(Boolean).join('\n') || undefined
+        const toolCalls = asst.flatMap(extractToolCalls).filter(tc => tc.name !== 'sessions_spawn')
+        if (!content && !reasoning && !toolCalls.length) return null
+        return {
+          id: key,
+          childSessionKey: key,
+          agentId: (typeof r['subagentRole'] === 'string' && r['subagentRole']) || agentIdFromKey(key),
+          task: (r['label'] as string) || (r['displayName'] as string) || undefined,
+          status: 'done',
+          content,
+          reasoning,
+          toolCalls: toolCalls.length ? toolCalls : undefined,
+          startedAt: typeof r['startedAt'] === 'number' ? new Date(r['startedAt'] as number).toISOString() : new Date().toISOString(),
+          finishedAt: typeof r['updatedAt'] === 'number' ? new Date(r['updatedAt'] as number).toISOString() : undefined,
+        }
+      } catch { return null }
+    }))
+    return built.filter((t): t is SubThread => t !== null)
+  } catch {
+    return []
+  }
+}
+
+// Attach reconstructed sub-agent threads to the assistant message that spawned them
+// (the last one carrying a sessions_spawn tool call, else the last assistant message),
+// de-duped by child session key so repeated reloads don't stack them.
+function attachThreads(messages: ChatMessage[], threads: SubThread[]): ChatMessage[] {
+  let target = -1
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === 'assistant' && messages[i].toolCalls?.some(t => t.name === 'sessions_spawn')) { target = i; break }
+  }
+  if (target < 0) for (let i = messages.length - 1; i >= 0; i--) { if (messages[i].role === 'assistant') { target = i; break } }
+  if (target < 0) return messages
+  return messages.map((m, i) => {
+    if (i !== target) return m
+    const existing = m.threads ?? []
+    const fresh = threads.filter(t => !existing.some(e => e.childSessionKey === t.childSessionKey))
+    return fresh.length ? { ...m, threads: [...existing, ...fresh] } : m
+  })
+}
+
 export const useChatStore = create<ChatState>((set, get) => ({
   conversations: [],
   activeConvId: null,
@@ -809,24 +870,30 @@ export const useChatStore = create<ChatState>((set, get) => ({
         })
 
       const existing = get().conversations.find(c => c.sessionKey === sessionKey)
+      const convId = existing?.id ?? nanoid()
       if (existing) {
         set(s => ({
           conversations: s.conversations.map(c => c.sessionKey === sessionKey ? { ...c, messages } : c),
           activeConvId: existing.id
         }))
-        return existing.id
+      } else {
+        const conv: Conversation = {
+          id: convId, sessionKey, agentId, agentName,
+          title: sessionTitle(sessionKey, agentName), messages
+        }
+        set(s => ({ conversations: [conv, ...s.conversations], activeConvId: convId }))
       }
 
-      const convId = nanoid()
-      const conv: Conversation = {
-        id: convId,
-        sessionKey,
-        agentId,
-        agentName,
-        title: sessionTitle(sessionKey, agentName),
-        messages
-      }
-      set(s => ({ conversations: [conv, ...s.conversations], activeConvId: convId }))
+      // Sub-agent yields live in child sessions, not the parent history — reattach them
+      // asynchronously so the conversation opens immediately and the threads pop in.
+      reconstructSubThreads(sessionKey).then(threads => {
+        if (!threads.length) return
+        set(s => ({
+          conversations: s.conversations.map(c =>
+            c.sessionKey === sessionKey ? { ...c, messages: attachThreads(c.messages, threads) } : c)
+        }))
+      }).catch(() => { /* best-effort */ })
+
       return convId
     } catch (err) {
       console.error('Failed to load session:', err)
