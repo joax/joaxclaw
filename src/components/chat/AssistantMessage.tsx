@@ -1,8 +1,9 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import { ChevronDown, ChevronRight, BrainCircuit, CheckCircle2, XCircle, Loader2, Clock, Hourglass, Terminal, PenLine, FileText, Search, Globe, Plug, Bot, Wrench, FolderSearch, AlertTriangle, Zap, ThumbsUp, ThumbsDown } from 'lucide-react'
 import type { ChatMessage, ContextOverflowInfo, ToolCall, SubThread } from '../../lib/types'
 import { useExtensionsStore } from '../../store/extensions'
 import { useOllamaProgress } from '../../store/ollamaProgress'
+import { useStreamStatus } from './useStreamStatus'
 import { useSettingsStore } from '../../store/settings'
 import { useConnectionStore } from '../../store/connection'
 import { currentActivity, completedSteps, randomWhimsy, nextWhimsy } from '../../lib/activityLabels'
@@ -15,8 +16,6 @@ import { DiffView } from './DiffView'
 import { AudioPlayer } from './AudioPlayer'
 import { WorkspaceImage, VideoPlayer } from './WorkspaceMedia'
 import { useFeedbackStore } from '../../store/feedback'
-
-const STALE_THRESHOLD_MS = 15_000
 
 
 // Strip gateway protocol wrapper tags from content.
@@ -293,35 +292,18 @@ export function AssistantMessage({ message, showTools = true, showReasoning = tr
   const threads = message.threads ?? []
   const hasThreads = threads.length > 0
 
-  // Stale streaming detection: if streaming but no content updates for STALE_THRESHOLD_MS, show waiting indicator
-  const [isStale, setIsStale] = useState(false)
   const runningToolCount = message.toolCalls?.filter(tc => tc.status === 'running').length ?? 0
-  // Live prompt-token ingestion (Ollama). The model isn't stalled while this is
-  // advancing — it just hasn't emitted a token yet — so feed it into the activity key
-  // (resets the stale timer) and suppress the "model stopped" banner below.
-  const promptProgress = useOllamaProgress(s => s.progress)
-  // A spawned sub-agent streaming counts as activity (the parent yields while it works)
-  // — fold its progress into the key so the parent doesn't look stalled during delegation.
-  const hasRunningThread = threads.some(t => t.status === 'running' || t.status === 'spawning')
-  const threadsSignal = threads.reduce((n, t) => n + t.content.length + (t.reasoning?.length ?? 0) + (t.toolCalls?.length ?? 0), 0)
-  // Include running tool count so the timer resets on tool_start and tool_done transitions
-  const activityKey = `${message.content.length}:${message.reasoning?.length ?? 0}:${message.toolCalls?.length ?? 0}:${runningToolCount}:${promptProgress ?? ''}:${threadsSignal}`
-  const prevActivityKey = useRef(activityKey)
-
-  useEffect(() => {
-    if (!message.streaming) { setIsStale(false); return }
-    if (activityKey !== prevActivityKey.current) {
-      prevActivityKey.current = activityKey
-      setIsStale(false)
-    }
-    const t = setTimeout(() => setIsStale(true), STALE_THRESHOLD_MS)
-    return () => clearTimeout(t)
-  }, [message.streaming, activityKey])
-
-  // A running tool call is not "waiting" — suppress the indicator while tools are actively executing
   const hasRunningTool = runningToolCount > 0
+  const hasRunningThread = threads.some(t => t.status === 'running' || t.status === 'spawning')
+  // Live prompt-token ingestion (Ollama) — feeds the whimsical activity label below.
+  const promptProgress = useOllamaProgress(s => s.progress)
+
+  // Phase-aware liveness — the SAME detector the input banner uses, so the message body
+  // and the composer never disagree (see lib/streamStatus.ts). First-token wait,
+  // reasoning, prompt ingestion, running tools, and sub-agent runs are NOT stalls.
+  const { status: streamStatus } = useStreamStatus(message, !!message.streaming)
+  const isStalled = streamStatus === 'stalled'
   const isWaitingForSession = message.streaming && !hasRunningTool && !hasRunningThread && !!message.waitingForSession
-  const isStalled = isStale && message.streaming && !hasRunningTool && !hasRunningThread && !message.waitingForSession && promptProgress == null
 
   const chatMode = useSettingsStore(s => s.chatMode)
   const [showDetails, setShowDetails] = useState(false)
