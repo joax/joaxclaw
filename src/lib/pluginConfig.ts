@@ -29,6 +29,9 @@ export interface PluginConfigSpec {
   apiKey?: ApiKeyKind
   // Extra curated provider field(s) that live alongside the key in models.providers.<id>.
   providerBaseUrl?: boolean
+  // Show the shared LLM settings group (llm.allowModelOverride / model / temperature).
+  llm?: boolean
+  // Curated behaviour fields under plugins.entries.<id> (path relative to that entry).
   fields?: PluginConfigField[]
 }
 
@@ -106,4 +109,160 @@ export function mergeDeep(into: Record<string, unknown>, from: Record<string, un
     }
   }
   return into
+}
+
+// ── Schema-driven field model ─────────────────────────────────────────────────
+//
+// A generic descriptor that the PluginConfigForm renders. Fields come from one of
+// two sources (see fieldsFor): the gateway-provided JSON Schema (configSchema, when
+// present) or the curated catalog above. `path` is an ABSOLUTE dotted path into the
+// full gateway config, so the renderer reads/writes it with readPath/nestedPatch and
+// everything goes through config.patch (local == remote). Anything not expressed as a
+// field stays editable via the Advanced (raw) tab.
+
+export type FieldKind = 'text' | 'secret' | 'boolean' | 'number' | 'enum' | 'textarea' | 'url'
+// Which config subtree a field lives in — also used as the section heading.
+export type FieldGroup = 'key' | 'llm' | 'config'
+
+export interface FieldSpec {
+  path: string
+  label: string
+  kind: FieldKind
+  group: FieldGroup
+  help?: string
+  placeholder?: string
+  default?: unknown
+  required?: boolean
+  options?: readonly string[]
+  min?: number
+  max?: number
+  // When this field is written a non-empty value, also set this sibling path (e.g. the
+  // shared web-search provider id alongside its shared api key).
+  writeAlso?: { path: string; value: unknown }
+}
+
+// A minimal shape of what the app needs to resolve fields for a plugin. `configSchema`
+// is the pass-through JSON Schema from the plugin manifest, surfaced by the gateway's
+// plugins.list when available (see design/GATEWAY_ASK_plugin-configschema) — optional.
+export interface PluginConfigTarget {
+  id: string
+  configSchema?: JsonSchema
+}
+
+// The shared LLM settings group most agent-ish plugins accept, under plugins.entries.<id>.llm.
+function llmGroup(id: string): FieldSpec[] {
+  const base = `plugins.entries.${id}.llm`
+  return [
+    { path: `${base}.allowModelOverride`, label: 'Allow model override', kind: 'boolean', group: 'llm', help: 'Let this plugin choose its own model instead of the agent default.' },
+    { path: `${base}.model`, label: 'Model', kind: 'text', group: 'llm', placeholder: 'e.g. gpt-4o-mini', help: 'Model id to use when overriding.' },
+    { path: `${base}.temperature`, label: 'Temperature', kind: 'number', group: 'llm', min: 0, max: 2, help: 'Sampling temperature (0–2).' },
+  ]
+}
+
+// Build the curated FieldSpec[] for a plugin from its PluginConfigSpec: the API key
+// (domain-scoped), an optional provider base URL, an optional shared LLM group, and any
+// curated per-plugin behaviour fields (paths relative to plugins.entries.<id>).
+export function curatedFields(id: string, config?: Record<string, unknown>): FieldSpec[] {
+  const spec = pluginConfigSpec(id)
+  if (!spec) {
+    // No curated catalog entry — still offer the LLM group if the plugin already has one
+    // configured (safe: those keys are known-good), so it can be edited without raw JSON.
+    return hasLlmBlock(config, id) ? llmGroup(id) : []
+  }
+  const out: FieldSpec[] = []
+  if (spec.apiKey) {
+    out.push({
+      path: apiKeyPath(id, spec.apiKey), label: 'API key', kind: 'secret', group: 'key',
+      placeholder: 'paste a key, or an env var name', help: 'Leave blank to clear.',
+      // Web-search plugins share one key path; record which provider the key belongs to.
+      ...(spec.apiKey === 'webSearch' ? { writeAlso: { path: 'tools.web.search.provider', value: id } } : {}),
+    })
+  }
+  if (spec.providerBaseUrl) {
+    out.push({ path: `models.providers.${id}.baseUrl`, label: 'Base URL', kind: 'url', group: 'key', placeholder: 'https://api.example.com/v1', help: 'Optional endpoint override (OpenAI-compatible hosts). Blank leaves it unchanged.' })
+  }
+  if (spec.llm || hasLlmBlock(config, id)) out.push(...llmGroup(id))
+  for (const f of spec.fields ?? []) {
+    out.push({ path: `plugins.entries.${id}.${f.path}`, label: f.label, kind: f.type === 'boolean' ? 'boolean' : 'text', group: f.path.startsWith('llm.') ? 'llm' : 'config', help: f.help, placeholder: f.placeholder })
+  }
+  return out
+}
+
+function hasLlmBlock(config: Record<string, unknown> | undefined, id: string): boolean {
+  const v = readPath(config, `plugins.entries.${id}.llm`)
+  return !!v && typeof v === 'object'
+}
+
+// Resolve the fields to render for a plugin: gateway JSON Schema first (self-describing,
+// no hardcoding), else the curated catalog. Falls back to [] (→ the Advanced raw tab).
+export function fieldsFor(plugin: PluginConfigTarget, config?: Record<string, unknown>): FieldSpec[] {
+  if (plugin.configSchema) {
+    const fromSchema = jsonSchemaToFields(plugin.id, plugin.configSchema)
+    if (fromSchema.length) return fromSchema
+  }
+  return curatedFields(plugin.id, config)
+}
+
+// ── JSON Schema → FieldSpec[] (guarded; only lights up when the gateway ships it) ──
+
+export interface JsonSchema {
+  type?: string
+  properties?: Record<string, JsonSchema>
+  required?: string[]
+  enum?: unknown[]
+  default?: unknown
+  description?: string
+  format?: string
+}
+
+// Translate a plugin's manifest configSchema (describing the plugins.entries.<id> shape,
+// with `config` / `llm` object subtrees) into flat FieldSpec[]. Handles scalar leaves one
+// level under config/llm plus top-level scalars; nested objects/arrays are left to the raw
+// editor. Absolute paths are rooted at plugins.entries.<id>.
+export function jsonSchemaToFields(id: string, schema: JsonSchema): FieldSpec[] {
+  const out: FieldSpec[] = []
+  const props = schema.properties
+  if (!props) return out
+  const walk = (obj: JsonSchema, group: FieldGroup, prefix: string) => {
+    const required = new Set(obj.required ?? [])
+    for (const [key, p] of Object.entries(obj.properties ?? {})) {
+      const path = `${prefix}.${key}`
+      if (p.type === 'object' && p.properties) continue // nested-object: leave to raw editor
+      if (p.type === 'array') continue
+      out.push({
+        path, group, label: humanize(key), kind: schemaKind(key, p),
+        help: p.description, default: p.default,
+        required: required.has(key),
+        options: p.enum ? p.enum.map(String) : undefined,
+      })
+    }
+  }
+  for (const [key, p] of Object.entries(props)) {
+    if ((key === 'config' || key === 'llm') && p.type === 'object' && p.properties) {
+      walk(p, key === 'llm' ? 'llm' : 'config', `plugins.entries.${id}.${key}`)
+    } else if (p.type !== 'object' && p.type !== 'array') {
+      // top-level scalar → treat as config-level
+      out.push({
+        path: `plugins.entries.${id}.${key}`, group: 'config', label: humanize(key),
+        kind: schemaKind(key, p), help: p.description, default: p.default,
+        required: (schema.required ?? []).includes(key),
+        options: p.enum ? p.enum.map(String) : undefined,
+      })
+    }
+  }
+  return out
+}
+
+function schemaKind(key: string, p: JsonSchema): FieldKind {
+  if (p.enum) return 'enum'
+  if (p.type === 'boolean') return 'boolean'
+  if (p.type === 'number' || p.type === 'integer') return 'number'
+  if (p.format === 'password' || /key|token|secret|password/i.test(key)) return 'secret'
+  if (p.format === 'uri' || p.format === 'url' || /url|endpoint|baseurl/i.test(key)) return 'url'
+  return 'text'
+}
+
+function humanize(key: string): string {
+  const s = key.replace(/[_-]+/g, ' ').replace(/([a-z0-9])([A-Z])/g, '$1 $2').trim()
+  return s.charAt(0).toUpperCase() + s.slice(1)
 }
