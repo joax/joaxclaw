@@ -14,6 +14,9 @@ export interface Plugin {
   origin?: string
   // API-key completeness: 'set' (configured), 'missing' (needs a key), 'n/a' (no key needed).
   keyStatus?: PluginKeyStatus
+  // Pass-through JSON Schema from the plugin manifest, surfaced by the gateway's plugins.list
+  // when available — drives the schema-driven config form. Absent until the gateway ships it.
+  configSchema?: Record<string, unknown>
   // True for plugins surfaced from the gateway registry that have no config entry yet
   // (so we don't persist all of them on save — only ones the user actually touches).
   discovered?: boolean
@@ -60,6 +63,8 @@ export interface PluginMetaEntry {
   status?: string
   enabled?: boolean
   toolNames?: string[]
+  // Pass-through JSON Schema from the plugin manifest (see design/GATEWAY_ASK_plugin-configschema).
+  configSchema?: Record<string, unknown>
 }
 
 // ── Normalizers ───────────────────────────────────────────────────────────────
@@ -231,6 +236,7 @@ export const useExtensionsStore = create<ExtensionsState>((set, get) => ({
           version: meta.version,
           origin: meta.origin,
           source: p.source ?? meta.source,
+          configSchema: meta.configSchema,
         }
       })
 
@@ -251,6 +257,7 @@ export const useExtensionsStore = create<ExtensionsState>((set, get) => ({
           version: m.version,
           origin: m.origin,
           source: m.source,
+          configSchema: m.configSchema,
           keyStatus: pluginKeyStatus(fullCfg, m.id),
           discovered: true,
         }))
@@ -326,8 +333,8 @@ export const useExtensionsStore = create<ExtensionsState>((set, get) => ({
         // rejects unrecognized keys (name/description/source/version/origin/keyStatus
         // are surfaced from the registry, not config), so only genuine config keys
         // (enabled, config, …) may go into the patch.
-        const { id, discovered: _d, keyStatus: _k, version: _v, origin: _o, name: _n, description: _ds, source: _s, ...rest } = p
-        void _d; void _k; void _v; void _o; void _n; void _ds; void _s
+        const { id, discovered: _d, keyStatus: _k, version: _v, origin: _o, name: _n, description: _ds, source: _s, configSchema: _cs, ...rest } = p
+        void _d; void _k; void _v; void _o; void _n; void _ds; void _s; void _cs
         pluginEntries[id] = rest
       }
       const skillEntries: Record<string, unknown> = {}
