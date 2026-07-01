@@ -3,12 +3,15 @@ import { Check, Plus, Trash2, Upload, Download, Copy, Image as ImageIcon, X, Loa
 import { useSettingsStore } from '../../store/settings'
 import type { ThemeSettings, IconFamily, ThemeBgSlot, ThemeBackground, ThemeBgFit } from '../../lib/types'
 import { THEME_BG_SLOTS } from '../../lib/themeFormat'
+import { PRESET_THEMES } from '../../lib/presetThemes'
 import { Btn } from '../ui/Btn'
 import { nanoid } from '../../lib/nanoid'
 import { useThemeImage, primeThemeImage } from './useThemeImage'
 
-const PRESET_IDS = ['default-dark', 'ocean-dark', 'rose-light', 'forest-dark']
-const isPreset = (id: string) => PRESET_IDS.includes(id)
+// The built-in base themes (loaded from the repo /themes files) are protected: not
+// deletable, and tagged "base theme" in the editor.
+const PRESET_IDS = new Set(PRESET_THEMES.map(t => t.id))
+const isPreset = (id: string) => PRESET_IDS.has(id)
 
 const ICON_FAMILIES: { id: IconFamily; label: string }[] = [
   { id: 'lucide', label: 'Lucide' }, { id: 'heroicons', label: 'Heroicons' },

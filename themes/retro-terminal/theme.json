@@ -1,0 +1,24 @@
+{
+  "format": 1,
+  "id": "retro-terminal",
+  "name": "Retro Terminal",
+  "author": "JoaxClaw",
+  "base": "dark",
+  "colors": {
+    "bgPrimary": "#0a0e0a",
+    "bgSurface": "#0e140d",
+    "bgElevated": "#141d12",
+    "textPrimary": "#4af07c",
+    "textSecondary": "#5f8f66",
+    "accent": "#ffb642",
+    "accentFg": "#0a0e0a",
+    "border": "#1f3a20",
+    "danger": "#ff5f56",
+    "success": "#33ff88",
+    "warning": "#f7c948"
+  },
+  "borderRadius": 2,
+  "fontSize": 14,
+  "fontFamily": "'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, Menlo, monospace",
+  "iconFamily": "lucide"
+}
