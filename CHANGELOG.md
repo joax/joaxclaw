@@ -5,6 +5,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.15.1] - 2026-07-01
+
+### Fixed
+
+- **The title bar's bottom border is continuous again.** Electron 43 (0.15.0) activated the native window-controls overlay on Linux/Wayland; its opaque region sat over the custom title bar, duplicating the app's own window buttons and cutting the bottom border under them. Every window already draws its own themed title bar, so the native overlay was removed — the border now runs edge to edge.
+- **A live chat stays marked as running in the left list.** Opening a running session moved it from the green "Live Sessions" zone into a dated group and dropped its running cue. The conversation row now shows a green pulsing dot while its session is still running (or a message is streaming).
+
 ## [0.15.0] - 2026-07-01
 
 ### Added
