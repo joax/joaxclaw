@@ -5,6 +5,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.14.1] - 2026-06-30
+
+### Changed
+
+- **Smarter "model stopped responding" detection.** The stall indicator was a single flat timeout that false-alarmed while a slow local model loaded, during a model's pre-first-token reasoning, and when the *connection* (not the model) dropped. It's now phase-aware and heartbeat-aware: a generous **first-token budget** (model load / context encoding) vs a tighter **inter-token gap** once output is flowing; the gateway heartbeat distinguishes a dropped connection (**"reconnecting…"**) from a genuine model stall; and running tools, sub-agent runs, and Ollama prompt-token ingestion no longer count as a stall. Richer states — **"waiting for the model…"**, a genuine **stall**, or **"reconnecting…"** — replace the single binary alarm.
+
+### Fixed
+
+- **The red "model stopped" notice no longer contradicts the "waiting for the model" counter.** The chat message body had a second, independent stall detector on a flat 15-second timer, out of sync with the composer's indicator. Both surfaces now share one phase-aware detector, so they can't disagree.
+
 ## [0.14.0] - 2026-06-30
 
 ### Added
