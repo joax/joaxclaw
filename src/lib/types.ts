@@ -54,6 +54,9 @@ export interface Session {
   updatedAt?: number
   startedAt?: number
   hasActiveRun?: boolean
+  // True while this session has yielded to a still-running sub-agent — the controller's
+  // own hasActiveRun goes false during a yield, so this is what keeps it "live".
+  hasActiveSubagentRun?: boolean
   isHeartbeat?: boolean
   contextTokens?: number   // context window limit (max capacity), not current usage
   inputTokens?: number    // cumulative input tokens across all runs in the session
