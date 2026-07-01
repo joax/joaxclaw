@@ -508,17 +508,21 @@ async function reconstructSubThreads(parentKey: string): Promise<SubThread[]> {
       if (!key) return null
       try {
         const h = await gatewayClient.request<{ messages: unknown[] }>('chat.history', { sessionKey: key })
-        const asst = (h.messages ?? []).filter((m): m is Record<string, unknown> =>
-          !!m && typeof m === 'object' && (m as Record<string, unknown>)['role'] === 'assistant')
+        const msgs = (h.messages ?? []).filter((m): m is Record<string, unknown> => !!m && typeof m === 'object')
+        const asst = msgs.filter(m => m['role'] === 'assistant')
         const content = asst.map(extractText).filter(Boolean).join('\n\n')
         const reasoning = asst.map(extractReasoning).filter(Boolean).join('\n') || undefined
         const toolCalls = asst.flatMap(extractToolCalls).filter(tc => tc.name !== 'sessions_spawn')
         if (!content && !reasoning && !toolCalls.length) return null
+        // The sub-agent's brief = its first user message; makes a far better label than the
+        // generic worker agent id (which is the same for every leaf).
+        const firstUser = msgs.find(m => m['role'] === 'user')
+        const brief = (firstUser ? extractText(firstUser) : '').trim()
         return {
           id: key,
           childSessionKey: key,
           agentId: (typeof r['subagentRole'] === 'string' && r['subagentRole']) || agentIdFromKey(key),
-          task: (r['label'] as string) || (r['displayName'] as string) || undefined,
+          task: brief || (r['label'] as string) || (r['displayName'] as string) || undefined,
           status: 'done',
           content,
           reasoning,

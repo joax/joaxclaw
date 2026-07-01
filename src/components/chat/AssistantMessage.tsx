@@ -978,7 +978,11 @@ function ThreadChip({ thread: t }: { thread: SubThread }) {
   const running = t.status === 'spawning' || t.status === 'running'
   const tone = t.status === 'error' ? 'var(--danger)' : t.status === 'done' ? 'var(--success)' : 'var(--accent)'
   const toolCount = (t.toolCalls ?? []).length
-  const name = t.agentId || 'sub-agent'
+  // Label by the task/brief — every worker often shares the same agent id (e.g. "leaf"),
+  // so the assignment is what actually distinguishes the threads. Fall back to the id.
+  const task = t.task?.trim().replace(/\s+/g, ' ')
+  const label = task || t.agentId || 'sub-agent'
+  const name = label.length > 52 ? label.slice(0, 51) + '…' : label
 
   const StatusIcon = t.status === 'error' ? XCircle : t.status === 'done' ? CheckCircle2 : Loader2
 
