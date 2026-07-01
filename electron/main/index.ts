@@ -106,13 +106,11 @@ function createWindow(): void {
     height: 900,
     minWidth: 900,
     minHeight: 600,
+    // Fully custom title bar (see components/layout/TitleBar): its own themed window
+    // buttons + a continuous bottom border. We deliberately do NOT use titleBarOverlay —
+    // Electron 43's native Window-Controls-Overlay on Linux/Wayland draws its own opaque
+    // control region that duplicates our buttons and cuts the title bar's bottom border.
     frame: false,
-    titleBarStyle: 'hidden',
-    titleBarOverlay: {
-      color: '#0f1117',
-      symbolColor: '#94a3b8',
-      height: 36
-    },
     // Opaque so the compositor draws a native drop shadow. roundedCorners is native on
     // macOS / Windows 11 / Linux-Wayland (Electron 43+); X11 falls back to square
     // corners. Transparent windows get no native shadow, so we no longer clip in CSS.
@@ -200,9 +198,7 @@ function createChatWindow(sessionKey: string): void {
     height: 860,
     minWidth: 560,
     minHeight: 460,
-    frame: false,
-    titleBarStyle: 'hidden',
-    titleBarOverlay: { color: '#0f1117', symbolColor: '#94a3b8', height: 36 },
+    frame: false, // custom title bar (see main window) — no native titleBarOverlay
     transparent: false,
     roundedCorners: true,
     webPreferences: {
@@ -239,9 +235,7 @@ function createAboutWindow(): void {
     resizable: false,
     maximizable: false,
     fullscreenable: false,
-    frame: false,
-    titleBarStyle: 'hidden',
-    titleBarOverlay: { color: '#0f1117', symbolColor: '#94a3b8', height: 36 },
+    frame: false, // custom title bar (see main window) — no native titleBarOverlay
     transparent: false,
     roundedCorners: true,
     webPreferences: {
