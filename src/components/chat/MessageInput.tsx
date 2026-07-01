@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { Send, Square, RotateCcw, Paperclip, X, Image, Mic, MicOff, AudioWaveform } from 'lucide-react'
 import { useChatStore } from '../../store/chat'
-import { useSettingsStore } from '../../store/settings'
+import { useStreamStatus } from './useStreamStatus'
 import { useDraftsStore } from '../../store/drafts'
 import type { PendingAttachment } from '../../store/drafts'
 import type { MediaAttachment } from '../../lib/types'
@@ -63,12 +63,10 @@ export function MessageInput({ convId }: Props) {
   }
 
   const [sending, setSending] = useState(false)
-  const [isStalled, setIsStalled] = useState(false)
   const [isDragOver, setIsDragOver] = useState(false)
   const [recording, setRecording] = useState(false)
   const [recordingMs, setRecordingMs] = useState(0)
   const { sendMessage, abortStream, compact, conversations } = useChatStore()
-  const stallTimeoutMs = useSettingsStore(s => s.streamStallTimeout * 1000)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
@@ -77,25 +75,13 @@ export function MessageInput({ convId }: Props) {
 
   const conv = conversations.find(c => c.id === convId)
   const isStreaming = conv?.messages.some(m => m.streaming) ?? false
-
   const streamingMsg = conv?.messages.findLast(m => m.streaming)
-  // A streaming sub-agent thread keeps the turn alive even when the parent is idle.
-  const threadsSignal = streamingMsg?.threads?.reduce((n, t) => n + t.content.length + (t.reasoning?.length ?? 0) + (t.toolCalls?.length ?? 0), 0) ?? 0
-  const activityKey = streamingMsg
-    ? `${streamingMsg.content.length}:${streamingMsg.reasoning?.length ?? 0}:${streamingMsg.toolCalls?.length ?? 0}:${streamingMsg.toolCalls?.filter(t => t.status === 'running').length ?? 0}:${streamingMsg.waitingForSession ?? ''}:${threadsSignal}`
-    : null
-  const prevActivityKey = useRef<string | null>(null)
 
-  useEffect(() => {
-    if (!isStreaming || !activityKey) { setIsStalled(false); return }
-    if (activityKey !== prevActivityKey.current) {
-      prevActivityKey.current = activityKey
-      setIsStalled(false)
-    }
-    const t = setTimeout(() => setIsStalled(true), stallTimeoutMs)
-    return () => clearTimeout(t)
-  }, [isStreaming, activityKey, stallTimeoutMs])
-
+  // Phase-aware liveness: distinguishes model-load / first-token latency, healthy
+  // streaming, a real stall, and a dropped connection (see lib/streamStatus.ts).
+  const { status: streamStatus, elapsedSeconds } = useStreamStatus(streamingMsg, isStreaming)
+  const isStalled = streamStatus === 'stalled'
+  // Only a genuine stall re-opens the input (so the user can type "continue").
   const isBlocked = isStreaming && !isStalled
 
   // Focus and restore textarea height when the conversation opens or switches
@@ -241,12 +227,38 @@ export function MessageInput({ convId }: Props) {
     >
       {isStalled && (
         <div className="flex items-center gap-2 mb-2 px-1">
-          <span className="text-xs" style={{ color: 'var(--danger)', opacity: 0.8 }}>Model stopped responding.</span>
+          <span className="text-xs" style={{ color: 'var(--danger)', opacity: 0.8 }}>
+            Model may have stopped responding{elapsedSeconds ? ` (${elapsedSeconds}s)` : ''}.
+          </span>
           <button onClick={() => handleSend('continue')} style={{ fontSize: 11, padding: '2px 8px', borderRadius: 'var(--radius)', border: '1px solid var(--danger)', background: 'transparent', color: 'var(--danger)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4 }}>
             <RotateCcw size={10} /> Continue
           </button>
           <button onClick={handleStop} style={{ fontSize: 11, padding: '2px 8px', borderRadius: 'var(--radius)', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer' }}>
             Abort
+          </button>
+        </div>
+      )}
+
+      {/* First-token latency (model loading / encoding a long prompt): patient, not alarming. */}
+      {streamStatus === 'warming' && elapsedSeconds >= 8 && (
+        <div className="flex items-center gap-2 mb-2 px-1">
+          <span className="text-xs" style={{ color: 'var(--text-secondary)', opacity: 0.75 }}>
+            Waiting for the model to respond… ({elapsedSeconds}s)
+          </span>
+          <button onClick={handleStop} style={{ fontSize: 11, padding: '2px 8px', borderRadius: 'var(--radius)', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer' }}>
+            Stop
+          </button>
+        </div>
+      )}
+
+      {/* The gateway went quiet — a connection problem, not a model stall. */}
+      {streamStatus === 'disconnected' && (
+        <div className="flex items-center gap-2 mb-2 px-1">
+          <span className="text-xs" style={{ color: 'var(--warning)', opacity: 0.85 }}>
+            Connection lost — reconnecting…
+          </span>
+          <button onClick={handleStop} style={{ fontSize: 11, padding: '2px 8px', borderRadius: 'var(--radius)', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer' }}>
+            Stop
           </button>
         </div>
       )}
