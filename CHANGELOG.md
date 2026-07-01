@@ -5,6 +5,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.15.0] - 2026-07-01
+
+### Added
+
+- **Scalable theme management with import/export.** A dedicated **Themes** screen with a gallery (apply / duplicate / delete / import / export), a full editor (colors, base mode, radius, font, icon family), a **Backgrounds** editor, and a live preview. Themes are a portable **`.joaxtheme`** package (a zip): a versioned `theme.json` plus optional per-surface background images, so they're easy to share and reuse. The built-in themes now live as readable files in the repo and load as the single source of truth.
+- **Theme background images.** Optional wallpapers behind the **app** and the **chat**, each with opacity, blur, and fit, packaged with the theme on export (recommended size shown in the picker). Image bytes live on disk, never in localStorage.
+- **Curated art for every base theme** (royalty-free, no attribution): Midnight (indigo Milky Way / starfield), Ocean Dark (navy waves / dark water), Forest (dark pines / misty green), and Rose Light (pale peonies / white blossoms, tuned for the light theme).
+- **Retro Terminal theme.** A new green-phosphor CRT terminal theme for night coders — green-on-near-black with amber highlights, a monospace font stack, and near-square corners.
+
+### Changed
+
+- Theme editing moved out of Settings into the new Themes screen; Settings keeps status-bar, zoom, and update options.
+
+### Notes
+
+- Base themes always load from the bundled repo files (only user-created themes persist), so updated presets and their backgrounds take effect on upgrade.
+
 ## [0.14.1] - 2026-06-30
 
 ### Changed
