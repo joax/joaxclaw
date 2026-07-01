@@ -96,6 +96,10 @@ export function ChatView({ solo }: { solo?: string } = {}) {
 
   const TERMINAL = new Set(['idle', 'done', 'failed', 'killed', 'timeout'])
   const isRunning = (s: Session) => {
+    // A controller that has yielded to a running sub-agent shows hasActiveRun:false /
+    // status:'done' itself, but is still live — its worker is running. Treat that as
+    // running so we keep watching it and re-attach on reconnect.
+    if (s.hasActiveSubagentRun) return true
     if (s.status && TERMINAL.has(s.status)) return false
     // hasActiveRun: false overrides stale stored 'running' status
     if (s.hasActiveRun === false) return false
