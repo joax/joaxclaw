@@ -25,7 +25,9 @@ gateway. Major areas already in place:
 - **Remote gateways** — Teams, Processes, and local-engine health work over a remote
   gateway via the bundled [`joaxclaw-fs`](plugins/joaxclaw-fs/) plugin (published to npm
   as `openclaw-joaxclaw-fs`), installable in one click from the app.
-- **Obsidian** — vault browser, graph, and memory panel.
+- **Obsidian** — vault browser, graph, and memory panel, plus a configurable
+  **Agent access** control (Off / Read-only / Read & write) that lets gateway agents —
+  not just the app — read and write the vault.
 
 ## Next / under consideration
 
@@ -42,7 +44,6 @@ gateway. Major areas already in place:
   `engines.fetch` primitive exists; surface it more widely).
 - **Richer plugin config forms** — schema-driven fields beyond the curated API-key
   routing, for plugins with non-trivial `config`/`llm` settings.
-- **Obsidian for agents** — let gateway agents (not just the app) read/write the vault.
 - **Broader curated coverage** — more channels with first-class credential/policy forms,
   more plugins with curated config.
 
