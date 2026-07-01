@@ -1,0 +1,28 @@
+{
+  "format": 1,
+  "id": "forest-dark",
+  "name": "Forest",
+  "author": "JoaxClaw",
+  "base": "dark",
+  "colors": {
+    "bgPrimary": "#0c1a0f",
+    "bgSurface": "#122016",
+    "bgElevated": "#1a3020",
+    "textPrimary": "#e2e8f0",
+    "textSecondary": "#94a3b8",
+    "accent": "#4ade80",
+    "accentFg": "#0a1a0c",
+    "border": "#1e3a26",
+    "danger": "#ef4444",
+    "success": "#22c55e",
+    "warning": "#f59e0b"
+  },
+  "borderRadius": 6,
+  "fontSize": 14,
+  "fontFamily": "Inter, system-ui, sans-serif",
+  "iconFamily": "lucide",
+  "backgrounds": {
+    "app": { "file": "backgrounds/app.jpg", "opacity": 0.18, "blur": 0, "fit": "cover", "position": "center" },
+    "chat": { "file": "backgrounds/chat.jpg", "opacity": 0.14, "blur": 0, "fit": "cover", "position": "center" }
+  }
+}

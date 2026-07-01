@@ -350,6 +350,19 @@ export interface ThemeColors {
   warning: string
 }
 
+// Per-surface background image. `file` is an absolute on-disk path (in userData, for
+// custom/imported themes) — never the image bytes, so themes stay tiny in localStorage.
+// Presets ship without backgrounds. Rendered as a layer behind the surface content.
+export type ThemeBgSlot = 'app' | 'chat'
+export type ThemeBgFit = 'cover' | 'contain' | 'tile'
+export interface ThemeBackground {
+  file: string          // absolute path on disk, or '' for none
+  opacity: number       // 0..1
+  blur: number          // px
+  fit: ThemeBgFit
+  position?: string     // CSS background-position (default 'center')
+}
+
 export interface ThemeSettings {
   id: string
   name: string
@@ -359,96 +372,9 @@ export interface ThemeSettings {
   fontSize: number
   fontFamily: string
   iconFamily: IconFamily
+  author?: string
+  backgrounds?: Partial<Record<ThemeBgSlot, ThemeBackground>>
 }
 
-export const DARK_COLORS: ThemeColors = {
-  bgPrimary: '#0f1117',
-  bgSurface: '#1a1d2e',
-  bgElevated: '#232640',
-  textPrimary: '#e2e8f0',
-  textSecondary: '#94a3b8',
-  accent: '#6366f1',
-  accentFg: '#ffffff',
-  border: '#2d3350',
-  danger: '#ef4444',
-  success: '#22c55e',
-  warning: '#f59e0b'
-}
-
-export const LIGHT_COLORS: ThemeColors = {
-  bgPrimary: '#f8fafc',
-  bgSurface: '#ffffff',
-  bgElevated: '#f1f5f9',
-  textPrimary: '#0f172a',
-  textSecondary: '#64748b',
-  accent: '#6366f1',
-  accentFg: '#ffffff',
-  border: '#e2e8f0',
-  danger: '#ef4444',
-  success: '#16a34a',
-  warning: '#d97706'
-}
-
-export const DEFAULT_THEME: ThemeSettings = {
-  id: 'default-dark',
-  name: 'Midnight',
-  base: 'dark',
-  colors: DARK_COLORS,
-  borderRadius: 8,
-  fontSize: 14,
-  fontFamily: 'Inter, system-ui, sans-serif',
-  iconFamily: 'lucide'
-}
-
-export const PRESET_THEMES: ThemeSettings[] = [
-  DEFAULT_THEME,
-  {
-    id: 'ocean-dark',
-    name: 'Ocean Dark',
-    base: 'dark',
-    colors: {
-      ...DARK_COLORS,
-      bgPrimary: '#0a1628',
-      bgSurface: '#0f2040',
-      bgElevated: '#163052',
-      accent: '#38bdf8',
-      border: '#1e3a5f'
-    },
-    borderRadius: 10,
-    fontSize: 14,
-    fontFamily: 'Inter, system-ui, sans-serif',
-    iconFamily: 'lucide'
-  },
-  {
-    id: 'rose-light',
-    name: 'Rose Light',
-    base: 'light',
-    colors: {
-      ...LIGHT_COLORS,
-      accent: '#f43f5e',
-      accentFg: '#ffffff'
-    },
-    borderRadius: 12,
-    fontSize: 14,
-    fontFamily: 'Inter, system-ui, sans-serif',
-    iconFamily: 'lucide'
-  },
-  {
-    id: 'forest-dark',
-    name: 'Forest',
-    base: 'dark',
-    colors: {
-      ...DARK_COLORS,
-      bgPrimary: '#0c1a0f',
-      bgSurface: '#122016',
-      bgElevated: '#1a3020',
-      accent: '#4ade80',
-      accentFg: '#0a1a0c',
-      border: '#1e3a26'
-    },
-    borderRadius: 6,
-    fontSize: 14,
-    fontFamily: 'Inter, system-ui, sans-serif',
-    iconFamily: 'lucide'
-  }
-]
+// The built-in themes live as JSON files under /themes and are loaded via
+// ../lib/presetThemes (PRESET_THEMES, DEFAULT_THEME) — a single source of truth.

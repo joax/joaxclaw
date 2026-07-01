@@ -4,7 +4,7 @@ import App from './App'
 import { ChatPopout } from './components/chat/ChatPopout'
 import { AboutWindow } from './components/layout/AboutWindow'
 import './index.css'
-import { DEFAULT_THEME } from './lib/types'
+import { DEFAULT_THEME } from './lib/presetThemes'
 import { applyTheme } from './lib/theme'
 import { useSettingsStore } from './store/settings'
 
