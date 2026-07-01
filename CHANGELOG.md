@@ -5,6 +5,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.14.0] - 2026-06-30
+
+### Added
+
+- **One-click gateway self-update.** An **Update** button in the Gateway view asks the connected agent to run `openclaw update` on the gateway host, then restarts the gateway (deferred, so the agent's turn finishes before the connection briefly drops). Because the agent always runs on the gateway host, this works for **local and remote** gateways alike.
+- **Configurable Obsidian access for agents.** A new **Agent access** control in the Memory view — **Off / Read-only / Read & write** — governs the `obsidian-memory` skill the app writes for gateway agents. *Off* removes the skill (agents can't reach the vault), *Read-only* exposes list/read/search only (no write endpoints), and *Read & write* keeps full access. Defaults to read-write to preserve prior behavior. (Local-host scoped: the skill points agents at the vault's Local REST API on `localhost`.)
+- **Team member titles on the flow graph.** Each member's title (e.g. **QA Manager**, **Senior Developer**) now shows on its node in the Team graph, with the underlying agent as a subtitle — so you can see what each member is meant to do at a glance. Titles stay correct even when the same agent is reused for several members.
+
+### Changed
+
+- **Native window shadow + rounded corners.** Upgraded **Electron 33 → 43** and switched the app's frameless windows (main, pop-out chat, About) from transparent to opaque, so the compositor draws a native drop shadow and rounded corners that match the rest of the desktop — JoaxClaw windows previously had neither on Linux. Native on macOS / Windows 11 / Linux-Wayland; Linux X11 falls back to square corners without a shadow. Removes the old CSS corner-clipping workaround.
+
+### Notes
+
+- The Electron 43 upgrade brings **Chromium 150 / Node 24**; dependency advisories were resolved (`npm audit` reports **0 vulnerabilities**).
+
 ## [0.13.0] - 2026-06-30
 
 ### Added
