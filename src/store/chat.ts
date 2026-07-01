@@ -544,20 +544,21 @@ async function reconstructSubThreads(parentKey: string): Promise<SubThread[]> {
   }
 }
 
-// Attach reconstructed sub-agent threads to the right assistant message, de-duped by
-// child session key so they don't stack (and so live frames, which key threads by the
-// same child session key, patch these in place rather than duplicating).
-//   1. a currently-streaming assistant turn (a live reconnect) — converges with the
-//      live placeholder watchSession creates;
-//   2. else the last turn that yielded/spawned (sessions_yield / sessions_spawn);
-//   3. else the last assistant message.
+// Attach reconstructed COMPLETED sub-agent threads to their past assistant turn — the
+// last *finished* (non-streaming) assistant message that yielded/spawned, else the last
+// finished assistant message. Running yields belong to the live turn and are seeded onto
+// watchSession's placeholder instead, so they never land on a stale earlier message.
+// De-duped by child session key so reloads/live frames don't stack.
 function attachThreads(messages: ChatMessage[], threads: SubThread[]): ChatMessage[] {
   const YIELD = new Set(['sessions_yield', 'sessions_spawn'])
-  let target = messages.findIndex(m => m.role === 'assistant' && m.streaming)
-  if (target < 0) for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i].role === 'assistant' && messages[i].toolCalls?.some(t => YIELD.has(t.name))) { target = i; break }
+  let target = -1
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]
+    if (m.role === 'assistant' && !m.streaming && m.toolCalls?.some(t => YIELD.has(t.name))) { target = i; break }
   }
-  if (target < 0) for (let i = messages.length - 1; i >= 0; i--) { if (messages[i].role === 'assistant') { target = i; break } }
+  if (target < 0) for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === 'assistant' && !messages[i].streaming) { target = i; break }
+  }
   if (target < 0) return messages
   return messages.map((m, i) => {
     if (i !== target) return m
@@ -653,6 +654,20 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
 
     attachChatStream(convId, sessionKey, update)
+
+    // Seed still-running sub-agent yields onto THIS live turn's placeholder. On reconnect
+    // a worker may be deep in a tool call and momentarily silent, so no live frame has
+    // rebuilt its thread yet. Live frames (keyed by the same child session key) then patch
+    // these in place rather than duplicating.
+    reconstructSubThreads(sessionKey).then(threads => {
+      const running = threads.filter(t => t.status === 'running')
+      if (!running.length) return
+      update(m => {
+        const existing = m.threads ?? []
+        const fresh = running.filter(t => !existing.some(e => e.childSessionKey === t.childSessionKey))
+        return fresh.length ? { ...m, threads: [...existing, ...fresh] } : m
+      })
+    }).catch(() => { /* best-effort */ })
   },
 
   async abortStream(convId) {
@@ -899,13 +914,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
         set(s => ({ conversations: [conv, ...s.conversations], activeConvId: convId }))
       }
 
-      // Sub-agent yields live in child sessions, not the parent history — reattach them
-      // asynchronously so the conversation opens immediately and the threads pop in.
+      // Completed sub-agent yields from past turns live in child sessions, not the parent
+      // history — reattach them to their (finished) turn asynchronously. Running yields are
+      // handled by watchSession on the live placeholder, so exclude them here.
       reconstructSubThreads(sessionKey).then(threads => {
-        if (!threads.length) return
+        const done = threads.filter(t => t.status !== 'running')
+        if (!done.length) return
         set(s => ({
           conversations: s.conversations.map(c =>
-            c.sessionKey === sessionKey ? { ...c, messages: attachThreads(c.messages, threads) } : c)
+            c.sessionKey === sessionKey ? { ...c, messages: attachThreads(c.messages, done) } : c)
         }))
       }).catch(() => { /* best-effort */ })
 
