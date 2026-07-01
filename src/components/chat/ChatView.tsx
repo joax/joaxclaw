@@ -241,16 +241,23 @@ export function ChatView({ solo }: { solo?: string } = {}) {
               <p className="text-xs font-medium px-2 py-1.5" style={{ color: 'var(--text-secondary)' }}>
                 {group.label}
               </p>
-              {group.convs.map(conv => (
-                <ConvRow
-                  key={conv.id}
-                  conv={conv}
-                  displayName={convDisplayName(conv)}
-                  active={conv.id === activeConvId}
-                  onSelect={() => selectConversation(conv.id)}
-                  onDelete={() => deleteConversation(conv.id)}
-                />
-              ))}
+              {group.convs.map(conv => {
+                // An opened chat can still be a live run — keep showing that on the row
+                // even though it now lives under a dated group rather than Live Sessions.
+                const sess = conv.sessionKey ? sessions.find(s => s.key === conv.sessionKey) : undefined
+                const running = (!!sess && isRunning(sess)) || conv.messages.some(m => m.streaming)
+                return (
+                  <ConvRow
+                    key={conv.id}
+                    conv={conv}
+                    displayName={convDisplayName(conv)}
+                    active={conv.id === activeConvId}
+                    running={running}
+                    onSelect={() => selectConversation(conv.id)}
+                    onDelete={() => deleteConversation(conv.id)}
+                  />
+                )
+              })}
             </div>
           ))}
         </div>
@@ -498,10 +505,10 @@ function SessionRow({ session, agentName, onClick }: { session: Session; agentNa
   )
 }
 
-function ConvRow({ conv, displayName, active, onSelect, onDelete }: {
+function ConvRow({ conv, displayName, active, running, onSelect, onDelete }: {
   conv: { id: string; title: string; agentName: string; lastMessage?: string; lastAt?: string; messages: { createdAt: string }[] }
   displayName: string
-  active: boolean; onSelect: () => void; onDelete: () => void
+  active: boolean; running?: boolean; onSelect: () => void; onDelete: () => void
 }) {
   const [hovered, setHovered] = useState(false)
   const date = conv.lastAt ?? conv.messages[0]?.createdAt
@@ -517,7 +524,14 @@ function ConvRow({ conv, displayName, active, onSelect, onDelete }: {
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
-      <div className="flex items-center gap-1">
+      <div className="flex items-center gap-1.5">
+        {running && (
+          <span
+            title="Running"
+            className="animate-pulse-dot"
+            style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--success)', flexShrink: 0 }}
+          />
+        )}
         <p className="text-sm flex-1 truncate font-medium" style={{ color: active ? 'var(--accent)' : 'var(--text-primary)' }}>
           {displayName || conv.title}
         </p>
