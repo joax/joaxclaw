@@ -13,6 +13,20 @@ interface ThemeApi {
 const themeApi = (): ThemeApi | undefined =>
   (window as unknown as { api?: { theme?: ThemeApi } }).api?.theme
 
+const PRESET_IDS = new Set(PRESET_THEMES.map(t => t.id))
+
+// Fetch a bundled-asset / http / data URL and return it as a data URL, so the main
+// process can pack it into an exported theme zip (it can't read renderer asset URLs).
+async function urlToDataUrl(url: string): Promise<string> {
+  const blob = await (await fetch(url)).blob()
+  return await new Promise<string>((resolve, reject) => {
+    const r = new FileReader()
+    r.onload = () => resolve(r.result as string)
+    r.onerror = () => reject(r.error)
+    r.readAsDataURL(blob)
+  })
+}
+
 // UI zoom bounds (Electron webFrame zoom levels). ±0.5 per keypress ≈ ±10%.
 export const ZOOM_MIN = -3
 export const ZOOM_MAX = 4
@@ -156,7 +170,10 @@ export const useSettingsStore = create<SettingsState>()(
         const bgFiles: Record<string, string> = {}
         for (const slot of THEME_BG_SLOTS) {
           const f = theme.backgrounds?.[slot]?.file
-          if (f) bgFiles[slot] = f
+          if (!f) continue
+          // Disk paths pass through; bundled/remote assets are inlined as data URLs.
+          const direct = f.startsWith('asset:') ? f.slice(6) : /^(https?:|blob:|data:)/.test(f) ? f : null
+          bgFiles[slot] = direct ? await urlToDataUrl(direct) : f
         }
         const res = await api.export(serializeTheme(theme), bgFiles)
         if (res?.canceled) return { ok: true }
@@ -169,6 +186,15 @@ export const useSettingsStore = create<SettingsState>()(
     }),
     {
       name: 'joaxclaw-settings',
+      // Base themes always come from the repo files (PRESET_THEMES) — never localStorage —
+      // so updated presets and their bundled backgrounds take effect on upgrade and can't
+      // go stale. Only user-created themes are persisted.
+      partialize: (s) => ({ ...s, themes: s.themes.filter(t => !PRESET_IDS.has(t.id)) }),
+      merge: (persisted, current) => {
+        const p = (persisted ?? {}) as Partial<SettingsState>
+        const custom = (p.themes ?? []).filter(t => !PRESET_IDS.has(t.id))
+        return { ...current, ...p, themes: [...PRESET_THEMES, ...custom] }
+      },
       onRehydrateStorage: () => (state) => {
         if (state) {
           const theme = state.themes.find(t => t.id === state.activeThemeId) ?? DEFAULT_THEME

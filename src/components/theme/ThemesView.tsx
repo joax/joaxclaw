@@ -122,8 +122,12 @@ export function ThemesView() {
           </Section>
 
           <Section title="Backgrounds">
-            <p className="text-xs mb-3" style={{ color: 'var(--text-secondary)', opacity: 0.75 }}>
+            <p className="text-xs mb-1" style={{ color: 'var(--text-secondary)', opacity: 0.75 }}>
               Optional images layered behind the app and the chat, packaged with the theme on export.
+            </p>
+            <p className="text-xs mb-3" style={{ color: 'var(--text-secondary)', opacity: 0.6 }}>
+              Recommended: at least <b style={{ color: 'var(--text-secondary)' }}>1920×1080</b> (2560×1440+ for sharp
+              HiDPI displays). JPG or WebP; images are scaled to cover.
             </p>
             <div className="space-y-3">
               {THEME_BG_SLOTS.map(slot => (

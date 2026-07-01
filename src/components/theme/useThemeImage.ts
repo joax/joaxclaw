@@ -13,11 +13,22 @@ export function primeThemeImage(file: string, dataUrl: string): void {
 
 interface FileApi { readBinary?: (path: string) => Promise<{ ok: boolean; dataUrl?: string }> }
 
+// Bundled preset assets (`asset:<url>`) and data/blob/http URLs render directly; only a
+// user-picked image sitting on disk needs to be read through IPC as a data URL.
+function directUrl(file?: string): string | null {
+  if (!file) return null
+  if (file.startsWith('asset:')) return file.slice(6)
+  if (/^(data:|blob:|https?:)/.test(file)) return file
+  return null
+}
+
 export function useThemeImage(file: string | undefined): string | null {
-  const [url, setUrl] = useState<string | null>(() => (file ? cache.get(file) ?? null : null))
+  const [url, setUrl] = useState<string | null>(() => directUrl(file) ?? (file ? cache.get(file) ?? null : null))
 
   useEffect(() => {
     if (!file) { setUrl(null); return }
+    const direct = directUrl(file)
+    if (direct) { setUrl(direct); return }
     const cached = cache.get(file)
     if (cached) { setUrl(cached); return }
     let cancelled = false

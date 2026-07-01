@@ -77,10 +77,16 @@ export function registerThemeIpc(): void {
       const zip = new JSZip()
       zip.file('theme.json', JSON.stringify(manifest, null, 2))
       for (const slot of SLOTS) {
-        const abs = bgFiles?.[slot]
+        const src = bgFiles?.[slot]
         const rel = manifest.backgrounds?.[slot]?.file
-        if (!abs || !rel) continue
-        try { zip.file(rel, await readFile(abs)) } catch { /* skip a missing image */ }
+        if (!src || !rel) continue
+        try {
+          // A bundled asset arrives inlined as a data URL; a user image as a disk path.
+          const bytes = src.startsWith('data:')
+            ? Buffer.from(src.slice(src.indexOf(',') + 1), 'base64')
+            : await readFile(src)
+          zip.file(rel, bytes)
+        } catch { /* skip a missing image */ }
       }
       await writeFile(res.filePath, await zip.generateAsync({ type: 'nodebuffer' }))
       return { ok: true, path: res.filePath }
