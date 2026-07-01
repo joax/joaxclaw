@@ -568,6 +568,26 @@ function attachThreads(messages: ChatMessage[], threads: SubThread[]): ChatMessa
   })
 }
 
+// Running yields belong to the in-flight turn — after the last user message. Reuse a
+// trailing streaming assistant turn (watchSession's placeholder) if present; otherwise
+// append a fresh in-flight assistant turn to carry them (watchSession then reuses it).
+function attachRunning(messages: ChatMessage[], running: SubThread[], sessionKey: string): ChatMessage[] {
+  if (!running.length) return messages
+  const merge = (m: ChatMessage): ChatMessage => {
+    const existing = m.threads ?? []
+    const fresh = running.filter(t => !existing.some(e => e.childSessionKey === t.childSessionKey))
+    return fresh.length ? { ...m, threads: [...existing, ...fresh] } : m
+  }
+  const last = messages[messages.length - 1]
+  if (last && last.role === 'assistant' && last.streaming) {
+    return messages.map((m, i) => i === messages.length - 1 ? merge(m) : m)
+  }
+  return [...messages, merge({
+    id: nanoid(), sessionId: sessionKey, role: 'assistant', content: '', reasoning: '',
+    toolCalls: [], createdAt: new Date().toISOString(), streaming: true, reasoningStreaming: false,
+  })]
+}
+
 export const useChatStore = create<ChatState>((set, get) => ({
   conversations: [],
   activeConvId: null,
@@ -622,52 +642,35 @@ export const useChatStore = create<ChatState>((set, get) => ({
   watchSession(convId, sessionKey) {
     if (activeStreams.has(convId)) return
 
-    // Add a streaming placeholder immediately so the user sees activity
-    // even while the agent is between tool calls or hasn't emitted a delta yet.
-    const msgId = nanoid()
-    const placeholder: ChatMessage = {
-      id: msgId,
-      sessionId: sessionKey,
-      role: 'assistant',
-      content: '',
-      reasoning: '',
-      toolCalls: [],
-      createdAt: new Date().toISOString(),
-      streaming: true,
-      reasoningStreaming: false
+    // Reuse a trailing in-flight assistant turn if there is one (e.g. thread
+    // reconstruction added it for running yields on reconnect) so the live stream and the
+    // reconstructed threads share one turn. Otherwise add a fresh streaming placeholder so
+    // the user sees activity even between tool calls.
+    const conv = get().conversations.find(c => c.id === convId)
+    const last = conv?.messages[conv.messages.length - 1]
+    let msgId: string
+    if (last && last.role === 'assistant' && last.streaming) {
+      msgId = last.id
+    } else {
+      msgId = nanoid()
+      const placeholder: ChatMessage = {
+        id: msgId, sessionId: sessionKey, role: 'assistant', content: '', reasoning: '',
+        toolCalls: [], createdAt: new Date().toISOString(), streaming: true, reasoningStreaming: false,
+      }
+      set(s => ({
+        conversations: s.conversations.map(c => c.id !== convId ? c : { ...c, messages: [...c.messages, placeholder] }),
+      }))
     }
-    set(s => ({
-      conversations: s.conversations.map(c =>
-        c.id !== convId ? c : { ...c, messages: [...c.messages, placeholder] }
-      )
-    }))
 
     const update: UpdateFn = (updater) => {
       set(s => ({
         conversations: s.conversations.map(c =>
-          c.id !== convId ? c : {
-            ...c,
-            messages: c.messages.map(m => m.id === msgId ? updater(m) : m)
-          }
+          c.id !== convId ? c : { ...c, messages: c.messages.map(m => m.id === msgId ? updater(m) : m) }
         )
       }))
     }
 
     attachChatStream(convId, sessionKey, update)
-
-    // Seed still-running sub-agent yields onto THIS live turn's placeholder. On reconnect
-    // a worker may be deep in a tool call and momentarily silent, so no live frame has
-    // rebuilt its thread yet. Live frames (keyed by the same child session key) then patch
-    // these in place rather than duplicating.
-    reconstructSubThreads(sessionKey).then(threads => {
-      const running = threads.filter(t => t.status === 'running')
-      if (!running.length) return
-      update(m => {
-        const existing = m.threads ?? []
-        const fresh = running.filter(t => !existing.some(e => e.childSessionKey === t.childSessionKey))
-        return fresh.length ? { ...m, threads: [...existing, ...fresh] } : m
-      })
-    }).catch(() => { /* best-effort */ })
   },
 
   async abortStream(convId) {
@@ -914,15 +917,20 @@ export const useChatStore = create<ChatState>((set, get) => ({
         set(s => ({ conversations: [conv, ...s.conversations], activeConvId: convId }))
       }
 
-      // Completed sub-agent yields from past turns live in child sessions, not the parent
-      // history — reattach them to their (finished) turn asynchronously. Running yields are
-      // handled by watchSession on the live placeholder, so exclude them here.
+      // Sub-agent yields live in child sessions, not the parent history — reattach them
+      // asynchronously. Completed ones go on their finished turn; running ones on the
+      // in-flight turn (after the last user message), where live frames keep patching them.
       reconstructSubThreads(sessionKey).then(threads => {
         const done = threads.filter(t => t.status !== 'running')
-        if (!done.length) return
+        const running = threads.filter(t => t.status === 'running')
+        if (!done.length && !running.length) return
         set(s => ({
-          conversations: s.conversations.map(c =>
-            c.sessionKey === sessionKey ? { ...c, messages: attachThreads(c.messages, done) } : c)
+          conversations: s.conversations.map(c => {
+            if (c.sessionKey !== sessionKey) return c
+            let messages = done.length ? attachThreads(c.messages, done) : c.messages
+            messages = attachRunning(messages, running, sessionKey)
+            return { ...c, messages }
+          })
         }))
       }).catch(() => { /* best-effort */ })
 
