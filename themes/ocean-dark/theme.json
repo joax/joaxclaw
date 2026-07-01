@@ -1,0 +1,24 @@
+{
+  "format": 1,
+  "id": "ocean-dark",
+  "name": "Ocean Dark",
+  "author": "JoaxClaw",
+  "base": "dark",
+  "colors": {
+    "bgPrimary": "#0a1628",
+    "bgSurface": "#0f2040",
+    "bgElevated": "#163052",
+    "textPrimary": "#e2e8f0",
+    "textSecondary": "#94a3b8",
+    "accent": "#38bdf8",
+    "accentFg": "#ffffff",
+    "border": "#1e3a5f",
+    "danger": "#ef4444",
+    "success": "#22c55e",
+    "warning": "#f59e0b"
+  },
+  "borderRadius": 10,
+  "fontSize": 14,
+  "fontFamily": "Inter, system-ui, sans-serif",
+  "iconFamily": "lucide"
+}

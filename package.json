@@ -108,6 +108,7 @@
     "@types/ws": "^8.18.1",
     "d3-force": "^3.0.0",
     "diff": "^9.0.0",
+    "jszip": "^3.10.1",
     "monaco-editor": "^0.52.2",
     "react-markdown": "^10.1.0",
     "refractor": "^5.0.0",

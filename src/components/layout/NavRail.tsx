@@ -1,4 +1,4 @@
-import { MessageSquare, Bot, ClipboardList, Settings, Server, HelpCircle, Puzzle, Timer, Brain, Cpu, GitBranch, LayoutDashboard, UsersRound, Mic } from 'lucide-react'
+import { MessageSquare, Bot, ClipboardList, Settings, Server, HelpCircle, Puzzle, Timer, Brain, Cpu, GitBranch, LayoutDashboard, UsersRound, Mic, Palette } from 'lucide-react'
 import type { NavSection } from '../../App'
 import { HelpModal } from '../help/HelpModal'
 import { useHelpStore } from '../../store/help'
@@ -24,6 +24,7 @@ const GROUP_2: NavItem[] = [
 
 const GROUP_3: NavItem[] = [
   { id: 'gateway',  icon: <Server size={20} />,   label: 'Gateway' },
+  { id: 'themes',   icon: <Palette size={20} />,  label: 'Themes' },
   { id: 'settings', icon: <Settings size={20} />, label: 'Settings' },
 ]
 
