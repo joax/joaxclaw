@@ -37,15 +37,12 @@ html, body, #root {
   -webkit-font-smoothing: antialiased;
 }
 
-/* The window is transparent (for rounded corners on Linux, native elsewhere); the
-   app paints its background on #root and clips it to a radius. Corners are flattened
-   while maximized so the window sits square against the screen edges. */
-html, body { background: transparent; }
-#root {
-  background: var(--bg-primary);
-  border-radius: 12px;
-}
-html.win-maximized #root { border-radius: 0; }
+/* The window is opaque; the compositor draws native rounded corners + a drop shadow
+   (macOS / Windows 11 / Linux-Wayland on Electron 43+). No CSS corner clipping — an
+   opaque window can't be clipped to a radius without showing square corners, and it's
+   the opacity that lets the compositor draw the shadow in the first place. */
+html, body { background: var(--bg-primary); }
+#root { background: var(--bg-primary); }
 
 /* Scrollbars */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
