@@ -1,4 +1,5 @@
 import { Server, Cloud } from 'lucide-react'
+import { ProviderLogo, hasProviderLogo, providerFromModel } from './ProviderLogo'
 
 const LOCAL_PROVIDERS = new Set([
   'ollama', 'lmstudio', 'lm-studio', 'vllm', 'sglang', 'opencode',
@@ -23,6 +24,11 @@ interface ModelIconProps {
 }
 
 export function ModelIcon({ model, size = 11, style }: ModelIconProps) {
+  // Prefer the actual provider's monocolor logo (inherits the theme text color); fall
+  // back to a generic local/remote glyph when we don't have a mark for the provider.
+  if (hasProviderLogo(providerFromModel(model))) {
+    return <ProviderLogo provider={model} size={size} style={{ opacity: 0.85, ...style }} />
+  }
   const local = isLocalModel(model)
   return local
     ? <Server size={size} style={{ color: 'var(--success)', opacity: 0.75, flexShrink: 0, ...style }} />

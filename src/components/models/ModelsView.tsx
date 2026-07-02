@@ -9,6 +9,7 @@ import type { GwModelDef, GwModelProvider, SecretRef } from '../../lib/types'
 import { isSecretRef } from '../../lib/channels'
 import { Btn } from '../ui/Btn'
 import { Input } from '../ui/Input'
+import { ProviderLogo, hasProviderLogo } from '../ui/ProviderLogo'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -317,7 +318,7 @@ function ProviderPanel({ id, provider }: { id: string; provider: GwModelProvider
       {/* Header */}
       <div className="px-5 py-3 flex items-center gap-3" style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-surface)' }}>
         <div style={{ width: 32, height: 32, borderRadius: 8, background: 'color-mix(in srgb, var(--accent) 15%, var(--bg-elevated))', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--accent)', flexShrink: 0 }}>
-          <Cpu size={16} />
+          {hasProviderLogo(id) ? <ProviderLogo provider={id} size={18} /> : <Cpu size={16} />}
         </div>
         <div className="flex-1 min-w-0">
           <p className="font-semibold text-sm" style={{ color: 'var(--text-primary)' }}>{id}</p>
@@ -547,8 +548,13 @@ function UsageTab() {
                   onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
                 >
                   <td style={tdStyle}>
-                    <div className="font-mono text-xs" style={{ color: 'var(--text-primary)' }}>{mid}</div>
-                    {pid && <div className="text-xs" style={{ color: 'var(--text-secondary)', opacity: 0.6 }}>{pid}</div>}
+                    <div className="flex items-center gap-2">
+                      <ProviderLogo provider={row.model || pid} size={14} style={{ color: 'var(--text-secondary)' }} />
+                      <div>
+                        <div className="font-mono text-xs" style={{ color: 'var(--text-primary)' }}>{mid}</div>
+                        {pid && <div className="text-xs" style={{ color: 'var(--text-secondary)', opacity: 0.6 }}>{pid}</div>}
+                      </div>
+                    </div>
                   </td>
                   <td style={{ ...tdStyle, textAlign: 'right', color: 'var(--text-secondary)', fontFamily: 'monospace', fontSize: 12 }}>{row.sessionCount || '—'}</td>
                   <td style={{ ...tdStyle, textAlign: 'right', color: 'var(--text-secondary)', fontFamily: 'monospace', fontSize: 12 }}>{row.cronRuns || '—'}</td>
@@ -655,6 +661,7 @@ export function ModelsView() {
                     ? <Plug size={11} style={{ color: enabled ? 'var(--success)' : 'var(--border)', flexShrink: 0 }} />
                     : <div style={{ width: 7, height: 7, borderRadius: '50%', flexShrink: 0, background: enabled ? 'var(--success)' : 'var(--border)' }} />
                   }
+                  <ProviderLogo provider={pid} size={15} style={{ color: 'var(--text-secondary)', opacity: enabled ? 0.9 : 0.4 }} />
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-mono truncate" style={{ color: 'var(--text-primary)', opacity: enabled ? 1 : 0.5 }}>{pid}</p>
                     <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>{providers[pid]?.models.length ?? 0} models</p>
