@@ -26,6 +26,29 @@ import { errorShape, ErrorCodes } from 'openclaw/plugin-sdk/gateway-runtime'
 const READ_SCOPE = 'operator.read'
 const WRITE_SCOPE = 'operator.write'
 
+// ── reminder tools (agent-facing "ping-me-later") ───────────────────────────────
+// reminder_set schedules a one-shot session turn that re-delivers the model's own
+// prompt after a delay (so an idle/waiting agent can revive itself); reminder_cancel
+// clears it. Both are tagged so the app can surface a "waiting for a reminder" alarm
+// and the user can cancel too. One active reminder per session (setting replaces).
+const REMINDER_TAG = 'jc-reminder'
+const REMINDER_NAME = 'Reminder'
+const REMINDER_MIN_S = 30
+const REMINDER_MAX_S = 30 * 24 * 3600  // 30 days
+const REMINDER_AUTOCANCEL_GRACE_MS = 8000  // don't auto-cancel within the turn that set it
+// sessionKey -> ms when a reminder was last set (for the auto-cancel grace window).
+const reminderSetAt = new Map()
+
+// AgentToolResult is { content: [{ type, text }], details? } — return plain text.
+function toolText(text) { return { content: [{ type: 'text', text }] } }
+
+function fmtDur(secs) {
+  if (secs < 60) return `${secs}s`
+  if (secs < 3600) return `${Math.round(secs / 60)}m`
+  if (secs < 86400) { const h = Math.floor(secs / 3600), m = Math.round((secs % 3600) / 60); return m ? `${h}h ${m}m` : `${h}h` }
+  return `${Math.round(secs / 86400)}d`
+}
+
 // The artifacts that make up a team, keyed by the field name we expose. `runRequest`
 // is an agent/app-authored "run this team with this task" request the desktop app
 // picks up; it rides the generic get/list/set/delete paths like the other artifacts.
@@ -431,5 +454,113 @@ export default definePluginEntry({
         respond(true, { ok: res.ok, status: res.status })
       } catch (err) { failed(respond, err) }
     }, { scope: WRITE_SCOPE })
+
+    // ── reminder_set / reminder_cancel (agent tools) ────────────────────────────
+    if (typeof api.registerTool === 'function' && typeof api.scheduleSessionTurn === 'function') {
+      // Factory form so each tool call sees its own session via toolContext.
+      api.registerTool((toolContext) => ({
+        name: 'reminder_set',
+        label: 'Set reminder',
+        description:
+          'Schedule a reminder to ping yourself later. After the delay you receive `prompt` as a new message, ' +
+          'reviving this conversation — use it when you are idle or waiting on something you cannot advance right now ' +
+          '(a background script, a build, an external result) instead of stopping. Write `prompt` as a clear instruction ' +
+          'to your future self, and assume the task may already be done when you wake: check first, and call reminder_cancel ' +
+          'if there is nothing to do. One active reminder per session (calling this again replaces it).',
+        parameters: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            prompt: { type: 'string', description: 'The exact message to deliver to yourself when the timer fires.' },
+            delaySeconds: { type: 'number', description: `Fire this many seconds from now (min ${REMINDER_MIN_S}, max ${REMINDER_MAX_S}). Provide this OR "at".` },
+            at: { type: 'string', description: 'Absolute ISO-8601 time to fire (alternative to delaySeconds).' },
+          },
+          required: ['prompt'],
+        },
+        execute: async (_toolCallId, params) => {
+          const sessionKey = toolContext?.sessionKey
+          if (!sessionKey) return toolText('Reminder not set: no session context available.')
+          const prompt = typeof params?.prompt === 'string' ? params.prompt.trim() : ''
+          if (!prompt) return toolText('Reminder not set: `prompt` is required.')
+
+          let delayMs
+          if (typeof params?.at === 'string' && params.at.trim()) {
+            const t = Date.parse(params.at.trim())
+            if (Number.isNaN(t)) return toolText(`Reminder not set: could not parse "at" time ${JSON.stringify(params.at)}.`)
+            delayMs = t - Date.now()
+          } else if (params?.delaySeconds != null) {
+            const s = Number(params.delaySeconds)
+            if (!Number.isFinite(s)) return toolText('Reminder not set: `delaySeconds` must be a number.')
+            delayMs = s * 1000
+          } else {
+            return toolText('Reminder not set: provide `delaySeconds` or `at`.')
+          }
+
+          const secs = Math.round(delayMs / 1000)
+          if (secs < REMINDER_MIN_S) return toolText(`Reminder not set: minimum delay is ${REMINDER_MIN_S}s.`)
+          if (secs > REMINDER_MAX_S) return toolText(`Reminder not set: maximum delay is ${Math.round(REMINDER_MAX_S / 86400)} days.`)
+
+          const whenIso = new Date(Date.now() + delayMs).toISOString()
+          try {
+            // One reminder per session: clear any existing before scheduling the new one.
+            await api.unscheduleSessionTurnsByTag({ sessionKey, tag: REMINDER_TAG })
+            const handle = await api.scheduleSessionTurn({
+              delayMs, deleteAfterRun: true, sessionKey, message: prompt,
+              tag: REMINDER_TAG, name: REMINDER_NAME, deliveryMode: 'announce',
+            })
+            if (!handle) return toolText('Reminder could not be scheduled (the session turn scheduler is unavailable).')
+            reminderSetAt.set(sessionKey, Date.now())
+            return toolText(`Reminder set — I'll ping you at ${whenIso} (in ${fmtDur(secs)}). Call reminder_cancel if you finish sooner.`)
+          } catch (err) {
+            return toolText(`Reminder not set: ${String(err?.message ?? err)}`)
+          }
+        },
+      }))
+
+      api.registerTool((toolContext) => ({
+        name: 'reminder_cancel',
+        label: 'Cancel reminder',
+        description: 'Cancel this session\'s pending self-ping reminder. Call as soon as the thing you were waiting for is done or no longer relevant.',
+        parameters: { type: 'object', additionalProperties: false, properties: {} },
+        execute: async () => {
+          const sessionKey = toolContext?.sessionKey
+          if (!sessionKey) return toolText('No session context available.')
+          try {
+            const res = await api.unscheduleSessionTurnsByTag({ sessionKey, tag: REMINDER_TAG })
+            reminderSetAt.delete(sessionKey)
+            return toolText(res?.removed ? `Cancelled ${res.removed} pending reminder(s).` : 'No pending reminder to cancel.')
+          } catch (err) {
+            return toolText(`Could not cancel reminder: ${String(err?.message ?? err)}`)
+          }
+        },
+      }))
+
+      // Auto-cancel on activity: if this session finishes a turn that ISN'T the reminder
+      // ping itself, the wait is over — clear any stale pending reminder. Run-context marks
+      // the turn that set the reminder so we don't cancel it in the very same turn.
+      if (typeof api.registerAgentEventSubscription === 'function') {
+        try {
+          api.registerAgentEventSubscription({
+            id: 'joaxclaw-fs.reminder-autocancel',
+            description: 'Cancel a pending reminder once the agent does other work.',
+            handle: async (event) => {
+              try {
+                const sessionKey = event?.sessionKey
+                if (!sessionKey) return
+                const setAt = reminderSetAt.get(sessionKey)
+                if (!setAt) return  // no reminder tracked for this session
+                const kind = event?.type ?? event?.kind ?? event?.event
+                if (kind !== 'final' && kind !== 'turn-final' && kind !== 'turn.completed') return
+                // Grace window: don't cancel the reminder within the same turn that set it
+                // (that turn's own "final" would otherwise clear it immediately).
+                if (Date.now() - setAt < REMINDER_AUTOCANCEL_GRACE_MS) return
+                reminderSetAt.delete(sessionKey)
+                await api.unscheduleSessionTurnsByTag({ sessionKey, tag: REMINDER_TAG })
+              } catch { /* best-effort */ }
+            },
+          })
+        } catch { /* subscription API shape differs — auto-cancel degrades gracefully */ }
+      }
+    }
   },
 })
