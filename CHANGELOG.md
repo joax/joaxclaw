@@ -5,6 +5,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.16.0] - 2026-07-01
+
+### Added
+
+- **Provider logos across the model UI.** Each provider now shows its brand mark (monochrome, so it adapts to any theme) next to the model — in the chat top-bar model picker and throughout the **Models** tab (providers list, provider header, usage table). ~40 providers covered, with a clean fallback for the rest; compound provider ids like `ollama-cron` resolve to the right logo.
+- **Redesigned Local Models screen** (Models → Local models). A clear two-column layout: **Available to install** on the left (compact rows with publisher avatar, capability + **input-modality** chips — text / image / audio / video — and an Install arrow) and **Installed** on the right with fixed-width, aligned **Memory** / **Provider** status pills. The engine selector is now a spacious, logo-led segmented control showing each engine (`ollama`, `ollama-cron`, …) with its URL.
+- **RAM footprint bar for local models.** Each installed model shows a stacked bar of its memory footprint — model weights plus a context/KV-cache buffer — against the machine's RAM, or **VRAM when the model is loaded on the GPU**. While a model is loaded it uses the **real resident size and context** from Ollama, so a model loaded at a large context window reads its true footprint instead of an estimate; turns red if it would exceed the pool.
+- **Richer plugin configuration forms.** The plugin **Configure** dialog now renders typed, grouped fields (API key, LLM settings, and behaviour settings) instead of only an API key — schema-driven when the gateway provides a plugin's config schema, curated otherwise, with the raw JSON editor still available.
+- **Reminders — let an agent ping itself later.** An idle or waiting agent can schedule a self-ping (a message it writes to its future self) and cancel it when done, via the `joaxclaw-fs` plugin (**requires plugin ≥ 0.5.0**). Sessions waiting on a reminder show an **alarm-clock badge with a live countdown** in the Sessions view, and you can cancel it with one click.
+- **Plugin update detection + one-click upgrade.** JoaxClaw now compares the installed `joaxclaw-fs` version against the latest published on npm and offers to upgrade — a slim **app-wide banner** (like the app-update banner) and an **Update** button on the plugin's row in Extensions. The upgrade runs the force-reinstall + gateway restart via an agent.
+- **Unified chat list.** The chat sidebar is now a single, triage-friendly column, and Team/Process **sub-agent threads are labelled by their task** instead of a generic agent id.
+
+### Fixed
+
+- **Fixed the Azure provider logo**, which rendered faded/incorrect in a single color.
+- **Sub-agent yields (threads) survive reconnect and reload** — a session yielded to a still-running sub-agent is correctly shown as live, and pending/running yields are reconstructed on reconnect and placed on the in-flight turn.
+
 ## [0.15.1] - 2026-07-01
 
 ### Fixed
