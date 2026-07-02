@@ -6,17 +6,30 @@ import type { PluginKeyStatus } from '../../lib/pluginConfig'
 import { Btn } from '../ui/Btn'
 import { Input } from '../ui/Input'
 import { PluginConfigModal } from './PluginConfigModal'
+import { usePluginUpdateStore } from '../../store/pluginUpdate'
+import { PLUGIN_ID, isUpdateAvailable, startPluginUpdate } from '../../lib/pluginUpdate'
 
 type Tab = 'skills' | 'plugins'
 type Layout = 'card' | 'list'
 type Filter = 'all' | 'enabled' | 'disabled'
 
-export function ExtensionsView() {
+export function ExtensionsView({ onOpenChat }: { onOpenChat?: () => void }) {
   const {
     plugins, skills, loading, error, dirty, saving,
     load, setPluginEnabled, setSkillEnabled,
     removePlugin, removeSkill, addPlugin, addSkill, save,
   } = useExtensionsStore()
+  const { latest: latestPluginVersion, check: checkPluginUpdate } = usePluginUpdateStore()
+  const [updating, setUpdating] = useState(false)
+  useEffect(() => { checkPluginUpdate() }, [])  // eslint-disable-line react-hooks/exhaustive-deps
+
+  // The joaxclaw-fs plugin can be upgraded in-app (force-reinstall via an agent). For
+  // that plugin, tell the row whether a newer npm version exists + how to trigger it.
+  const updateInfoFor = (plugin: Plugin) =>
+    plugin.id === PLUGIN_ID && isUpdateAvailable(plugin.version, latestPluginVersion ?? undefined)
+      ? { latest: latestPluginVersion!, updating }
+      : undefined
+  const onUpdatePlugin = async () => { setUpdating(true); await startPluginUpdate(onOpenChat); setUpdating(false) }
 
   const [tab, setTab] = useState<Tab>('skills')
   const [layout, setLayout] = useState<Layout>('card')
@@ -215,6 +228,8 @@ export function ExtensionsView() {
                   confirmingDelete={confirmDelete === plugin.id}
                   onConfirmDelete={() => { removePlugin(plugin.id); setConfirmDelete(null) }}
                   onCancelDelete={() => setConfirmDelete(null)}
+                  updateInfo={updateInfoFor(plugin)}
+                  onUpdate={onUpdatePlugin}
                 />
               ))}
             </div>
@@ -229,6 +244,8 @@ export function ExtensionsView() {
                   confirmingDelete={confirmDelete === plugin.id}
                   onConfirmDelete={() => { removePlugin(plugin.id); setConfirmDelete(null) }}
                   onCancelDelete={() => setConfirmDelete(null)}
+                  updateInfo={updateInfoFor(plugin)}
+                  onUpdate={onUpdatePlugin}
                 />
               ))}
             </div>
@@ -546,9 +563,23 @@ interface PluginCardProps {
   confirmingDelete: boolean
   onConfirmDelete: () => void
   onCancelDelete: () => void
+  updateInfo?: { latest: string; updating: boolean }
+  onUpdate?: () => void
 }
 
-function PluginCard({ plugin, onToggle, onConfigure, onRemove, confirmingDelete, onConfirmDelete, onCancelDelete }: PluginCardProps) {
+// A small "→ vX.Y.Z" update pill + button, shown when a newer version is available.
+function UpdateButton({ updateInfo, onUpdate }: { updateInfo?: { latest: string; updating: boolean }; onUpdate?: () => void }) {
+  if (!updateInfo || !onUpdate) return null
+  return (
+    <Btn size="sm" loading={updateInfo.updating}
+      icon={updateInfo.updating ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+      onClick={onUpdate} title={`Update to v${updateInfo.latest} (force-reinstall via an agent, then restart the gateway)`}>
+      Update → v{updateInfo.latest}
+    </Btn>
+  )
+}
+
+function PluginCard({ plugin, onToggle, onConfigure, onRemove, confirmingDelete, onConfirmDelete, onCancelDelete, updateInfo, onUpdate }: PluginCardProps) {
   const [hovered, setHovered] = useState(false)
 
   return (
@@ -608,6 +639,7 @@ function PluginCard({ plugin, onToggle, onConfigure, onRemove, confirmingDelete,
         </div>
       ) : (
         <div className="flex justify-end items-center gap-1 mt-auto">
+          <UpdateButton updateInfo={updateInfo} onUpdate={onUpdate} />
           <Btn size="sm" variant="ghost" icon={<SlidersHorizontal size={12} />} onClick={onConfigure}>Configure</Btn>
           {!plugin.discovered && (
             <Btn size="sm" variant="ghost" icon={<Trash2 size={12} />} onClick={onRemove} style={{ color: 'var(--danger)' }} />
@@ -620,7 +652,7 @@ function PluginCard({ plugin, onToggle, onConfigure, onRemove, confirmingDelete,
 
 // ── Plugin list row ───────────────────────────────────────────────────────────
 
-function PluginRow({ plugin, onToggle, onConfigure, onRemove, confirmingDelete, onConfirmDelete, onCancelDelete }: PluginCardProps) {
+function PluginRow({ plugin, onToggle, onConfigure, onRemove, confirmingDelete, onConfirmDelete, onCancelDelete, updateInfo, onUpdate }: PluginCardProps) {
   const [expanded, setExpanded] = useState(false)
 
   return (
@@ -648,6 +680,12 @@ function PluginRow({ plugin, onToggle, onConfigure, onRemove, confirmingDelete, 
             {plugin.origin && (
               <span className="text-xs" style={{ color: 'var(--text-secondary)', opacity: 0.5 }}>
                 {plugin.origin}{plugin.version ? ` · ${plugin.version}` : ''}
+              </span>
+            )}
+            {updateInfo && (
+              <span className="text-xs px-1.5 py-0.5" title={`Update available: v${updateInfo.latest}`}
+                style={{ color: 'var(--accent)', background: 'color-mix(in srgb, var(--accent) 14%, transparent)', borderRadius: 999 }}>
+                → v{updateInfo.latest}
               </span>
             )}
           </div>
@@ -689,6 +727,7 @@ function PluginRow({ plugin, onToggle, onConfigure, onRemove, confirmingDelete, 
             </div>
           ) : (
             <div className="flex items-center gap-1">
+              <UpdateButton updateInfo={updateInfo} onUpdate={onUpdate} />
               <Btn size="sm" variant="ghost" icon={<SlidersHorizontal size={12} />} onClick={onConfigure}>Configure</Btn>
               {!plugin.discovered && (
                 <Btn size="sm" variant="ghost" icon={<Trash2 size={12} />} onClick={onRemove} style={{ color: 'var(--danger)' }} />

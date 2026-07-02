@@ -21,6 +21,7 @@ import { SystemMonitorHUD } from './components/monitor/SystemMonitorHUD'
 import { ConnectScreen } from './components/layout/ConnectScreen'
 import { ReconnectOverlay } from './components/layout/ReconnectOverlay'
 import { UpdateBanner } from './components/layout/UpdateBanner'
+import { PluginUpdateBanner } from './components/layout/PluginUpdateBanner'
 import { useUpdaterStore } from './store/updater'
 import { useConnectionStore, restoreConnectionsFromBackup } from './store/connection'
 import { useMetricsStore } from './store/metrics'
@@ -145,6 +146,7 @@ export default function App() {
     <div className="flex flex-col h-screen select-none">
       <TitleBar />
       <UpdateBanner />
+      <PluginUpdateBanner onOpenChat={() => setSection('chat')} />
       <div className="flex flex-1 min-h-0">
         <NavRail section={section} onNavigate={setSection} disabledSections={disabledSections} />
         <main className="flex-1 min-w-0 flex flex-col relative" style={{ background: 'var(--bg-primary)' }}>
@@ -160,7 +162,7 @@ export default function App() {
               {section === 'chat' && <ChatView />}
               {section === 'talk' && <TalkView />}
               {section === 'agents' && <AgentsView onOpenChat={() => setSection('chat')} />}
-              {section === 'extensions' && <ExtensionsView />}
+              {section === 'extensions' && <ExtensionsView onOpenChat={() => setSection('chat')} />}
               {section === 'sessions' && <SessionsView onOpenChat={() => setSection('chat')} />}
               {section === 'processes' && <ProcessesView onOpenChat={() => setSection('chat')} />}
               {section === 'teams' && <TeamsView onOpenChat={() => setSection('chat')} />}
