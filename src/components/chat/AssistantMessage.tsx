@@ -16,6 +16,8 @@ import { DiffView } from './DiffView'
 import { AudioPlayer } from './AudioPlayer'
 import { WorkspaceImage, VideoPlayer } from './WorkspaceMedia'
 import { useFeedbackStore } from '../../store/feedback'
+import { MessageReactions } from './MessageReactions'
+import { parseReactAction } from '../../lib/reactionActions'
 
 
 // Strip gateway protocol wrapper tags from content.
@@ -404,6 +406,7 @@ export function AssistantMessage({ message, showTools = true, showReasoning = tr
           )}
 
           {!message.streaming && cleanContent && <MessageFeedback message={message} />}
+          {!message.streaming && <MessageReactions message={message} />}
         </div>
       </div>
     )
@@ -507,6 +510,11 @@ export function AssistantMessage({ message, showTools = true, showReasoning = tr
         {/* Feedback row — hidden until parent is hovered */}
         {!message.streaming && cleanContent && (
           <MessageFeedback message={message} />
+        )}
+
+        {/* Emoji reactions — same hover affordance, but stay once set */}
+        {!message.streaming && (
+          <MessageReactions message={message} />
         )}
       </div>
     </div>
@@ -725,6 +733,46 @@ function toolDisplayName(name: string, kind: ToolKind): string {
   return name.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
 }
 
+// ── Model reactions (channel `message` tool, action "react") ──────────────────
+// A model reacting to a message via the gateway's channel `message` tool renders
+// as a friendly "Reacted 👍" chip instead of a raw tool card. See
+// lib/reactionActions for the (pure, tested) detector.
+
+function ReactionChip({ react, status, error }: { react: ReactAction; status: ToolCall['status']; error?: string }) {
+  const failed = status === 'error'
+  const pending = status === 'pending' || status === 'running'
+  const tone = failed ? 'var(--warning)' : pending ? 'var(--text-secondary)' : 'var(--success)'
+  const shortErr = error ? truncate(error.replace(/\s+/g, ' ').trim(), 80) : ''
+
+  return (
+    <div
+      className="inline-flex items-center gap-2 self-start mb-2"
+      style={{
+        padding: '5px 11px 5px 9px',
+        background: 'var(--bg-surface)',
+        border: `1px solid ${failed ? 'color-mix(in srgb, var(--warning) 45%, var(--border))' : 'var(--border)'}`,
+        borderRadius: 999,
+        maxWidth: '100%',
+      }}
+      title={failed && error ? error : undefined}
+    >
+      <span style={{ fontSize: 16, lineHeight: 1, filter: failed ? 'grayscale(0.6)' : undefined, opacity: failed ? 0.65 : 1 }}>
+        {react.emoji}
+      </span>
+      <span className="text-xs truncate" style={{ color: 'var(--text-primary)' }}>
+        {failed ? 'Couldn’t react' : pending ? 'Reacting' : 'Reacted'}
+        {react.target && !failed && <span style={{ color: 'var(--text-secondary)' }}> · {react.target}</span>}
+        {failed && shortErr && <span style={{ color: 'var(--warning)' }}> — {shortErr}</span>}
+      </span>
+      {failed
+        ? <AlertTriangle size={12} style={{ color: tone, flexShrink: 0 }} />
+        : pending
+          ? <Loader2 size={12} className="animate-spin" style={{ color: tone, flexShrink: 0 }} />
+          : <CheckCircle2 size={12} style={{ color: tone, flexShrink: 0 }} />}
+    </div>
+  )
+}
+
 // ── Tool calls block ──────────────────────────────────────────────────────────
 
 function ToolCallsBlock({ calls }: { calls: ToolCall[] }) {
@@ -739,6 +787,10 @@ function ToolCallsBlock({ calls }: { calls: ToolCall[] }) {
   return (
     <div className="mb-2 flex flex-col gap-1.5">
       {calls.map(call => {
+        // A model reaction (message/react) renders as a chip, not a tool card.
+        const react = parseReactAction(call.name, call.args)
+        if (react) return <ReactionChip key={call.id} react={react} status={call.status} error={call.error} />
+
         const kind = detectKind(call.name)
         const summary = toolSummary(kind, call.args)
         const displayName = toolDisplayName(call.name, kind)

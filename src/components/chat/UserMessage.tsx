@@ -1,6 +1,7 @@
 import type { ChatMessage } from '../../lib/types'
 import { formatTimestamp } from '../../lib/dateUtils'
 import { AudioPlayer } from './AudioPlayer'
+import { MessageReactions } from './MessageReactions'
 
 interface Props { message: ChatMessage }
 
@@ -76,6 +77,7 @@ export function UserMessage({ message }: Props) {
             ))}
           </div>
         )}
+        <MessageReactions message={message} align="right" />
       </div>
     </div>
   )
