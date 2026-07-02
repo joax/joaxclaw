@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
-import { RefreshCw, ChevronUp, ChevronDown, Square, MessageSquare, Trash2, Heart, Pencil, Cpu } from 'lucide-react'
+import { RefreshCw, ChevronUp, ChevronDown, Square, MessageSquare, Trash2, Heart, Pencil, Cpu, AlarmClock, X } from 'lucide-react'
 import { ModelIcon } from '../ui/ModelIcon'
 import { useSessionsStore } from '../../store/sessions'
 import { useChatStore } from '../../store/chat'
+import { useCronsStore } from '../../store/crons'
 import type { Session } from '../../lib/types'
 import { agentIdFromSessionKey as sessionAgentId } from '../../lib/sessionName'
+import { reminderBySession, fmtCountdown, type PendingReminder } from '../../lib/reminders'
 import { Btn } from '../ui/Btn'
 
 type SortKey = 'updatedAt' | 'status' | 'key' | 'model'
@@ -45,6 +47,23 @@ function statusColor(status: string): { bg: string; color: string; dot: string }
   }
 }
 
+// "Waiting for a reminder" alarm: amber clock + live countdown + one-click cancel.
+function ReminderBadge({ reminder, now, onCancel }: { reminder: PendingReminder; now: number; onCancel: () => void }) {
+  const cd = fmtCountdown(reminder.fireAtMs, now)
+  const title = `Waiting for a reminder${cd ? ` — pings in ${cd}` : ''}${reminder.prompt ? `\n“${reminder.prompt}”` : ''}`
+  return (
+    <span className="flex items-center gap-1 text-xs px-1.5 py-0.5" title={title}
+      style={{ background: 'color-mix(in srgb, var(--warning) 15%, transparent)', color: 'var(--warning)', borderRadius: 999, width: 'fit-content' }}>
+      <AlarmClock size={11} />
+      {cd && <span style={{ fontVariantNumeric: 'tabular-nums' }}>{cd}</span>}
+      <button onClick={e => { e.stopPropagation(); onCancel() }} title="Cancel reminder"
+        style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'inherit', display: 'inline-flex', padding: 0, opacity: 0.75 }}>
+        <X size={10} />
+      </button>
+    </span>
+  )
+}
+
 function formatTs(ts: number | undefined): string {
   if (!ts) return '—'
   const d = new Date(ts)
@@ -68,7 +87,20 @@ export function SessionsView({ onOpenChat }: Props) {
   const [openingKey, setOpeningKey] = useState<string | null>(null)
   const [openError, setOpenError] = useState<string | null>(null)
 
-  useEffect(() => { fetch() }, [])
+  // Pending reminders (one-shot session-turn crons) → "waiting for a reminder" alarm.
+  const cronJobs = useCronsStore(s => s.jobs)
+  const fetchCrons = useCronsStore(s => s.fetch)
+  const cancelCron = useCronsStore(s => s.remove)
+  const reminders = reminderBySession(cronJobs)
+  // Coarse ticking clock so the countdowns stay fresh without a per-second re-render.
+  const [now, setNow] = useState(() => Date.now())
+
+  useEffect(() => { fetch(); fetchCrons() }, [])  // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (reminders.size === 0) return
+    const id = setInterval(() => setNow(Date.now()), 15000)
+    return () => clearInterval(id)
+  }, [reminders.size])
 
   const handleSort = (key: SortKey) => {
     if (sort === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
@@ -216,10 +248,15 @@ export function SessionsView({ onOpenChat }: Props) {
                       {s.key.slice(0, 24)}{s.key.length > 24 ? '…' : ''}
                     </td>
                     <td className="px-3 py-2.5">
-                      <span className="flex items-center gap-1.5 text-xs px-2 py-0.5" style={{ background: sc.bg, color: sc.color, borderRadius: 999, width: 'fit-content' }}>
-                        <span className="w-1.5 h-1.5 rounded-full" style={{ background: sc.dot }} />
-                        {status}
-                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <span className="flex items-center gap-1.5 text-xs px-2 py-0.5" style={{ background: sc.bg, color: sc.color, borderRadius: 999, width: 'fit-content' }}>
+                          <span className="w-1.5 h-1.5 rounded-full" style={{ background: sc.dot }} />
+                          {status}
+                        </span>
+                        {reminders.get(s.key) && (
+                          <ReminderBadge reminder={reminders.get(s.key)!} now={now} onCancel={() => cancelCron(reminders.get(s.key)!.jobId)} />
+                        )}
+                      </div>
                     </td>
                     <td className="px-3 py-2.5">
                       <ModelCell session={s} running={isRunning(s)} />
