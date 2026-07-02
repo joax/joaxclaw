@@ -44,10 +44,22 @@ export async function listInstalled(baseUrl: string): Promise<InstalledModel[]> 
     .sort((a, b) => a.name.localeCompare(b.name))
 }
 
-export async function listRunning(baseUrl: string): Promise<Set<string>> {
+// A resident (loaded) model, from Ollama's /api/ps — carries the REAL footprint:
+// `size` is total resident bytes (weights + KV cache at the loaded context), `sizeVram`
+// the portion on the GPU, and `contextLength` the context window it was loaded with.
+export interface RunningModel { name: string; size?: number; sizeVram?: number; contextLength?: number }
+
+export async function listRunning(baseUrl: string): Promise<Map<string, RunningModel>> {
   const j = await engineGet(baseUrl, '/api/ps')
-  const models = (j?.models as { name: string }[] | undefined) ?? []
-  return new Set(models.map(m => m.name))
+  const models = (j?.models as Array<Record<string, unknown>> | undefined) ?? []
+  const out = new Map<string, RunningModel>()
+  for (const m of models) {
+    const name = String(m.name ?? m.model ?? '')
+    if (!name) continue
+    const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : undefined)
+    out.set(name, { name, size: num(m.size), sizeVram: num(m.size_vram), contextLength: num(m.context_length) })
+  }
+  return out
 }
 
 // Start a background pull on the host. Returns a pullId to poll.
@@ -103,4 +115,95 @@ export function fmtBytes(n?: number): string {
   const u = ['B', 'KB', 'MB', 'GB', 'TB']
   const i = Math.floor(Math.log(n) / Math.log(1024))
   return `${(n / Math.pow(1024, i)).toFixed(i >= 3 ? 1 : 0)} ${u[i]}`
+}
+
+// ── RAM footprint estimate ────────────────────────────────────────────────────
+// Running a model needs the weights (≈ the download size) plus a context/KV-cache
+// buffer. We don't have the model architecture here, so the context buffer is a rough
+// GQA-aware fp16 heuristic from the parameter count and a default context window — enough
+// to show, visually, how much of the machine's RAM a model would take. Clearly approximate.
+
+const DEFAULT_CTX_TOKENS = 8192
+// ~18 KB of KV cache per (billion params × token) — tuned so a 7B at 8k ctx ≈ ~1 GB.
+const KV_BYTES_PER_B_TOKEN = 18_000
+
+// Parse a parameter-count label ("7B", "1.5B", "135M", "8x7B") to billions of params.
+export function parseParamsB(paramSize?: string): number | undefined {
+  if (!paramSize) return undefined
+  const m = /([\d.]+)\s*([bm])/i.exec(paramSize)
+  if (!m) return undefined
+  const n = parseFloat(m[1])
+  if (!Number.isFinite(n)) return undefined
+  const b = m[2].toLowerCase() === 'm' ? n / 1000 : n
+  // "8x7B" mixture-of-experts: multiply the leading count in.
+  const x = /^(\d+)\s*x/i.exec(paramSize.trim())
+  return x ? b * parseInt(x[1], 10) : b
+}
+
+// Estimated context/KV-cache bytes for a model at a given context window.
+export function estimateContextBytes(paramSize?: string, ctxTokens = DEFAULT_CTX_TOKENS): number {
+  const b = parseParamsB(paramSize)
+  if (!b) return 0
+  return b * ctxTokens * KV_BYTES_PER_B_TOKEN
+}
+
+export interface RamFootprintInput {
+  diskBytes?: number      // installed size on disk (weights proxy)
+  paramSize?: string      // e.g. "7B" (for the estimate)
+  ramTotal: number        // system RAM bytes
+  vramTotal?: number      // GPU VRAM bytes (0/undefined if no GPU data)
+  // Actual resident stats from Ollama /api/ps — present only while the model is loaded:
+  actualSize?: number     // total resident bytes (weights + KV cache at the loaded ctx)
+  actualVram?: number     // resident bytes on the GPU
+  contextTokens?: number  // context window the model was loaded with
+}
+
+export interface RamFootprint {
+  weights: number                 // model weight bytes
+  context: number                 // context/KV-cache bytes (real when loaded, else estimated)
+  total: number                   // weights + context
+  actual: boolean                 // true = real numbers from /api/ps, false = estimate
+  onGpu: boolean                  // resident mostly on the GPU (VRAM)
+  capacity: number                // bytes compared against (VRAM if on GPU, else RAM)
+  capacityLabel: 'RAM' | 'VRAM'
+  contextTokens?: number          // context window used (for the label)
+  fracWeights: number             // 0..1 of capacity
+  fracContext: number             // 0..1 of capacity
+  fracTotal: number               // 0..1 of capacity (uncapped)
+  overCapacity: boolean           // needs more than that memory pool
+}
+
+// Compute a model's memory footprint. When the model is loaded, uses the REAL resident
+// size from /api/ps (which reflects the actual context) and compares against VRAM if it's
+// on the GPU; otherwise falls back to an estimate at a default context window.
+export function ramFootprint(input: RamFootprintInput): RamFootprint {
+  const { diskBytes, paramSize, ramTotal, vramTotal, actualSize, actualVram, contextTokens } = input
+  let weights: number, context: number, total: number, actual: boolean, onGpu: boolean, ctxUsed: number | undefined
+
+  if (actualSize && actualSize > 0) {
+    actual = true
+    total = actualSize
+    weights = Math.min(diskBytes ?? actualSize, actualSize)
+    context = Math.max(0, total - weights)
+    onGpu = (actualVram ?? 0) / total > 0.5
+    ctxUsed = contextTokens
+  } else {
+    actual = false
+    weights = diskBytes ?? 0
+    context = estimateContextBytes(paramSize, contextTokens)
+    total = weights + context
+    onGpu = false
+    ctxUsed = contextTokens ?? DEFAULT_CTX_TOKENS
+  }
+
+  const useVram = onGpu && !!vramTotal && vramTotal > 0
+  const capacity = useVram ? vramTotal! : (ramTotal > 0 ? ramTotal : total || 1)
+  return {
+    weights, context, total, actual, onGpu,
+    capacity, capacityLabel: useVram ? 'VRAM' : 'RAM', contextTokens: ctxUsed,
+    fracWeights: weights / capacity,
+    fracContext: context / capacity,
+    fracTotal: total / capacity,
+    overCapacity: total > capacity,
+  }
 }

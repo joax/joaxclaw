@@ -7,6 +7,7 @@
 // Pull name = `${id}:${variant.tag}`.
 
 export type ModelCapability = 'tools' | 'vision' | 'reasoning' | 'code' | 'embedding'
+export type InputModality = 'text' | 'image' | 'audio' | 'video'
 
 export interface CatalogVariant { tag: string; params: string; sizeGB: number }
 
@@ -16,7 +17,17 @@ export interface CatalogModel {
   publisher: string
   blurb: string
   capabilities: ModelCapability[]
+  // Input modalities the model accepts. Optional — defaults to text (+image for vision
+  // models); set explicitly for models that also take audio/video.
+  input?: InputModality[]
   variants: CatalogVariant[]
+}
+
+// Input modalities a model accepts. Explicit `input` wins; otherwise derived: every model
+// takes text, and vision models also take images.
+export function modelModalities(m: CatalogModel): InputModality[] {
+  if (m.input?.length) return m.input
+  return m.capabilities.includes('vision') ? ['text', 'image'] : ['text']
 }
 
 export const MODEL_CATALOG: CatalogModel[] = [
@@ -74,6 +85,7 @@ export function searchCatalog(query: string): CatalogModel[] {
     m.name.toLowerCase().includes(q) ||
     m.id.includes(q) ||
     m.publisher.toLowerCase().includes(q) ||
-    m.capabilities.some(c => c.includes(q)),
+    m.capabilities.some(c => c.includes(q)) ||
+    modelModalities(m).some(mod => mod.includes(q)),
   )
 }
