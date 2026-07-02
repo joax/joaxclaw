@@ -6,14 +6,14 @@ import { create } from 'zustand'
 import {
   listInstalled, listRunning, startPull, pullStatus, deleteModel, pullPercent, isUnknownMethod,
   showModel, setKeepAlive,
-  type InstalledModel, type ModelDetails,
+  type InstalledModel, type ModelDetails, type RunningModel,
 } from '../lib/modelManager'
 
 export interface DownloadState { model: string; status: string; percent: number | null; completed?: number; total?: number; done: boolean; error?: string }
 
 interface ModelManagerState {
   installed: InstalledModel[]
-  running: Set<string>
+  running: Map<string, RunningModel>
   loading: boolean
   error: string | null
   needsPlugin: boolean
@@ -32,7 +32,7 @@ const pollers = new Map<string, ReturnType<typeof setInterval>>()
 
 export const useModelManagerStore = create<ModelManagerState>((set, get) => ({
   installed: [],
-  running: new Set(),
+  running: new Map(),
   loading: false,
   error: null,
   needsPlugin: false,
@@ -45,7 +45,7 @@ export const useModelManagerStore = create<ModelManagerState>((set, get) => ({
       const [installed, running] = await Promise.all([listInstalled(baseUrl), listRunning(baseUrl)])
       set({ installed, running, loading: false, needsPlugin: false })
     } catch (e) {
-      if (isUnknownMethod(e)) set({ loading: false, needsPlugin: true, installed: [], running: new Set() })
+      if (isUnknownMethod(e)) set({ loading: false, needsPlugin: true, installed: [], running: new Map() })
       else set({ loading: false, error: String(e) })
     }
   },
@@ -108,7 +108,7 @@ export const useModelManagerStore = create<ModelManagerState>((set, get) => ({
 
   async setLoaded(baseUrl, model, loaded) {
     // Optimistic: reflect the change, then re-check what's actually resident.
-    set(s => { const r = new Set(s.running); loaded ? r.add(model) : r.delete(model); return { running: r } })
+    set(s => { const r = new Map(s.running); loaded ? r.set(model, r.get(model) ?? { name: model }) : r.delete(model); return { running: r } })
     try {
       await setKeepAlive(baseUrl, model, loaded ? -1 : 0)
       setTimeout(() => { void get().load(baseUrl) }, 500)
