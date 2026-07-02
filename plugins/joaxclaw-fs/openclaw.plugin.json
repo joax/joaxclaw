@@ -4,5 +4,6 @@
   "description": "Reads and writes JoaxClaw teams and processes in the gateway host's state dir over the WS (teams.* / processes.*), so they work on a remote gateway.",
   "enabledByDefault": true,
   "activation": { "onStartup": true },
+  "contracts": { "tools": ["reminder_set", "reminder_cancel"] },
   "configSchema": { "type": "object", "additionalProperties": false, "properties": {} }
 }
