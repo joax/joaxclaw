@@ -5,6 +5,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **Emoji reactions on chat messages.** Hover any message (yours or the assistant's) and a **＋** reveals a compact emoji picker; your reactions render as pills under the message and toggle off with a click. Reactions persist locally in an append-only log (`~/.openclaw/reactions/reactions.jsonl`) and survive restarts. (Personal annotations for now — the gateway emits no chat reaction events, so nothing is sent upstream.)
+- **Model reactions read as a chip.** When a model reacts to a message via the channel `message` tool (`action: "react"`), it renders as a friendly **"Reacted 👍"** chip instead of a raw tool card — with a **"Reacting…"** state while in flight and a clear **"Couldn't react — …"** state (e.g. *Action react requires a target.*) on failure. This reflects the model's channel activity (the id is a channel message id), not an in-chat reaction.
+
 ## [0.16.0] - 2026-07-01
 
 ### Added

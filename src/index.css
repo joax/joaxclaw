@@ -223,3 +223,15 @@ code {
 .animate-fade-in .feedback-bar:focus-within {
   opacity: 1 !important;
 }
+
+/* Add-reaction trigger — hidden until the message is hovered or its picker is open.
+   Existing reaction pills stay visible; only the "＋" affordance is hover-gated. */
+.reaction-add {
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.animate-fade-in:hover .reaction-add,
+.animate-fade-in .reaction-add:focus-within,
+.reaction-add[data-open='true'] {
+  opacity: 1;
+}
