@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { RotateCcw, Square, CheckCircle2, XCircle, AlertCircle, RefreshCw, Eye, EyeOff, Server, Plug, Cpu, Sparkles, MessageSquare, HelpCircle, MonitorSmartphone, ArrowUpCircle } from 'lucide-react'
 import Editor from '@monaco-editor/react'
 import { useConnectionStore, useIsRemoteGateway } from '../../store/connection'
@@ -6,6 +6,8 @@ import { useMetricsStore } from '../../store/metrics'
 import { Btn } from '../ui/Btn'
 import { Input } from '../ui/Input'
 import { formatBytes } from '../../lib/ollama'
+import { gatewayClient } from '../../lib/gateway'
+import { gatewayHost } from '../../lib/ollamaHealth'
 import { useHelpStore } from '../../store/help'
 import { useSkillsStore } from '../../store/skills'
 import { ChannelsPanel } from './ChannelsPanel'
@@ -14,6 +16,8 @@ import { LocalEnginesCard } from './LocalEnginesCard'
 import { buildGatewayUpdatePrompt } from '../../lib/gatewayUpdate'
 import { useGatewayUpdateStore } from '../../store/gatewayUpdate'
 import { sendViaAgent } from '../../lib/agentPrompt'
+
+interface ConfigSnapshot { hash?: string; config?: Record<string, unknown>; parsed?: Record<string, unknown> }
 
 type GwStatus = { running: boolean; pid?: number; uptime?: string }
 
@@ -52,25 +56,49 @@ export function GatewayView({ onOpenChat }: { onOpenChat?: () => void } = {}) {
 
   const [tab, setTabState] = useState<SettingsTab>(lastSettingsTab)
   const setTab = (t: SettingsTab) => { lastSettingsTab = t; setTabState(t) }
+  // Top-level config sections last loaded (remote), so removals become deletes on save.
+  const loadedKeysRef = useRef<string[]>([])
 
-  // Load config file
+  // Load the gateway config. On a remote gateway the local ~/.openclaw file is the
+  // WRONG machine's config, so read it over the WS via config.get instead (the same
+  // RPC Models/Channels use). Local gateways keep the raw-file editor.
   const loadConfig = async () => {
-    if (!window.api?.config) return
     setConfigLoading(true)
-    const res = await window.api.config.read()
-    setConfigLoading(false)
-    if (res.ok && res.text) {
-      setConfigText(res.text)
-      setConfigPath(res.path ?? '')
-      setConfigError('')
-      setConfigDirty(false)
-    } else {
-      setConfigError(res.error ?? 'Failed to read config')
+    try {
+      if (remote) {
+        const snap = await gatewayClient.request<ConfigSnapshot>('config.get', {})
+        const cfg = (snap.parsed ?? snap.config ?? {}) as Record<string, unknown>
+        loadedKeysRef.current = Object.keys(cfg)
+        setConfigText(JSON.stringify(cfg, null, 2))
+        setConfigPath(`${gatewayHost(connection?.url) ?? 'remote'} · ~/.openclaw/openclaw.json (via gateway)`)
+        setConfigError('')
+        setConfigDirty(false)
+      } else {
+        if (!window.api?.config) return
+        const res = await window.api.config.read()
+        if (res.ok && res.text) {
+          setConfigText(res.text)
+          setConfigPath(res.path ?? '')
+          setConfigError('')
+          setConfigDirty(false)
+        } else {
+          setConfigError(res.error ?? 'Failed to read config')
+        }
+      }
+    } catch (e) {
+      setConfigError(String(e))
+    } finally {
+      setConfigLoading(false)
     }
   }
 
-  // Check gateway status
+  // Check gateway status. A remote gateway has no status CLI we can reach, but if the
+  // WS is connected the gateway is by definition running — so derive it from that.
   const checkStatus = async () => {
+    if (remote) {
+      setGwStatus({ running: status === 'connected' })
+      return
+    }
     if (!window.api?.gateway) return
     const res = await window.api.gateway.status()
     if (res.ok && res.stdout) {
@@ -85,14 +113,50 @@ export function GatewayView({ onOpenChat }: { onOpenChat?: () => void } = {}) {
     }
   }
 
+  // Reload config + status whenever local/remote-ness changes (e.g. after connecting
+  // to a remote gateway), not just on first mount.
   useEffect(() => {
     loadConfig()
     checkStatus()
-  }, [])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [remote, status])
 
   const handleSave = async () => {
-    if (!window.api?.config) return
     setSaveStatus('saving')
+    if (remote) {
+      // Full-config editor → merge patch. Parse the edited JSON, replace each present
+      // top-level section wholesale (so nested removals apply), and null out any
+      // section the user deleted entirely. config.patch hot-reloads the gateway.
+      let parsed: Record<string, unknown>
+      try {
+        parsed = JSON.parse(configText)
+      } catch (e) {
+        setSaveStatus('error')
+        setConfigError(`Invalid JSON: ${String(e)}`)
+        return
+      }
+      try {
+        const patchObj: Record<string, unknown> = { ...parsed }
+        for (const k of loadedKeysRef.current) if (!(k in parsed)) patchObj[k] = null
+        // Re-read for a fresh hash to avoid stale-hash conflicts.
+        const snap = await gatewayClient.request<ConfigSnapshot>('config.get', {})
+        await gatewayClient.request('config.patch', {
+          raw: JSON.stringify(patchObj),
+          ...(snap.hash ? { baseHash: snap.hash } : {}),
+          replacePaths: Object.keys(parsed),
+        })
+        setSaveStatus('saved')
+        setConfigDirty(false)
+        setConfigError('')
+        setTimeout(() => setSaveStatus('idle'), 2000)
+        await loadConfig()
+      } catch (e) {
+        setSaveStatus('error')
+        setConfigError(String(e))
+      }
+      return
+    }
+    if (!window.api?.config) return
     const res = await window.api.config.write(configText)
     if (res.ok) {
       setSaveStatus('saved')
@@ -109,6 +173,30 @@ export function GatewayView({ onOpenChat }: { onOpenChat?: () => void } = {}) {
     setCmdOutput((res.stdout || res.stderr || (res.ok ? 'Success' : 'Failed')))
     setCmdRunning(false)
     setTimeout(() => checkStatus(), 1000)
+  }
+
+  // Restart/Safe/Stop. Locally we shell out via the Electron main process. On a remote
+  // gateway there's no lifecycle RPC and no reachable CLI, so hand the command to the
+  // default agent (it runs on the host) via sendViaAgent and jump to that chat.
+  const runLifecycle = (
+    localFn: () => Promise<{ ok: boolean; stdout: string; stderr: string }>,
+    command: string,
+    note: string,
+  ) => {
+    if (remote) {
+      const prompt = [
+        'Run this command on the gateway host (the machine you are running on) and report its output:',
+        '',
+        '```bash',
+        command,
+        '```',
+        '',
+        note,
+      ].join('\n')
+      sendViaAgent(prompt, onOpenChat)
+    } else {
+      runCmd(localFn)
+    }
   }
 
   // Gateway update availability (from the channel-aware update.status RPC) — reflect it
@@ -228,17 +316,28 @@ export function GatewayView({ onOpenChat }: { onOpenChat?: () => void } = {}) {
                   {gwStatus?.running ? <CheckCircle2 size={13} /> : <XCircle size={13} />}
                   <span>{gwStatus?.running ? 'Running' : 'Stopped'}</span>
                   {gwStatus?.pid && <span className="opacity-60">PID {gwStatus.pid}</span>}
+                  {remote && <span className="opacity-60">· remote</span>}
                 </div>
                 <Btn variant={gwUpdate ? undefined : 'outline'} size="sm" icon={<ArrowUpCircle size={12} />} loading={cmdRunning} disabled={status !== 'connected'} onClick={handleUpdate}
                   title={gwUpdate ? `Update available: ${gwUpdate.currentVersion} → ${gwUpdate.latestVersion}` : 'Update OpenClaw on the gateway host'}>
                   {gwUpdate ? `Update → ${gwUpdate.latestVersion}` : 'Update'}
                 </Btn>
-                <Btn variant="outline" size="sm" icon={<RotateCcw size={12} />} loading={cmdRunning} onClick={() => runCmd(window.api.gateway.restart)}>Restart</Btn>
-                <Btn variant="outline" size="sm" icon={<RotateCcw size={12} />} loading={cmdRunning} onClick={() => runCmd(window.api.gateway.restartSafe)}>Safe</Btn>
-                <Btn variant="danger" size="sm" icon={<Square size={12} />} loading={cmdRunning} onClick={() => runCmd(window.api.gateway.stop)}>Stop</Btn>
+                <Btn variant="outline" size="sm" icon={<RotateCcw size={12} />} loading={cmdRunning} onClick={() => runLifecycle(window.api.gateway.restart, 'openclaw gateway restart', 'This briefly drops the connection while the gateway restarts — that is expected; the app will reconnect on its own.')}>Restart</Btn>
+                <Btn variant="outline" size="sm" icon={<RotateCcw size={12} />} loading={cmdRunning} onClick={() => runLifecycle(window.api.gateway.restartSafe, 'openclaw gateway restart --safe', 'This briefly drops the connection while the gateway restarts — that is expected; the app will reconnect on its own.')}>Safe</Btn>
+                <Btn variant="danger" size="sm" icon={<Square size={12} />} loading={cmdRunning} onClick={() => runLifecycle(window.api.gateway.stop, 'openclaw gateway stop', 'This stops the gateway; the app will disconnect and stay disconnected until it is started again.')}>Stop</Btn>
                 <Btn variant="outline" size="sm" icon={<RefreshCw size={12} />} onClick={loadConfig} loading={configLoading}>Reload</Btn>
               </div>
             </div>
+
+            {remote && (
+              <div className="flex items-start gap-2 px-3 py-2 rounded text-xs shrink-0" style={{ background: 'color-mix(in srgb, var(--accent) 8%, var(--bg-surface))', border: '1px solid color-mix(in srgb, var(--accent) 25%, transparent)', color: 'var(--text-secondary)' }}>
+                <Server size={13} style={{ color: 'var(--accent)', flexShrink: 0, marginTop: 1 }} />
+                <span>
+                  Remote gateway — this edits the config <b style={{ color: 'var(--text-primary)' }}>on the host</b> over the connection.
+                  Restart / Safe / Stop have no remote API, so they open a chat asking an agent on the host to run the command (you approve it).
+                </span>
+              </div>
+            )}
 
             {cmdOutput && (
               <pre className="text-xs p-2 rounded shrink-0" style={{ background: 'var(--bg-primary)', color: 'var(--text-secondary)', fontSize: 11, maxHeight: 80, overflow: 'auto' }}>
