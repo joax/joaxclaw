@@ -5,6 +5,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **Emoji shortcodes in the chat composer.** Type `:` followed by a name (e.g. `:tada`) to get an autocomplete popup — navigate with ↑/↓, insert with Enter/Tab/click, dismiss with Esc — or type a full `:tada:` (closing colon) to auto-convert it in place, just like Slack/Discord/GitHub. Backed by a curated, in-bundle shortcode set (no dependency); the `:` won't trigger inside things like `http://` or `12:30`.
+
 ## [0.17.0] - 2026-07-03
 
 ### Added
