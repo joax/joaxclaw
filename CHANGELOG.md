@@ -5,11 +5,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [Unreleased]
+## [0.17.1] - 2026-07-03
 
 ### Added
 
 - **Emoji shortcodes in the chat composer.** Type `:` followed by a name (e.g. `:tada`) to get an autocomplete popup — navigate with ↑/↓, insert with Enter/Tab/click, dismiss with Esc — or type a full `:tada:` (closing colon) to auto-convert it in place, just like Slack/Discord/GitHub. Backed by a curated, in-bundle shortcode set (no dependency); the `:` won't trigger inside things like `http://` or `12:30`.
+- **Remote gateway management in the Gateway tab.** The config editor now reads and writes the **gateway host's** config over the connection (via the gateway's own config RPC, which hot-reloads it) instead of silently editing the local machine's file, and **Restart / Safe / Stop** — which have no remote API — open a chat asking an agent on the gateway host to run the command (you approve it). Gateway status is derived from the live connection. Local gateways keep the existing file/CLI behaviour.
+
+### Fixed
+
+- **Plugin versions on a remote gateway now reflect the host, not your machine.** The Plugins tab merged the local `openclaw plugins list` over the gateway's, so a plugin you also had installed locally (e.g. a dev copy of `joaxclaw-fs`) masked the remote version — it never changed on refresh no matter how the remote plugin was upgraded. The local CLI is now skipped entirely for a remote gateway, so metadata comes solely from the gateway.
 
 ## [0.17.0] - 2026-07-03
 
