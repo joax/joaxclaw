@@ -5,6 +5,7 @@ import { useStreamStatus } from './useStreamStatus'
 import { useDraftsStore } from '../../store/drafts'
 import type { PendingAttachment } from '../../store/drafts'
 import type { MediaAttachment } from '../../lib/types'
+import { searchEmoji, activeEmojiToken, completedEmojiAt, type EmojiHit } from '../../lib/emoji'
 
 function mimeToMediaType(mime: string): 'image' | 'video' | 'audio' {
   if (mime.startsWith('image/')) return 'image'
@@ -66,8 +67,13 @@ export function MessageInput({ convId }: Props) {
   const [isDragOver, setIsDragOver] = useState(false)
   const [recording, setRecording] = useState(false)
   const [recordingMs, setRecordingMs] = useState(0)
+  // `:shortcode` emoji autocomplete popup (null = closed).
+  const [emojiMenu, setEmojiMenu] = useState<{ start: number; query: string; items: EmojiHit[]; active: number } | null>(null)
   const { sendMessage, abortStream, compact, conversations } = useChatStore()
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  // Caret position to restore after a programmatic text edit (emoji insertion),
+  // since the controlled textarea would otherwise reset the caret to the end.
+  const pendingCaretRef = useRef<number | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const recChunksRef = useRef<Blob[]>([])
@@ -99,6 +105,18 @@ export function MessageInput({ convId }: Props) {
     if (prevBlocked.current && !isBlocked) textareaRef.current?.focus()
     prevBlocked.current = isBlocked
   }, [isBlocked])
+
+  // After a programmatic edit (emoji insertion), restore the caret and re-measure
+  // the textarea height once the controlled value has been applied.
+  useEffect(() => {
+    const el = textareaRef.current
+    if (!el || pendingCaretRef.current == null) return
+    const pos = pendingCaretRef.current
+    pendingCaretRef.current = null
+    el.selectionStart = el.selectionEnd = pos
+    el.style.height = 'auto'
+    el.style.height = Math.min(el.scrollHeight, 160) + 'px'
+  }, [text])
 
   // Stop recording on unmount
   useEffect(() => () => {
@@ -173,15 +191,64 @@ export function MessageInput({ convId }: Props) {
 
   const handleStop = () => abortStream(convId)
 
+  // ── Emoji `:shortcode` autocomplete ─────────────────────────────────────────
+  // Recompute the popup from the textarea's current value + caret.
+  const refreshEmojiMenu = (el: HTMLTextAreaElement) => {
+    const tok = activeEmojiToken(el.value, el.selectionStart ?? 0)
+    if (!tok) { setEmojiMenu(null); return }
+    const items = searchEmoji(tok.query)
+    if (!items.length) { setEmojiMenu(null); return }
+    setEmojiMenu(prev => ({
+      start: tok.start, query: tok.query, items,
+      active: prev && prev.query === tok.query ? Math.min(prev.active, items.length - 1) : 0,
+    }))
+  }
+
+  // Replace the active `:token` at the caret with the chosen emoji + a space.
+  const insertEmoji = (hit: EmojiHit) => {
+    const el = textareaRef.current
+    if (!el) return
+    const caret = el.selectionStart ?? el.value.length
+    const tok = activeEmojiToken(el.value, caret)
+    const start = tok ? tok.start : caret
+    const insert = hit.char + ' '
+    setText(el.value.slice(0, start) + insert + el.value.slice(caret))
+    pendingCaretRef.current = start + insert.length
+    setEmojiMenu(null)
+  }
+
   const handleKey = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (emojiMenu && emojiMenu.items.length) {
+      const n = emojiMenu.items.length
+      if (e.key === 'ArrowDown') { e.preventDefault(); setEmojiMenu(m => m && { ...m, active: (m.active + 1) % n }); return }
+      if (e.key === 'ArrowUp') { e.preventDefault(); setEmojiMenu(m => m && { ...m, active: (m.active - 1 + n) % n }); return }
+      if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); insertEmoji(emojiMenu.items[emojiMenu.active]); return }
+      if (e.key === 'Escape') { e.preventDefault(); setEmojiMenu(null); return }
+    }
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend() }
   }
 
+  // Recompute the popup after caret-only moves (arrows / Home / End) with no edit.
+  const handleKeyUp = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) refreshEmojiMenu(e.currentTarget)
+  }
+
   const handleInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    setText(e.target.value)
     const el = e.target
+    const caret = el.selectionStart ?? el.value.length
+    // Auto-convert a fully-typed `:shortcode:` (closing colon just entered).
+    const done = completedEmojiAt(el.value, caret)
+    if (done) {
+      const insert = done.char + ' '
+      setText(el.value.slice(0, done.start) + insert + el.value.slice(done.end))
+      pendingCaretRef.current = done.start + insert.length
+      setEmojiMenu(null)
+      return
+    }
+    setText(el.value)
     el.style.height = 'auto'
     el.style.height = Math.min(el.scrollHeight, 160) + 'px'
+    refreshEmojiMenu(el)
   }
 
   const handlePaste = async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
@@ -293,6 +360,23 @@ export function MessageInput({ convId }: Props) {
         </div>
       )}
 
+      <div style={{ position: 'relative' }}>
+      {/* Emoji autocomplete popup */}
+      {emojiMenu && emojiMenu.items.length > 0 && (
+        <div style={{ position: 'absolute', bottom: 'calc(100% + 6px)', left: 0, zIndex: 50, minWidth: 220, maxWidth: 320, background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', boxShadow: '0 8px 24px rgba(0,0,0,0.35)', overflow: 'hidden', padding: 4 }}>
+          {emojiMenu.items.map((hit, i) => (
+            <button
+              key={hit.code}
+              onMouseDown={e => { e.preventDefault(); insertEmoji(hit) }}
+              onMouseEnter={() => setEmojiMenu(m => m && { ...m, active: i })}
+              style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', textAlign: 'left', padding: '5px 8px', border: 'none', borderRadius: 'calc(var(--radius) / 1.5)', cursor: 'pointer', background: i === emojiMenu.active ? 'color-mix(in srgb, var(--accent) 15%, transparent)' : 'transparent', color: 'var(--text-primary)' }}
+            >
+              <span style={{ fontSize: 18, lineHeight: 1, width: 22, textAlign: 'center' }}>{hit.char}</span>
+              <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>:{hit.code}:</span>
+            </button>
+          ))}
+        </div>
+      )}
       <div
         className="flex items-end gap-2 p-2 rounded"
         style={{
@@ -334,6 +418,9 @@ export function MessageInput({ convId }: Props) {
               value={text}
               onChange={handleInput}
               onKeyDown={handleKey}
+              onKeyUp={handleKeyUp}
+              onClick={e => refreshEmojiMenu(e.currentTarget)}
+              onBlur={() => setTimeout(() => setEmojiMenu(null), 120)}
               onPaste={handlePaste}
               placeholder={isDragOver ? 'Drop files here…' : isStalled ? 'Type to continue or use the buttons above…' : 'Message…'}
               rows={1}
@@ -362,8 +449,9 @@ export function MessageInput({ convId }: Props) {
           </>
         )}
       </div>
+      </div>
       <p className="text-center mt-1.5 text-xs" style={{ color: 'var(--text-secondary)', opacity: 0.5 }}>
-        Enter to send · Shift+Enter for new line · Paste or drag images
+        Enter to send · Shift+Enter for new line · Paste or drag images · <code>:</code> for emoji
       </p>
     </div>
   )
