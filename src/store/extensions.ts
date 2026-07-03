@@ -193,19 +193,25 @@ export const useExtensionsStore = create<ExtensionsState>((set, get) => ({
       const skills = [...configSkills, ...discoveredSkills]
 
       // Enrich plugins with metadata from `openclaw plugins list --json`. This is the
-      // LOCAL host's CLI, so it's authoritative only when the gateway is local (see the
-      // remote-gateway-localhost pitfall); for remote we fall back to the gateway's own
-      // plugins.list below.
+      // LOCAL host's CLI, so it describes THIS machine — only meaningful when the gateway
+      // is local. On a remote gateway it must be skipped entirely (remote-gateway-localhost
+      // pitfall): otherwise a plugin the client also has installed (e.g. a dev copy of
+      // joaxclaw-fs) leaks its version/origin into the remote plugin's row via the merge
+      // below, so the shown version never tracks the remote host. For remote, metadata
+      // comes purely from the gateway's own plugins.list.
+      const remote = isRemoteGatewayState()
       let pluginMetaMap: Record<string, PluginMetaEntry> = {}
       let cliPlugins: PluginMetaEntry[] = []
-      try {
-        const api = (window as unknown as { api?: { plugins?: { list: () => Promise<{ ok: boolean; plugins?: PluginMetaEntry[] }> } } }).api
-        const res = await api?.plugins?.list()
-        cliPlugins = res?.plugins ?? []
-        for (const p of cliPlugins) {
-          if (p.id) pluginMetaMap[p.id] = p
-        }
-      } catch { /* non-critical */ }
+      if (!remote) {
+        try {
+          const api = (window as unknown as { api?: { plugins?: { list: () => Promise<{ ok: boolean; plugins?: PluginMetaEntry[] }> } } }).api
+          const res = await api?.plugins?.list()
+          cliPlugins = res?.plugins ?? []
+          for (const p of cliPlugins) {
+            if (p.id) pluginMetaMap[p.id] = p
+          }
+        } catch { /* non-critical */ }
+      }
 
       // Build toolName → pluginId map from gateway plugins.list (includes toolNames per
       // plugin) and keep the gateway's registry — it's correct for a remote gateway.
@@ -245,7 +251,7 @@ export const useExtensionsStore = create<ExtensionsState>((set, get) => ({
       // Source: the local CLI when the gateway is local (lists every installed plugin,
       // including disabled stock ones); the gateway's own plugins.list when remote.
       const configPluginIds = new Set(configPlugins.map(p => p.id))
-      const registry = isRemoteGatewayState() ? gwPlugins : (cliPlugins.length ? cliPlugins : gwPlugins)
+      const registry = remote ? gwPlugins : (cliPlugins.length ? cliPlugins : gwPlugins)
       const seen = new Set(configPluginIds)
       const discoveredPlugins: Plugin[] = registry
         .filter(m => m.id && !seen.has(m.id) && (seen.add(m.id), true))
