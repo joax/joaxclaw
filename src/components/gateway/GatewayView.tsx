@@ -12,6 +12,7 @@ import { ChannelsPanel } from './ChannelsPanel'
 import { DevicesPanel } from './DevicesPanel'
 import { LocalEnginesCard } from './LocalEnginesCard'
 import { buildGatewayUpdatePrompt } from '../../lib/gatewayUpdate'
+import { useGatewayUpdateStore } from '../../store/gatewayUpdate'
 import { sendViaAgent } from '../../lib/agentPrompt'
 
 type GwStatus = { running: boolean; pid?: number; uptime?: string }
@@ -109,6 +110,12 @@ export function GatewayView({ onOpenChat }: { onOpenChat?: () => void } = {}) {
     setCmdRunning(false)
     setTimeout(() => checkStatus(), 1000)
   }
+
+  // Gateway update availability (from the channel-aware update.status RPC) — reflect it
+  // on the Update button; refresh whenever this view opens.
+  const gwUpdate = useGatewayUpdateStore(s => s.info)
+  const checkGwUpdate = useGatewayUpdateStore(s => s.check)
+  useEffect(() => { checkGwUpdate() }, [checkGwUpdate])
 
   // Update OpenClaw itself on the gateway host. Unlike restart/stop (which shell out
   // locally), this asks the connected agent to run `openclaw update` on its host, so it
@@ -222,7 +229,10 @@ export function GatewayView({ onOpenChat }: { onOpenChat?: () => void } = {}) {
                   <span>{gwStatus?.running ? 'Running' : 'Stopped'}</span>
                   {gwStatus?.pid && <span className="opacity-60">PID {gwStatus.pid}</span>}
                 </div>
-                <Btn variant="outline" size="sm" icon={<ArrowUpCircle size={12} />} loading={cmdRunning} disabled={status !== 'connected'} onClick={handleUpdate}>Update</Btn>
+                <Btn variant={gwUpdate ? undefined : 'outline'} size="sm" icon={<ArrowUpCircle size={12} />} loading={cmdRunning} disabled={status !== 'connected'} onClick={handleUpdate}
+                  title={gwUpdate ? `Update available: ${gwUpdate.currentVersion} → ${gwUpdate.latestVersion}` : 'Update OpenClaw on the gateway host'}>
+                  {gwUpdate ? `Update → ${gwUpdate.latestVersion}` : 'Update'}
+                </Btn>
                 <Btn variant="outline" size="sm" icon={<RotateCcw size={12} />} loading={cmdRunning} onClick={() => runCmd(window.api.gateway.restart)}>Restart</Btn>
                 <Btn variant="outline" size="sm" icon={<RotateCcw size={12} />} loading={cmdRunning} onClick={() => runCmd(window.api.gateway.restartSafe)}>Safe</Btn>
                 <Btn variant="danger" size="sm" icon={<Square size={12} />} loading={cmdRunning} onClick={() => runCmd(window.api.gateway.stop)}>Stop</Btn>
