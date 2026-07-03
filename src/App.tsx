@@ -22,6 +22,7 @@ import { ConnectScreen } from './components/layout/ConnectScreen'
 import { ReconnectOverlay } from './components/layout/ReconnectOverlay'
 import { UpdateBanner } from './components/layout/UpdateBanner'
 import { PluginUpdateBanner } from './components/layout/PluginUpdateBanner'
+import { GatewayUpdateBanner } from './components/layout/GatewayUpdateBanner'
 import { useUpdaterStore } from './store/updater'
 import { useConnectionStore, restoreConnectionsFromBackup } from './store/connection'
 import { useMetricsStore } from './store/metrics'
@@ -146,6 +147,7 @@ export default function App() {
     <div className="flex flex-col h-screen select-none">
       <TitleBar />
       <UpdateBanner />
+      <GatewayUpdateBanner onOpenChat={() => setSection('chat')} />
       <PluginUpdateBanner onOpenChat={() => setSection('chat')} />
       <div className="flex flex-1 min-h-0">
         <NavRail section={section} onNavigate={setSection} disabledSections={disabledSections} />
