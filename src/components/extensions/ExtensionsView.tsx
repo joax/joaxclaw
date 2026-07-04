@@ -1,8 +1,11 @@
 import { useEffect, useState } from 'react'
-import { Puzzle, RefreshCw, Plus, Trash2, Check, Loader2, LayoutGrid, List, FileText, X, ChevronRight, SlidersHorizontal, CheckCircle2, KeyRound } from 'lucide-react'
+import { Puzzle, RefreshCw, Plus, Trash2, Check, Loader2, Search, FileText, X, ChevronRight, SlidersHorizontal, CheckCircle2, XCircle, HelpCircle, KeyRound } from 'lucide-react'
 import { useExtensionsStore } from '../../store/extensions'
 import type { Plugin, Skill } from '../../store/extensions'
 import type { PluginKeyStatus } from '../../lib/pluginConfig'
+import { useConnectionStore } from '../../store/connection'
+import { useSkillsStore } from '../../store/skills'
+import { useHelpStore } from '../../store/help'
 import { Btn } from '../ui/Btn'
 import { Input } from '../ui/Input'
 import { PluginConfigModal } from './PluginConfigModal'
@@ -10,8 +13,6 @@ import { usePluginUpdateStore } from '../../store/pluginUpdate'
 import { PLUGIN_ID, isUpdateAvailable, startPluginUpdate } from '../../lib/pluginUpdate'
 
 type Tab = 'skills' | 'plugins'
-type Layout = 'card' | 'list'
-type Filter = 'all' | 'enabled' | 'disabled'
 
 export function ExtensionsView({ onOpenChat }: { onOpenChat?: () => void }) {
   const {
@@ -20,6 +21,7 @@ export function ExtensionsView({ onOpenChat }: { onOpenChat?: () => void }) {
     removePlugin, removeSkill, addPlugin, addSkill, save,
   } = useExtensionsStore()
   const { latest: latestPluginVersion, check: checkPluginUpdate } = usePluginUpdateStore()
+  const { status, connection } = useConnectionStore()
   const [updating, setUpdating] = useState(false)
   useEffect(() => { checkPluginUpdate() }, [])  // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -32,8 +34,9 @@ export function ExtensionsView({ onOpenChat }: { onOpenChat?: () => void }) {
   const onUpdatePlugin = async () => { setUpdating(true); await startPluginUpdate(onOpenChat); setUpdating(false) }
 
   const [tab, setTab] = useState<Tab>('skills')
-  const [layout, setLayout] = useState<Layout>('card')
-  const [filter, setFilter] = useState<Filter>('all')
+  const [search, setSearch] = useState('')
+  const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  const toggleExpanded = (id: string) => setExpanded(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
   const [saved, setSaved] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
   const [showAddSkill, setShowAddSkill] = useState(false)
@@ -51,32 +54,103 @@ export function ExtensionsView({ onOpenChat }: { onOpenChat?: () => void }) {
     } catch { /* error stored in store */ }
   }
 
-  const visibleSkills = filter === 'all' ? skills : skills.filter(s => filter === 'enabled' ? s.enabled : !s.enabled)
-  const visiblePlugins = filter === 'all' ? plugins : plugins.filter(p => filter === 'enabled' ? p.enabled : !p.enabled)
-  const totalCount = plugins.length + skills.length
+  const q = search.trim().toLowerCase()
+  const matches = (i: { id: string; name?: string; description?: string }) =>
+    !q || i.id.toLowerCase().includes(q) || (i.name ?? '').toLowerCase().includes(q) || (i.description ?? '').toLowerCase().includes(q)
+
+  // Group by attention: needs-setup (enabled but missing an API key) → active → off.
+  const sActive = skills.filter(s => s.enabled && matches(s))
+  const sOff = skills.filter(s => !s.enabled && matches(s))
+  const pNeedsSetup = plugins.filter(p => p.enabled && p.keyStatus === 'missing' && matches(p))
+  const pActive = plugins.filter(p => p.enabled && p.keyStatus !== 'missing' && matches(p))
+  const pOff = plugins.filter(p => !p.enabled && matches(p))
+  const shownCount = tab === 'skills' ? sActive.length + sOff.length : pNeedsSetup.length + pActive.length + pOff.length
+
+  // A destructive Remove that flips to inline confirm; shared by skill + plugin rows.
+  const removeInline = (id: string, onRemove: () => void) =>
+    confirmDelete === id ? (
+      <div className="flex gap-2">
+        <Btn size="sm" variant="danger" onClick={() => { onRemove(); setConfirmDelete(null) }}>Delete</Btn>
+        <Btn size="sm" variant="outline" onClick={() => setConfirmDelete(null)}>Cancel</Btn>
+      </div>
+    ) : (
+      <Btn size="sm" variant="ghost" icon={<Trash2 size={12} />} style={{ color: 'var(--danger)' }} onClick={() => setConfirmDelete(id)}>Remove</Btn>
+    )
+
+  const renderSkillRow = (skill: Skill) => (
+    <ExtRow
+      key={skill.id}
+      icon={skill.emoji ?? null}
+      name={skill.name ?? skill.id}
+      subtitle={skill.description}
+      enabled={skill.enabled}
+      onToggle={v => setSkillEnabled(skill.id, v)}
+      expanded={expanded.has(skill.id)}
+      onToggleExpand={() => toggleExpanded(skill.id)}
+      nameChips={skill.trigger ? <TriggerChip>{skill.trigger}</TriggerChip> : null}
+    >
+      <ExtMeta items={[
+        skill.name && skill.name !== skill.id ? { k: 'id', v: skill.id } : null,
+        skill.source ? { k: 'source', v: skill.bundled ? 'Built-in' : skill.source } : null,
+        skill.filePath ? { k: 'file', v: skill.filePath } : null,
+      ]} />
+      <div className="flex items-center gap-1 mt-2">
+        {skill.filePath && <Btn size="sm" variant="outline" icon={<FileText size={12} />} onClick={() => setMdModal({ skill })}>View file</Btn>}
+        {removeInline(skill.id, () => removeSkill(skill.id))}
+      </div>
+    </ExtRow>
+  )
+
+  const renderPluginRow = (plugin: Plugin) => {
+    const upd = updateInfoFor(plugin)
+    return (
+      <ExtRow
+        key={plugin.id}
+        icon={null}
+        name={plugin.name ?? plugin.id}
+        subtitle={plugin.description}
+        enabled={plugin.enabled}
+        onToggle={v => setPluginEnabled(plugin.id, v)}
+        expanded={expanded.has(plugin.id)}
+        onToggleExpand={() => toggleExpanded(plugin.id)}
+        nameChips={<KeyStatusBadge status={plugin.keyStatus} />}
+        rowActions={
+          <>
+            {upd && <UpdateButton updateInfo={upd} onUpdate={onUpdatePlugin} />}
+            <Btn size="sm" variant="ghost" icon={<SlidersHorizontal size={12} />} onClick={() => setConfigPlugin(plugin)}>Configure</Btn>
+          </>
+        }
+      >
+        <ExtMeta items={[
+          plugin.name && plugin.name !== plugin.id ? { k: 'id', v: plugin.id } : null,
+          plugin.origin ? { k: 'source', v: [plugin.origin, plugin.version].filter(Boolean).join(' · ') } : (plugin.version ? { k: 'version', v: plugin.version } : null),
+          plugin.path ? { k: 'path', v: plugin.path } : null,
+        ]} />
+        {!plugin.discovered && <div className="mt-2">{removeInline(plugin.id, () => removePlugin(plugin.id))}</div>}
+      </ExtRow>
+    )
+  }
 
   return (
     <div className="flex flex-1 flex-col min-h-0 p-6">
       {/* Header */}
-      <div className="flex items-center justify-between mb-6">
-        <div>
+      <div className="flex items-start justify-between mb-4 gap-4">
+        <div className="min-w-0">
           <h1 className="text-lg font-semibold" style={{ color: 'var(--text-primary)' }}>Extensions</h1>
           <p className="text-sm mt-0.5" style={{ color: 'var(--text-secondary)' }}>
-            {loading ? 'Loading…' : `${totalCount} extension${totalCount !== 1 ? 's' : ''} · ${skills.length} skill${skills.length !== 1 ? 's' : ''}, ${plugins.length} plugin${plugins.length !== 1 ? 's' : ''}`}
+            <b style={{ color: 'var(--text-primary)' }}>Skills</b> teach agents how to do things · <b style={{ color: 'var(--text-primary)' }}>Plugins</b> add tools &amp; integrations.
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 shrink-0">
           {dirty && (
             <Btn
               variant="primary" size="sm" onClick={handleSave} loading={saving} disabled={saving}
               icon={saved ? <Check size={13} /> : saving ? <Loader2 size={13} className="animate-spin" /> : undefined}
             >
-              {saved ? 'Saved' : 'Save Changes'}
+              {saved ? 'Saved' : 'Save changes'}
             </Btn>
           )}
-          <Btn variant="outline" size="sm" icon={<RefreshCw size={13} />} onClick={load} loading={loading}>
-            Refresh
-          </Btn>
+          <Btn variant="outline" size="sm" icon={<RefreshCw size={13} />} onClick={load} loading={loading} title="Refresh from gateway" />
         </div>
       </div>
 
@@ -89,177 +163,69 @@ export function ExtensionsView({ onOpenChat }: { onOpenChat?: () => void }) {
         </div>
       )}
 
-      {/* Tab bar + layout toggle */}
-      <div className="flex items-center shrink-0 mb-4" style={{ borderBottom: '1px solid var(--border)' }}>
-        <div className="flex flex-1">
+      {/* Segmented Skills/Plugins · search · add */}
+      <div className="flex items-center justify-between gap-3 mb-4 shrink-0 flex-wrap">
+        <div className="flex items-center gap-1 p-0.5" style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 'var(--radius)' }}>
           {(['skills', 'plugins'] as Tab[]).map(t => (
             <button
               key={t}
-              onClick={() => { setTab(t); setConfirmDelete(null) }}
+              onClick={() => { setTab(t); setConfirmDelete(null); setShowAddSkill(false); setShowAddPlugin(false) }}
               style={{
-                background: 'none', border: 'none', cursor: 'pointer',
-                padding: '6px 12px', fontSize: 13, fontWeight: 500,
-                color: tab === t ? 'var(--accent)' : 'var(--text-secondary)',
-                borderBottom: tab === t ? '2px solid var(--accent)' : '2px solid transparent',
-                marginBottom: -1, textTransform: 'capitalize'
+                display: 'flex', alignItems: 'center', gap: 6, border: 'none', cursor: 'pointer',
+                padding: '4px 14px', fontSize: 13, fontWeight: 500, borderRadius: 'calc(var(--radius) - 2px)',
+                background: tab === t ? 'var(--bg-surface)' : 'transparent',
+                color: tab === t ? 'var(--text-primary)' : 'var(--text-secondary)',
+                boxShadow: tab === t ? '0 1px 2px rgba(0,0,0,0.15)' : 'none',
               }}
             >
-              {t.charAt(0).toUpperCase() + t.slice(1)}
-              <span className="ml-1.5 px-1.5 py-0.5 rounded text-xs" style={{
-                fontSize: 10,
-                background: tab === t ? 'color-mix(in srgb, var(--accent) 15%, transparent)' : 'var(--bg-elevated)',
-                color: tab === t ? 'var(--accent)' : 'var(--text-secondary)'
-              }}>
-                {t === 'skills'
-                  ? (filter === 'all' ? skills.length : `${visibleSkills.length}/${skills.length}`)
-                  : (filter === 'all' ? plugins.length : `${visiblePlugins.length}/${plugins.length}`)
-                }
-              </span>
+              {t === 'skills' ? 'Skills' : 'Plugins'}
+              <span style={{ fontSize: 11, opacity: 0.7 }}>{t === 'skills' ? skills.length : plugins.length}</span>
             </button>
           ))}
         </div>
-        <div className="flex items-center gap-1 pb-1">
-          {(['all', 'enabled', 'disabled'] as Filter[]).map(f => (
-            <button
-              key={f}
-              onClick={() => setFilter(f)}
-              style={{
-                background: filter === f ? 'color-mix(in srgb, var(--accent) 15%, transparent)' : 'none',
-                border: `1px solid ${filter === f ? 'var(--accent)' : 'var(--border)'}`,
-                borderRadius: 999, cursor: 'pointer',
-                padding: '2px 8px', fontSize: 11, fontWeight: 500,
-                color: filter === f ? 'var(--accent)' : 'var(--text-secondary)',
-                textTransform: 'capitalize'
-              }}
-            >
-              {f}
-            </button>
-          ))}
-          <div className="flex items-center gap-1 ml-2" style={{ borderLeft: '1px solid var(--border)', paddingLeft: 8 }}>
-            {([['card', LayoutGrid], ['list', List]] as [Layout, React.ElementType][]).map(([mode, Icon]) => (
-              <button
-                key={mode}
-                onClick={() => setLayout(mode)}
-                title={mode.charAt(0).toUpperCase() + mode.slice(1) + ' view'}
-                style={{
-                  background: layout === mode ? 'var(--bg-elevated)' : 'none',
-                  border: `1px solid ${layout === mode ? 'var(--border)' : 'transparent'}`,
-                  borderRadius: 'var(--radius)', cursor: 'pointer',
-                  padding: '3px 6px', color: layout === mode ? 'var(--accent)' : 'var(--text-secondary)'
-                }}
-              >
-                <Icon size={14} />
-              </button>
-            ))}
+        <div className="flex items-center gap-2">
+          <div style={{ position: 'relative' }}>
+            <Search size={13} style={{ position: 'absolute', left: 9, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-secondary)' }} />
+            <input
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="Search…"
+              style={{ padding: '5px 10px 5px 28px', fontSize: 12, borderRadius: 'var(--radius)', border: '1px solid var(--border)', background: 'var(--bg-elevated)', color: 'var(--text-primary)', outline: 'none', width: 180 }}
+            />
           </div>
+          <Btn variant="outline" size="sm" icon={<Plus size={13} />} onClick={() => tab === 'skills' ? setShowAddSkill(v => !v) : setShowAddPlugin(v => !v)}>
+            Add {tab === 'skills' ? 'skill' : 'plugin'}
+          </Btn>
         </div>
       </div>
 
-      {/* Skills tab */}
+      {/* Skills */}
       {tab === 'skills' && (
-        <div className="flex flex-col flex-1 min-h-0 overflow-y-auto">
-          {!loading && visibleSkills.length === 0 && !error && (
-            <div className="flex flex-col items-center justify-center flex-1 gap-3" style={{ color: 'var(--text-secondary)' }}>
-              <Puzzle size={40} style={{ opacity: 0.3 }} />
-              <p className="text-sm">{filter === 'all' ? 'No skills configured' : `No ${filter} skills`}</p>
-            </div>
+        <div className="flex flex-col flex-1 min-h-0 overflow-y-auto gap-4">
+          <AppSkillsCard gatewayUrl={connection?.url} connected={status === 'connected'} />
+          {showAddSkill && (
+            <AddSkillForm onAdd={skill => { addSkill(skill); setShowAddSkill(false) }} onCancel={() => setShowAddSkill(false)} />
           )}
-
-          {layout === 'card' ? (
-            <div className="grid gap-4" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))' }}>
-              {visibleSkills.map(skill => (
-                <SkillCard
-                  key={skill.id} skill={skill}
-                  onToggle={enabled => setSkillEnabled(skill.id, enabled)}
-                  onRemove={() => setConfirmDelete(skill.id)}
-                  confirmingDelete={confirmDelete === skill.id}
-                  onConfirmDelete={() => { removeSkill(skill.id); setConfirmDelete(null) }}
-                  onCancelDelete={() => setConfirmDelete(null)}
-                  onViewFile={skill.filePath ? () => setMdModal({ skill }) : undefined}
-                />
-              ))}
-            </div>
-          ) : (
-            <div className="flex flex-col gap-1">
-              {visibleSkills.map(skill => (
-                <SkillRow
-                  key={skill.id} skill={skill}
-                  onToggle={enabled => setSkillEnabled(skill.id, enabled)}
-                  onRemove={() => setConfirmDelete(skill.id)}
-                  confirmingDelete={confirmDelete === skill.id}
-                  onConfirmDelete={() => { removeSkill(skill.id); setConfirmDelete(null) }}
-                  onCancelDelete={() => setConfirmDelete(null)}
-                  onViewFile={skill.filePath ? () => setMdModal({ skill }) : undefined}
-                />
-              ))}
-            </div>
+          <Group label="Active" count={sActive.length}>{sActive.map(renderSkillRow)}</Group>
+          <Group label="Off" count={sOff.length}>{sOff.map(renderSkillRow)}</Group>
+          {!loading && shownCount === 0 && !error && (
+            <EmptyState label={search ? 'No skills match your search' : 'No skills configured'} />
           )}
-
-          <div className="mt-4">
-            {showAddSkill ? (
-              <AddSkillForm onAdd={skill => { addSkill(skill); setShowAddSkill(false) }} onCancel={() => setShowAddSkill(false)} />
-            ) : (
-              <Btn variant="outline" size="sm" icon={<Plus size={13} />} onClick={() => setShowAddSkill(true)}>
-                Add Skill
-              </Btn>
-            )}
-          </div>
         </div>
       )}
 
-      {/* Plugins tab */}
+      {/* Plugins */}
       {tab === 'plugins' && (
-        <div className="flex flex-col flex-1 min-h-0 overflow-y-auto">
-          {!loading && visiblePlugins.length === 0 && !error && (
-            <div className="flex flex-col items-center justify-center flex-1 gap-3" style={{ color: 'var(--text-secondary)' }}>
-              <Puzzle size={40} style={{ opacity: 0.3 }} />
-              <p className="text-sm">{filter === 'all' ? 'No plugins configured' : `No ${filter} plugins`}</p>
-            </div>
+        <div className="flex flex-col flex-1 min-h-0 overflow-y-auto gap-4">
+          {showAddPlugin && (
+            <AddPluginForm onAdd={plugin => { addPlugin(plugin); setShowAddPlugin(false) }} onCancel={() => setShowAddPlugin(false)} />
           )}
-
-          {layout === 'card' ? (
-            <div className="grid gap-4" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))' }}>
-              {visiblePlugins.map(plugin => (
-                <PluginCard
-                  key={plugin.id} plugin={plugin}
-                  onToggle={enabled => setPluginEnabled(plugin.id, enabled)}
-                  onConfigure={() => setConfigPlugin(plugin)}
-                  onRemove={() => setConfirmDelete(plugin.id)}
-                  confirmingDelete={confirmDelete === plugin.id}
-                  onConfirmDelete={() => { removePlugin(plugin.id); setConfirmDelete(null) }}
-                  onCancelDelete={() => setConfirmDelete(null)}
-                  updateInfo={updateInfoFor(plugin)}
-                  onUpdate={onUpdatePlugin}
-                />
-              ))}
-            </div>
-          ) : (
-            <div className="flex flex-col gap-1">
-              {visiblePlugins.map(plugin => (
-                <PluginRow
-                  key={plugin.id} plugin={plugin}
-                  onToggle={enabled => setPluginEnabled(plugin.id, enabled)}
-                  onConfigure={() => setConfigPlugin(plugin)}
-                  onRemove={() => setConfirmDelete(plugin.id)}
-                  confirmingDelete={confirmDelete === plugin.id}
-                  onConfirmDelete={() => { removePlugin(plugin.id); setConfirmDelete(null) }}
-                  onCancelDelete={() => setConfirmDelete(null)}
-                  updateInfo={updateInfoFor(plugin)}
-                  onUpdate={onUpdatePlugin}
-                />
-              ))}
-            </div>
+          <Group label="Needs setup" count={pNeedsSetup.length} tone="warning">{pNeedsSetup.map(renderPluginRow)}</Group>
+          <Group label="Active" count={pActive.length}>{pActive.map(renderPluginRow)}</Group>
+          <Group label="Off" count={pOff.length}>{pOff.map(renderPluginRow)}</Group>
+          {!loading && shownCount === 0 && !error && (
+            <EmptyState label={search ? 'No plugins match your search' : 'No plugins configured'} />
           )}
-
-          <div className="mt-4">
-            {showAddPlugin ? (
-              <AddPluginForm onAdd={plugin => { addPlugin(plugin); setShowAddPlugin(false) }} onCancel={() => setShowAddPlugin(false)} />
-            ) : (
-              <Btn variant="outline" size="sm" icon={<Plus size={13} />} onClick={() => setShowAddPlugin(true)}>
-                Add Plugin
-              </Btn>
-            )}
-          </div>
         </div>
       )}
 
@@ -303,169 +269,108 @@ function ToggleSwitch({ enabled, onChange }: { enabled: boolean; onChange: (v: b
   )
 }
 
-// ── Skill card ────────────────────────────────────────────────────────────────
+// ── Extension row (unified skill / plugin) ──────────────────────────────────────
 
-interface SkillCardProps {
-  skill: Skill
-  onToggle: (enabled: boolean) => void
-  onRemove: () => void
-  onViewFile?: () => void
-  confirmingDelete: boolean
-  onConfirmDelete: () => void
-  onCancelDelete: () => void
+interface ExtRowProps {
+  icon?: string | null
+  name: string
+  subtitle?: string
+  enabled: boolean
+  onToggle: (v: boolean) => void
+  expanded: boolean
+  onToggleExpand: () => void
+  nameChips?: React.ReactNode   // inline badges next to the name (trigger, key status)
+  rowActions?: React.ReactNode  // primary actions in the collapsed row (Update, Configure)
+  children?: React.ReactNode    // expanded body (technical details + Remove)
 }
 
-function SkillCard({ skill, onToggle, onRemove, onViewFile, confirmingDelete, onConfirmDelete, onCancelDelete }: SkillCardProps) {
-  const [hovered, setHovered] = useState(false)
-  const icon = skill.emoji ?? null
-
+function ExtRow({ icon, name, subtitle, enabled, onToggle, expanded, onToggleExpand, nameChips, rowActions, children }: ExtRowProps) {
   return (
-    <div
-      className="flex flex-col p-4"
-      style={{
-        background: 'var(--bg-surface)',
-        border: `1px solid ${hovered ? 'var(--accent)' : 'var(--border)'}`,
-        borderRadius: 'var(--radius)', transition: 'border-color 0.15s',
-        opacity: skill.enabled ? 1 : 0.6,
-      }}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-    >
-      <div className="flex items-start gap-3 mb-2">
-        <div className="flex items-center justify-center shrink-0" style={{
-          width: 40, height: 40, borderRadius: 'var(--radius)',
-          background: 'color-mix(in srgb, var(--accent) 15%, var(--bg-elevated))',
-          fontSize: 20,
-        }}>
-          {icon ? icon : <Puzzle size={18} style={{ color: 'var(--accent)' }} />}
+    <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', opacity: enabled ? 1 : 0.72 }}>
+      <div className="flex items-center gap-3 px-3 py-2.5">
+        <button
+          onClick={onToggleExpand}
+          className="flex items-center gap-3 flex-1 min-w-0 text-left"
+          style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+        >
+          <div className="flex items-center justify-center shrink-0" style={{
+            width: 30, height: 30, borderRadius: 'var(--radius)',
+            background: 'color-mix(in srgb, var(--accent) 13%, var(--bg-elevated))', fontSize: 16,
+          }}>
+            {icon ? icon : <Puzzle size={15} style={{ color: 'var(--accent)' }} />}
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="font-medium text-sm truncate" style={{ color: 'var(--text-primary)' }}>{name}</span>
+              {nameChips}
+            </div>
+            {subtitle && <p className="text-xs mt-0.5 truncate" style={{ color: 'var(--text-secondary)' }}>{subtitle}</p>}
+          </div>
+        </button>
+        <div className="flex items-center gap-1.5 shrink-0">
+          {rowActions}
+          <ToggleSwitch enabled={enabled} onChange={onToggle} />
+          <button
+            onClick={onToggleExpand}
+            title={expanded ? 'Collapse' : 'Details'}
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)', display: 'flex', padding: 2 }}
+          >
+            <ChevronRight size={14} style={{ transition: 'transform 0.15s', transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)' }} />
+          </button>
         </div>
-        <div className="flex-1 min-w-0">
-          <p className="font-semibold text-sm truncate" style={{ color: 'var(--text-primary)' }}>
-            {skill.name ?? skill.id}
-          </p>
-          {skill.name && skill.name !== skill.id && (
-            <p className="text-xs font-mono truncate" style={{ color: 'var(--text-secondary)' }}>{skill.id}</p>
-          )}
-          {skill.trigger && (
-            <p className="font-mono text-xs mt-0.5 font-semibold" style={{ color: 'var(--accent)' }}>{skill.trigger}</p>
-          )}
-        </div>
-        <ToggleSwitch enabled={skill.enabled} onChange={onToggle} />
       </div>
-
-      {skill.description && (
-        <p className="text-xs mb-3 line-clamp-3" style={{ color: 'var(--text-secondary)', lineHeight: 1.5 }}>
-          {skill.description}
-        </p>
-      )}
-
-      {skill.source && (
-        <p className="text-xs mb-2" style={{ color: 'var(--text-secondary)', opacity: 0.6 }}>
-          {skill.bundled ? 'Built-in' : skill.source}
-        </p>
-      )}
-
-      {confirmingDelete ? (
-        <div className="flex gap-2 mt-auto">
-          <Btn size="sm" variant="danger" onClick={onConfirmDelete} style={{ flex: 1 }}>Delete</Btn>
-          <Btn size="sm" variant="outline" onClick={onCancelDelete} style={{ flex: 1 }}>Cancel</Btn>
-        </div>
-      ) : (
-        <div className="flex items-center justify-end gap-1 mt-auto">
-          {onViewFile && (
-            <Btn size="sm" variant="ghost" icon={<FileText size={12} />} onClick={onViewFile} title="View skill file" />
-          )}
-          <Btn size="sm" variant="ghost" icon={<Trash2 size={12} />} onClick={onRemove} style={{ color: 'var(--danger)' }} />
+      {expanded && (
+        <div className="px-3 pb-3 pt-1" style={{ borderTop: '1px solid var(--border)' }}>
+          {children}
         </div>
       )}
     </div>
   )
 }
 
-// ── Skill list row ────────────────────────────────────────────────────────────
-
-function SkillRow({ skill, onToggle, onRemove, onViewFile, confirmingDelete, onConfirmDelete, onCancelDelete }: SkillCardProps) {
-  const [expanded, setExpanded] = useState(false)
-  const icon = skill.emoji ?? null
-
+// A titled group of rows; hides itself when empty. `tone="warning"` for "Needs setup".
+function Group({ label, count, tone, children }: { label: string; count: number; tone?: 'warning'; children: React.ReactNode }) {
+  if (!count) return null
   return (
-    <div style={{
-      background: 'var(--bg-surface)', border: '1px solid var(--border)',
-      borderRadius: 'var(--radius)', opacity: skill.enabled ? 1 : 0.6,
-    }}>
-      <div
-        className="flex items-center gap-3 px-3 py-2.5 cursor-pointer"
-        onClick={() => setExpanded(v => !v)}
-      >
-        <span style={{ fontSize: 16, lineHeight: 1, width: 20, textAlign: 'center', flexShrink: 0 }}>
-          {icon ?? <Puzzle size={14} style={{ color: 'var(--accent)' }} />}
-        </span>
-
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <p className="font-medium text-sm" style={{ color: 'var(--text-primary)' }}>
-              {skill.name ?? skill.id}
-            </p>
-            {skill.trigger && (
-              <span className="font-mono text-xs px-1.5 py-0.5 rounded" style={{
-                background: 'color-mix(in srgb, var(--accent) 12%, transparent)',
-                color: 'var(--accent)', fontSize: 10
-              }}>
-                {skill.trigger}
-              </span>
-            )}
-            {skill.source && (
-              <span className="text-xs" style={{ color: 'var(--text-secondary)', opacity: 0.5 }}>
-                {skill.bundled ? 'built-in' : skill.source}
-              </span>
-            )}
-          </div>
-          {skill.description && (
-            <p className="text-xs mt-0.5 truncate" style={{ color: 'var(--text-secondary)' }}>
-              {skill.description}
-            </p>
-          )}
-        </div>
-
-        <div className="flex items-center gap-2 shrink-0">
-          <ChevronRight
-            size={13}
-            style={{
-              color: 'var(--text-secondary)', transition: 'transform 0.15s',
-              transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)'
-            }}
-          />
-          <ToggleSwitch enabled={skill.enabled} onChange={onToggle} />
-        </div>
+    <div className="flex flex-col gap-1.5">
+      <div className="flex items-center gap-2 px-1" style={{ color: tone === 'warning' ? 'var(--warning)' : 'var(--text-secondary)' }}>
+        <span className="text-xs font-semibold uppercase" style={{ letterSpacing: '0.06em' }}>{label}</span>
+        <span className="text-xs" style={{ opacity: 0.6 }}>{count}</span>
       </div>
+      {children}
+    </div>
+  )
+}
 
-      {expanded && (
-        <div className="px-3 pb-3 pt-1" style={{ borderTop: '1px solid var(--border)' }}>
-          {skill.description && (
-            <p className="text-xs mb-2" style={{ color: 'var(--text-secondary)', lineHeight: 1.6 }}>
-              {skill.description}
-            </p>
-          )}
-          {skill.filePath && (
-            <p className="text-xs font-mono truncate mb-3" style={{ color: 'var(--text-secondary)', opacity: 0.6 }} title={skill.filePath}>
-              {skill.filePath}
-            </p>
-          )}
-          {confirmingDelete ? (
-            <div className="flex gap-2">
-              <Btn size="sm" variant="danger" onClick={onConfirmDelete} style={{ flex: 1 }}>Delete</Btn>
-              <Btn size="sm" variant="outline" onClick={onCancelDelete} style={{ flex: 1 }}>Cancel</Btn>
-            </div>
-          ) : (
-            <div className="flex items-center gap-2">
-              {onViewFile && (
-                <Btn size="sm" variant="outline" icon={<FileText size={12} />} onClick={onViewFile}>View file</Btn>
-              )}
-              <Btn size="sm" variant="ghost" icon={<Trash2 size={12} />} onClick={onRemove} style={{ color: 'var(--danger)' }} />
-            </div>
-          )}
+function TriggerChip({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="font-mono shrink-0" style={{ fontSize: 10, background: 'color-mix(in srgb, var(--accent) 12%, transparent)', color: 'var(--accent)', padding: '1px 6px', borderRadius: 999 }}>
+      {children}
+    </span>
+  )
+}
+
+// The technical details, tucked into the expanded row: id / source / file / path.
+function ExtMeta({ items }: { items: ({ k: string; v: string } | null)[] }) {
+  const rows = items.filter(Boolean) as { k: string; v: string }[]
+  if (!rows.length) return null
+  return (
+    <div className="flex flex-col gap-1">
+      {rows.map(r => (
+        <div key={r.k} className="flex gap-2 text-xs" style={{ color: 'var(--text-secondary)' }}>
+          <span style={{ width: 52, flexShrink: 0, opacity: 0.55 }}>{r.k}</span>
+          <span className="font-mono truncate" title={r.v}>{r.v}</span>
         </div>
-      )}
+      ))}
+    </div>
+  )
+}
+
+function EmptyState({ label }: { label: string }) {
+  return (
+    <div className="flex flex-col items-center justify-center flex-1 gap-3 py-10" style={{ color: 'var(--text-secondary)' }}>
+      <Puzzle size={36} style={{ opacity: 0.3 }} />
+      <p className="text-sm">{label}</p>
     </div>
   )
 }
@@ -553,20 +458,6 @@ function KeyStatusBadge({ status }: { status?: PluginKeyStatus }) {
   return null
 }
 
-// ── Plugin card ───────────────────────────────────────────────────────────────
-
-interface PluginCardProps {
-  plugin: Plugin
-  onToggle: (enabled: boolean) => void
-  onConfigure: () => void
-  onRemove: () => void
-  confirmingDelete: boolean
-  onConfirmDelete: () => void
-  onCancelDelete: () => void
-  updateInfo?: { latest: string; updating: boolean }
-  onUpdate?: () => void
-}
-
 // A small "→ vX.Y.Z" update pill + button, shown when a newer version is available.
 function UpdateButton({ updateInfo, onUpdate }: { updateInfo?: { latest: string; updating: boolean }; onUpdate?: () => void }) {
   if (!updateInfo || !onUpdate) return null
@@ -579,166 +470,6 @@ function UpdateButton({ updateInfo, onUpdate }: { updateInfo?: { latest: string;
   )
 }
 
-function PluginCard({ plugin, onToggle, onConfigure, onRemove, confirmingDelete, onConfirmDelete, onCancelDelete, updateInfo, onUpdate }: PluginCardProps) {
-  const [hovered, setHovered] = useState(false)
-
-  return (
-    <div
-      className="flex flex-col p-4"
-      style={{
-        background: 'var(--bg-surface)',
-        border: `1px solid ${hovered ? 'var(--accent)' : 'var(--border)'}`,
-        borderRadius: 'var(--radius)', transition: 'border-color 0.15s',
-        opacity: plugin.enabled ? 1 : 0.6,
-      }}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-    >
-      <div className="flex items-start gap-3 mb-2">
-        <div className="flex items-center justify-center shrink-0" style={{
-          width: 40, height: 40, borderRadius: 'var(--radius)',
-          background: 'color-mix(in srgb, var(--accent) 15%, var(--bg-elevated))',
-        }}>
-          <Puzzle size={18} style={{ color: 'var(--accent)' }} />
-        </div>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-1.5">
-            <p className="font-semibold text-sm truncate" style={{ color: 'var(--text-primary)' }}>
-              {plugin.name ?? plugin.id}
-            </p>
-            <KeyStatusBadge status={plugin.keyStatus} />
-          </div>
-          {plugin.name && plugin.name !== plugin.id && (
-            <p className="text-xs font-mono truncate" style={{ color: 'var(--text-secondary)' }}>{plugin.id}</p>
-          )}
-          {plugin.path && (
-            <p className="text-xs font-mono truncate mt-0.5" title={plugin.path} style={{ color: 'var(--text-secondary)', opacity: 0.7 }}>
-              {plugin.path}
-            </p>
-          )}
-        </div>
-        <ToggleSwitch enabled={plugin.enabled} onChange={onToggle} />
-      </div>
-
-      {plugin.description && (
-        <p className="text-xs mb-3 line-clamp-3" style={{ color: 'var(--text-secondary)', lineHeight: 1.5 }}>
-          {plugin.description}
-        </p>
-      )}
-
-      {(plugin.origin || plugin.version) && (
-        <p className="text-xs mb-2" style={{ color: 'var(--text-secondary)', opacity: 0.6 }}>
-          {[plugin.origin, plugin.version].filter(Boolean).join(' · ')}
-        </p>
-      )}
-
-      {confirmingDelete ? (
-        <div className="flex gap-2 mt-auto">
-          <Btn size="sm" variant="danger" onClick={onConfirmDelete} style={{ flex: 1 }}>Delete</Btn>
-          <Btn size="sm" variant="outline" onClick={onCancelDelete} style={{ flex: 1 }}>Cancel</Btn>
-        </div>
-      ) : (
-        <div className="flex justify-end items-center gap-1 mt-auto">
-          <UpdateButton updateInfo={updateInfo} onUpdate={onUpdate} />
-          <Btn size="sm" variant="ghost" icon={<SlidersHorizontal size={12} />} onClick={onConfigure}>Configure</Btn>
-          {!plugin.discovered && (
-            <Btn size="sm" variant="ghost" icon={<Trash2 size={12} />} onClick={onRemove} style={{ color: 'var(--danger)' }} />
-          )}
-        </div>
-      )}
-    </div>
-  )
-}
-
-// ── Plugin list row ───────────────────────────────────────────────────────────
-
-function PluginRow({ plugin, onToggle, onConfigure, onRemove, confirmingDelete, onConfirmDelete, onCancelDelete, updateInfo, onUpdate }: PluginCardProps) {
-  const [expanded, setExpanded] = useState(false)
-
-  return (
-    <div style={{
-      background: 'var(--bg-surface)', border: '1px solid var(--border)',
-      borderRadius: 'var(--radius)', opacity: plugin.enabled ? 1 : 0.6,
-    }}>
-      <div
-        className="flex items-center gap-3 px-3 py-2.5 cursor-pointer"
-        onClick={() => setExpanded(v => !v)}
-      >
-        <div className="flex items-center justify-center shrink-0" style={{
-          width: 24, height: 24, borderRadius: 'var(--radius)',
-          background: 'color-mix(in srgb, var(--accent) 15%, var(--bg-elevated))',
-        }}>
-          <Puzzle size={13} style={{ color: 'var(--accent)' }} />
-        </div>
-
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <p className="font-medium text-sm" style={{ color: 'var(--text-primary)' }}>
-              {plugin.name ?? plugin.id}
-            </p>
-            <KeyStatusBadge status={plugin.keyStatus} />
-            {plugin.origin && (
-              <span className="text-xs" style={{ color: 'var(--text-secondary)', opacity: 0.5 }}>
-                {plugin.origin}{plugin.version ? ` · ${plugin.version}` : ''}
-              </span>
-            )}
-            {updateInfo && (
-              <span className="text-xs px-1.5 py-0.5" title={`Update available: v${updateInfo.latest}`}
-                style={{ color: 'var(--accent)', background: 'color-mix(in srgb, var(--accent) 14%, transparent)', borderRadius: 999 }}>
-                → v{updateInfo.latest}
-              </span>
-            )}
-          </div>
-          {plugin.description && (
-            <p className="text-xs mt-0.5 truncate" style={{ color: 'var(--text-secondary)' }}>
-              {plugin.description}
-            </p>
-          )}
-        </div>
-
-        <div className="flex items-center gap-2 shrink-0">
-          <ChevronRight
-            size={13}
-            style={{
-              color: 'var(--text-secondary)', transition: 'transform 0.15s',
-              transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)'
-            }}
-          />
-          <ToggleSwitch enabled={plugin.enabled} onChange={onToggle} />
-        </div>
-      </div>
-
-      {expanded && (
-        <div className="px-3 pb-3 pt-1" style={{ borderTop: '1px solid var(--border)' }}>
-          {plugin.description && (
-            <p className="text-xs mb-2" style={{ color: 'var(--text-secondary)', lineHeight: 1.6 }}>
-              {plugin.description}
-            </p>
-          )}
-          {plugin.path && (
-            <p className="text-xs font-mono truncate mb-3" style={{ color: 'var(--text-secondary)', opacity: 0.6 }} title={plugin.path}>
-              {plugin.path}
-            </p>
-          )}
-          {confirmingDelete ? (
-            <div className="flex gap-2">
-              <Btn size="sm" variant="danger" onClick={onConfirmDelete} style={{ flex: 1 }}>Delete</Btn>
-              <Btn size="sm" variant="outline" onClick={onCancelDelete} style={{ flex: 1 }}>Cancel</Btn>
-            </div>
-          ) : (
-            <div className="flex items-center gap-1">
-              <UpdateButton updateInfo={updateInfo} onUpdate={onUpdate} />
-              <Btn size="sm" variant="ghost" icon={<SlidersHorizontal size={12} />} onClick={onConfigure}>Configure</Btn>
-              {!plugin.discovered && (
-                <Btn size="sm" variant="ghost" icon={<Trash2 size={12} />} onClick={onRemove} style={{ color: 'var(--danger)' }} />
-              )}
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  )
-}
 
 // ── Add Skill form ────────────────────────────────────────────────────────────
 
@@ -811,6 +542,92 @@ function FormField({ label, children }: { label: string; children: React.ReactNo
         {label.toUpperCase()}
       </label>
       {children}
+    </div>
+  )
+}
+
+// Status + reinstall for the app-native agent skills (process-builder, teams-blueprint).
+// These are installed automatically on connect; this surfaces their status and a manual
+// reinstall. Lives at the top of the Skills tab.
+function AppSkillsCard({ gatewayUrl, connected }: { gatewayUrl?: string; connected: boolean }) {
+  const { results, running, run } = useSkillsStore()
+  const openHelp = useHelpStore(s => s.openHelp)
+
+  // Remote skill uploads are gated by skills.install.allowUploadedArchives.
+  const uploadBlocked = results.some(r =>
+    r.status === 'error' && /allowUploadedArchives|uploaded skill archive/i.test(r.error ?? '')
+  )
+
+  return (
+    <SkillsCardShell title="App Skills">
+      <div className="space-y-2.5">
+        <p className="text-xs" style={{ color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+          Agent skills that teach models to build JoaxClaw teams &amp; processes. Installed automatically on connect.
+        </p>
+
+        <div className="space-y-1.5">
+          {results.length === 0 && (
+            <p className="text-xs" style={{ color: 'var(--text-secondary)', opacity: 0.7 }}>
+              {connected ? 'Not installed yet.' : 'Connect to install.'}
+            </p>
+          )}
+          {results.map(r => (
+            <div key={r.slug} className="flex items-start gap-2 text-xs">
+              {r.status === 'error'
+                ? <XCircle size={12} style={{ color: 'var(--warning)', flexShrink: 0, marginTop: 1 }} />
+                : <CheckCircle2 size={12} style={{ color: r.status === 'installed' ? 'var(--success)' : 'var(--text-secondary)', flexShrink: 0, marginTop: 1 }} />}
+              <div className="min-w-0">
+                <span className="font-mono" style={{ color: 'var(--text-primary)' }}>{r.slug}</span>
+                <span style={{ color: 'var(--text-secondary)' }}> — {r.status}</span>
+                {r.error && (
+                  <p style={{ color: 'var(--warning)', opacity: 0.9, marginTop: 1, wordBreak: 'break-word' }}>{r.error}</p>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {uploadBlocked && (
+          <button
+            onClick={() => openHelp('gateways')}
+            className="flex items-center gap-2 w-full px-2.5 py-2 rounded text-left"
+            style={{
+              background: 'color-mix(in srgb, var(--warning) 8%, var(--bg-elevated))',
+              border: '1px solid color-mix(in srgb, var(--warning) 30%, transparent)',
+              cursor: 'pointer',
+            }}
+          >
+            <HelpCircle size={13} style={{ color: 'var(--warning)', flexShrink: 0 }} />
+            <span className="text-xs flex-1" style={{ color: 'var(--text-primary)' }}>
+              Remote upload disabled — enable <code style={{ fontFamily: 'monospace' }}>skills.install.allowUploadedArchives</code>
+            </span>
+            <span className="text-xs" style={{ color: 'var(--accent)' }}>Help</span>
+          </button>
+        )}
+
+        <Btn
+          variant="outline"
+          size="sm"
+          className="w-full"
+          icon={<RefreshCw size={12} />}
+          loading={running}
+          disabled={!connected}
+          onClick={() => run(gatewayUrl, true)}
+        >
+          Reinstall
+        </Btn>
+      </div>
+    </SkillsCardShell>
+  )
+}
+
+function SkillsCardShell({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', overflow: 'hidden' }}>
+      <div className="px-3 py-2.5 text-xs font-semibold" style={{ borderBottom: '1px solid var(--border)', color: 'var(--text-secondary)', background: 'var(--bg-elevated)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+        {title}
+      </div>
+      <div className="p-3">{children}</div>
     </div>
   )
 }

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { RotateCcw, Square, CheckCircle2, XCircle, AlertCircle, RefreshCw, Eye, EyeOff, Server, Plug, Cpu, Sparkles, MessageSquare, HelpCircle, MonitorSmartphone, ArrowUpCircle, ClipboardList } from 'lucide-react'
+import { RotateCcw, Square, CheckCircle2, XCircle, AlertCircle, RefreshCw, Eye, EyeOff, Server, Plug, Cpu, MessageSquare, MonitorSmartphone, ArrowUpCircle, ClipboardList, Puzzle, Boxes } from 'lucide-react'
 import Editor from '@monaco-editor/react'
 import { useConnectionStore, useIsRemoteGateway } from '../../store/connection'
 import { useMetricsStore } from '../../store/metrics'
@@ -8,12 +8,12 @@ import { Input } from '../ui/Input'
 import { formatBytes } from '../../lib/ollama'
 import { gatewayClient } from '../../lib/gateway'
 import { gatewayHost } from '../../lib/ollamaHealth'
-import { useHelpStore } from '../../store/help'
-import { useSkillsStore } from '../../store/skills'
 import { ChannelsPanel } from './ChannelsPanel'
 import { DevicesPanel } from './DevicesPanel'
 import { LocalEnginesCard } from './LocalEnginesCard'
 import { SessionsView } from '../sessions/SessionsView'
+import { ExtensionsView } from '../extensions/ExtensionsView'
+import { ModelsView } from '../models/ModelsView'
 import { buildGatewayUpdatePrompt } from '../../lib/gatewayUpdate'
 import { useGatewayUpdateStore } from '../../store/gatewayUpdate'
 import { sendViaAgent } from '../../lib/agentPrompt'
@@ -22,10 +22,13 @@ interface ConfigSnapshot { hash?: string; config?: Record<string, unknown>; pars
 
 type GwStatus = { running: boolean; pid?: number; uptime?: string }
 
-type SettingsTab = 'connection' | 'gateway' | 'sessions' | 'devices' | 'channels' | 'engines' | 'skills'
+type SettingsTab = 'connection' | 'gateway' | 'sessions' | 'devices' | 'channels' | 'engines' | 'models' | 'extensions'
 // Remembered across remounts (e.g. when an auto-reconnect briefly swaps the view
 // out) so the user returns to the tab they were on — notably Channels.
 let lastSettingsTab: SettingsTab = 'connection'
+// Preselect a sub-tab before navigating to the Settings/Gateway view (e.g. a deep
+// link from Obsidian's "manage plugin" → Extensions). Read by the next mount.
+export function focusGatewayTab(tab: SettingsTab) { lastSettingsTab = tab }
 const SETTINGS_TABS: { id: SettingsTab; label: string; icon: React.ReactNode }[] = [
   { id: 'connection', label: 'Connection', icon: <Plug size={15} /> },
   { id: 'gateway',    label: 'Gateway',    icon: <Server size={15} /> },
@@ -33,7 +36,8 @@ const SETTINGS_TABS: { id: SettingsTab; label: string; icon: React.ReactNode }[]
   { id: 'devices',    label: 'Devices',    icon: <MonitorSmartphone size={15} /> },
   { id: 'channels',   label: 'Channels',   icon: <MessageSquare size={15} /> },
   { id: 'engines',    label: 'Local LLM',  icon: <Cpu size={15} /> },
-  { id: 'skills',     label: 'Skills',     icon: <Sparkles size={15} /> },
+  { id: 'models',     label: 'Models',     icon: <Boxes size={15} /> },
+  { id: 'extensions', label: 'Extensions', icon: <Puzzle size={15} /> },
 ]
 
 export function GatewayView({ onOpenChat }: { onOpenChat?: () => void } = {}) {
@@ -430,11 +434,14 @@ export function GatewayView({ onOpenChat }: { onOpenChat?: () => void } = {}) {
           </SettingsScroll>
         )}
 
-        {/* ── Skills ── */}
-        {tab === 'skills' && (
-          <SettingsScroll title="Skills">
-            <AppSkillsCard gatewayUrl={connection?.url} connected={status === 'connected'} />
-          </SettingsScroll>
+        {/* ── Models (providers + usage) ── */}
+        {tab === 'models' && (
+          <ModelsView />
+        )}
+
+        {/* ── Extensions (Skills + Plugins) ── */}
+        {tab === 'extensions' && (
+          <ExtensionsView onOpenChat={() => onOpenChat?.()} />
         )}
       </div>
     </div>
@@ -450,80 +457,6 @@ function SettingsScroll({ title, children }: { title: string; children: React.Re
         {children}
       </div>
     </div>
-  )
-}
-
-
-// Status + reinstall for the app-native agent skills (process-builder, teams-blueprint).
-function AppSkillsCard({ gatewayUrl, connected }: { gatewayUrl?: string; connected: boolean }) {
-  const { results, running, run } = useSkillsStore()
-  const openHelp = useHelpStore(s => s.openHelp)
-
-  // Remote skill uploads are gated by skills.install.allowUploadedArchives.
-  const uploadBlocked = results.some(r =>
-    r.status === 'error' && /allowUploadedArchives|uploaded skill archive/i.test(r.error ?? '')
-  )
-
-  return (
-    <Card title="App Skills">
-      <div className="space-y-2.5">
-        <p className="text-xs" style={{ color: 'var(--text-secondary)', lineHeight: 1.5 }}>
-          Agent skills that teach models to build JoaxClaw teams &amp; processes. Installed automatically on connect.
-        </p>
-
-        <div className="space-y-1.5">
-          {results.length === 0 && (
-            <p className="text-xs" style={{ color: 'var(--text-secondary)', opacity: 0.7 }}>
-              {connected ? 'Not installed yet.' : 'Connect to install.'}
-            </p>
-          )}
-          {results.map(r => (
-            <div key={r.slug} className="flex items-start gap-2 text-xs">
-              {r.status === 'error'
-                ? <XCircle size={12} style={{ color: 'var(--warning)', flexShrink: 0, marginTop: 1 }} />
-                : <CheckCircle2 size={12} style={{ color: r.status === 'installed' ? 'var(--success)' : 'var(--text-secondary)', flexShrink: 0, marginTop: 1 }} />}
-              <div className="min-w-0">
-                <span className="font-mono" style={{ color: 'var(--text-primary)' }}>{r.slug}</span>
-                <span style={{ color: 'var(--text-secondary)' }}> — {r.status}</span>
-                {r.error && (
-                  <p style={{ color: 'var(--warning)', opacity: 0.9, marginTop: 1, wordBreak: 'break-word' }}>{r.error}</p>
-                )}
-              </div>
-            </div>
-          ))}
-        </div>
-
-        {uploadBlocked && (
-          <button
-            onClick={() => openHelp('gateways')}
-            className="flex items-center gap-2 w-full px-2.5 py-2 rounded text-left"
-            style={{
-              background: 'color-mix(in srgb, var(--warning) 8%, var(--bg-elevated))',
-              border: '1px solid color-mix(in srgb, var(--warning) 30%, transparent)',
-              cursor: 'pointer',
-            }}
-          >
-            <HelpCircle size={13} style={{ color: 'var(--warning)', flexShrink: 0 }} />
-            <span className="text-xs flex-1" style={{ color: 'var(--text-primary)' }}>
-              Remote upload disabled — enable <code style={{ fontFamily: 'monospace' }}>skills.install.allowUploadedArchives</code>
-            </span>
-            <span className="text-xs" style={{ color: 'var(--accent)' }}>Help</span>
-          </button>
-        )}
-
-        <Btn
-          variant="outline"
-          size="sm"
-          className="w-full"
-          icon={<RefreshCw size={12} />}
-          loading={running}
-          disabled={!connected}
-          onClick={() => run(gatewayUrl, true)}
-        >
-          Reinstall
-        </Btn>
-      </div>
-    </Card>
   )
 }
 
