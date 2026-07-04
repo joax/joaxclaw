@@ -60,7 +60,7 @@ function buildTrayMenu(): Menu {
     {
       label: agents > 0 ? `🤖  ${plural(agents, 'agent')} running` : '🤖  No agents running',
       enabled: agents > 0,
-      click: () => { showMainWindow(); mainWindow?.webContents.send('app:navigate', 'sessions') },
+      click: () => { showMainWindow(); mainWindow?.webContents.send('app:navigate', 'chat') },
     },
     {
       label: teams > 0 ? `👥  ${plural(teams, 'team')} running` : '👥  No teams running',

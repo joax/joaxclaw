@@ -5,7 +5,7 @@ contextBridge.exposeInMainWorld('api', {
   // App info
   app: {
     version: () => ipcRenderer.invoke('app:version'),
-    // Tray menu asked to jump to a section (e.g. 'sessions', 'teams').
+    // Tray menu asked to jump to a section (e.g. 'chat', 'teams').
     onNavigate: (cb: (section: string) => void) => {
       const listener = (_: Electron.IpcRendererEvent, section: string) => cb(section)
       ipcRenderer.on('app:navigate', listener)
