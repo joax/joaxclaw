@@ -5,17 +5,15 @@ import { TitleBar } from './components/layout/TitleBar'
 import { ChatView } from './components/chat/ChatView'
 import { TalkView } from './components/talk/TalkView'
 import { AgentsView } from './components/agents/AgentsView'
-import { GatewayView } from './components/gateway/GatewayView'
+import { GatewayView, focusGatewayTab } from './components/gateway/GatewayView'
 import { SettingsView } from './components/settings/SettingsView'
 import { ThemesView } from './components/theme/ThemesView'
 import { ThemeBackground } from './components/theme/ThemeBackground'
-import { ExtensionsView } from './components/extensions/ExtensionsView'
 import { CronsView } from './components/crons/CronsView'
 import { ProcessesView } from './components/processes/ProcessesView'
 import { TeamsView } from './components/teams/TeamsView'
 import { ObsidianView } from './components/obsidian/ObsidianView'
 import { DashboardView } from './components/dashboard/DashboardView'
-import { ModelsView } from './components/models/ModelsView'
 import { SystemMonitorHUD } from './components/monitor/SystemMonitorHUD'
 import { ConnectScreen } from './components/layout/ConnectScreen'
 import { ReconnectOverlay } from './components/layout/ReconnectOverlay'
@@ -32,7 +30,7 @@ import { useSessionsStore } from './store/sessions'
 import { useTeamsStore } from './store/teams'
 import { useSkillsStore } from './store/skills'
 
-export type NavSection = 'dashboard' | 'chat' | 'talk' | 'agents' | 'processes' | 'teams' | 'extensions' | 'crons' | 'obsidian' | 'models' | 'gateway' | 'themes' | 'settings'
+export type NavSection = 'dashboard' | 'chat' | 'talk' | 'agents' | 'processes' | 'teams' | 'crons' | 'obsidian' | 'gateway' | 'themes' | 'settings'
 
 export default function App() {
   const [section, setSection] = useState<NavSection>('dashboard')
@@ -130,7 +128,7 @@ export default function App() {
   }, [status, connection?.url])
 
   const notConnected = status !== 'connected'
-  const ALL_GATEWAY_SECTIONS: NavSection[] = ['dashboard', 'chat', 'talk', 'agents', 'processes', 'teams', 'extensions', 'crons', 'obsidian', 'models', 'gateway']
+  const ALL_GATEWAY_SECTIONS: NavSection[] = ['dashboard', 'chat', 'talk', 'agents', 'processes', 'teams', 'crons', 'obsidian', 'gateway']
   const disabledSections: NavSection[] = notConnected
     // Keep Dashboard clickable while disconnected so it routes back to the connect
     // screen — otherwise, opening the Theme editor (the one non-gateway view) would
@@ -163,12 +161,10 @@ export default function App() {
               {section === 'chat' && <ChatView />}
               {section === 'talk' && <TalkView />}
               {section === 'agents' && <AgentsView onOpenChat={() => setSection('chat')} />}
-              {section === 'extensions' && <ExtensionsView onOpenChat={() => setSection('chat')} />}
               {section === 'processes' && <ProcessesView onOpenChat={() => setSection('chat')} />}
               {section === 'teams' && <TeamsView onOpenChat={() => setSection('chat')} />}
               {section === 'crons' && <CronsView onOpenChat={() => setSection('chat')} />}
-              {section === 'obsidian' && <ObsidianView onNavigateExtensions={() => setSection('extensions')} />}
-              {section === 'models' && <ModelsView />}
+              {section === 'obsidian' && <ObsidianView onNavigateExtensions={() => { focusGatewayTab('extensions'); setSection('gateway') }} />}
               {section === 'gateway' && <GatewayView onOpenChat={() => setSection('chat')} />}
               {section === 'themes' && <ThemesView />}
               {section === 'settings' && <SettingsView />}
