@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { Wifi, WifiOff, Heart, Cpu, MemoryStick, ChevronUp, Globe, HardDrive } from 'lucide-react'
 import { ModelIcon } from '../ui/ModelIcon'
-import { useConnectionStore, useIsRemoteGateway } from '../../store/connection'
+import { useConnectionStore, useIsRemoteGateway, useConnectionSignal } from '../../store/connection'
+import type { ConnectionSignal } from '../../lib/connectionSignal'
 import { useMetricsStore } from '../../store/metrics'
 import { useSettingsStore } from '../../store/settings'
 import { useSessionsStore } from '../../store/sessions'
@@ -13,6 +14,7 @@ import { formatBytes } from '../../lib/ollama'
 export function StatusBar() {
   const { status, lastHeartbeat, heartbeats, uptimeStart } = useConnectionStore()
   const remoteGateway = useIsRemoteGateway()
+  const signal = useConnectionSignal()
   const openHelp = useHelpStore(s => s.openHelp)
   const { metrics, ollamaModels, activeModel } = useMetricsStore()
   const { showGpu, showRam, showHeartbeat, showModelName, toggleMonitor, monitorVisible } = useSettingsStore()
@@ -111,6 +113,12 @@ export function StatusBar() {
             <span>{remoteGateway ? 'Remote' : 'Local'}</span>
           </button>
         )}
+        {status === 'connected' && (
+          <>
+            <span className="opacity-40" style={{ color: 'var(--text-secondary)' }}>·</span>
+            <SignalIndicator signal={signal} />
+          </>
+        )}
       </div>
 
       <Divider />
@@ -198,6 +206,46 @@ export function StatusBar() {
 
 function Divider() {
   return <span style={{ color: 'var(--border)', userSelect: 'none' }}>│</span>
+}
+
+// Wifi-style strength bars for the gateway connection. Color follows the rating;
+// the tooltip surfaces the underlying round-trip latency and any packet loss.
+function SignalIndicator({ signal }: { signal: ConnectionSignal }) {
+  const color =
+    signal.level === 'excellent' || signal.level === 'good' ? 'var(--success)'
+    : signal.level === 'fair' ? 'var(--warning)'
+    : signal.level === 'poor' ? 'var(--danger)'
+    : 'var(--text-secondary)'
+
+  const title = [
+    `Connection: ${signal.label}`,
+    signal.rtt !== null ? `${signal.rtt}ms round-trip` : signal.level === 'measuring' ? 'measuring…' : null,
+    signal.loss > 0 ? `${Math.round(signal.loss * 100)}% loss` : null,
+  ].filter(Boolean).join(' · ')
+
+  return (
+    <div className="flex items-center gap-1.5" title={title}>
+      <div className="flex items-end gap-px" style={{ height: 11 }}>
+        {[0, 1, 2, 3].map(i => (
+          <div
+            key={i}
+            style={{
+              width: 3,
+              height: 3 + i * 2.5,
+              borderRadius: 1,
+              background: i < signal.bars ? color : 'var(--border)',
+              opacity: i < signal.bars ? 1 : 0.4,
+            }}
+          />
+        ))}
+      </div>
+      {signal.rtt !== null && (
+        <span style={{ color, fontVariantNumeric: 'tabular-nums', fontFamily: 'monospace', minWidth: '5ch' }}>
+          {signal.rtt}ms
+        </span>
+      )}
+    </div>
+  )
 }
 
 function MiniMeter({ value, color }: { value: number; color: string }) {
