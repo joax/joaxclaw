@@ -238,6 +238,19 @@ export const useMemoryStore = create<MemoryState>()(
       },
 
       async test(providerId, config) {
+        // On a remote gateway the store lives on the host, so test THERE (via the plugin)
+        // — not from this client, which can't reach the host's localhost and would
+        // resolve env-var credentials from the wrong machine. memory.list doubles as the
+        // reachability + auth check.
+        if (isRemoteGatewayState()) {
+          try {
+            const res = await gatewayClient.request<{ items?: MemoryItem[] }>('memory.list', { providerId, config })
+            const n = res?.items?.length ?? 0
+            return { ok: true, info: { totalItems: n, note: `${n} item${n === 1 ? '' : 's'} on the gateway host` } }
+          } catch (e) {
+            return { ok: false, error: String(e) }
+          }
+        }
         const def = memoryProvider(providerId)
         if (!def?.adapter) return { ok: false, error: 'No adapter for this provider.' }
         return def.adapter.test(config)
