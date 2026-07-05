@@ -58,12 +58,18 @@ gateway and the backend live:
   writes no skills (they'd land on the client, not the host) — remote is P3.
 - **P2 — content viewer.** Provider-appropriate browsing + search (graph / list /
   pages), richer previews.
-- **P3 — remote + server-local, hardened.** A `joaxclaw-memory` gateway plugin that
-  (a) writes/manages the skill files **on the host** and (b) exposes
-  `memory.list/search/read` RPCs so the app can browse server-local content over the
-  WS regardless of where the gateway runs. This is also where credential handling is
-  hardened (SecretRefs / MCP OAuth-scoped tokens instead of plaintext keys in
-  `SKILL.md`). See [the memory-backends research](#see-also).
+- **P3 — remote + server-local, hardened.** Built on the **existing `joaxclaw-fs`
+  plugin** (not a new one — one install/detection/maintenance path).
+  - **Slice 1 (done):** `memory.status` + `memory.skill.set/remove` on `joaxclaw-fs`
+    write/remove the SKILL.md **on the gateway host**, so enabling a connection on a
+    *remote* gateway actually reaches its agents. The app probes `memory.status`;
+    remote + plugin → full management UI, remote + no plugin → "Install via agent"
+    (same flow as Teams/Processes), local → unchanged. Needs `joaxclaw-fs ≥ 0.6.0`
+    on the host (the install-via-agent flow pulls it from npm).
+  - **Slice 2:** `memory.list/read` so the app browses server-local content over the
+    WS (today browsing is local-gateway-only; remote shows a "coming next" note).
+  - **Slice 3:** credential hardening — SecretRefs / scoped tokens instead of
+    plaintext keys in `SKILL.md`. See [the memory-backends research](#see-also).
 
 ## Known weakness we're deliberately deferring
 

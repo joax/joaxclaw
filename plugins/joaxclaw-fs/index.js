@@ -69,6 +69,11 @@ function isValidId(id) {
 function teamsDir() { return path.join(resolveStateDir(), 'teams') }
 function processesDir() { return path.join(resolveStateDir(), 'processes') }
 function runsDir() { return path.join(processesDir(), '.runs') }
+function skillsDir() { return path.join(resolveStateDir(), 'skills') }
+
+// Memory skills are written to <stateDir>/skills/<slug>/SKILL.md — the same directory
+// the gateway loads skills from. Slug is a kebab dir name (matches the app side).
+const SKILL_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,63}$/
 
 // ── engines.* host classification + guarded fetch ───────────────────────────────
 // engines.* lets the app probe local LLM engines that live on the GATEWAY host's
@@ -452,6 +457,41 @@ export default definePluginEntry({
         })
         await res.text()
         respond(true, { ok: res.ok, status: res.status })
+      } catch (err) { failed(respond, err) }
+    }, { scope: WRITE_SCOPE })
+
+    // ── memory.* : write/remove memory SKILL.md files on the gateway host ─────────
+    // Lets the desktop app manage memory-connection skills on a REMOTE gateway (the
+    // local ~/.openclaw is the wrong machine there). memory.status is a presence probe.
+    api.registerGatewayMethod('memory.status', async ({ respond }) => {
+      respond(true, { ok: true, feature: 'memory-skills' })
+    }, { scope: READ_SCOPE })
+
+    api.registerGatewayMethod('memory.skill.set', async ({ params, respond }) => {
+      const slug = params?.slug
+      const markdown = params?.markdown
+      if (typeof slug !== 'string' || !SKILL_SLUG_RE.test(slug)) {
+        return respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, `invalid skill slug ${JSON.stringify(slug)}`))
+      }
+      if (typeof markdown !== 'string' || !markdown.trim()) {
+        return respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, 'memory.skill.set requires markdown (non-empty string)'))
+      }
+      try {
+        const dir = path.join(skillsDir(), slug)
+        await fs.mkdir(dir, { recursive: true })
+        await fs.writeFile(path.join(dir, 'SKILL.md'), markdown, 'utf8')
+        respond(true, { ok: true, slug })
+      } catch (err) { failed(respond, err) }
+    }, { scope: WRITE_SCOPE })
+
+    api.registerGatewayMethod('memory.skill.remove', async ({ params, respond }) => {
+      const slug = params?.slug
+      if (typeof slug !== 'string' || !SKILL_SLUG_RE.test(slug)) {
+        return respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, `invalid skill slug ${JSON.stringify(slug)}`))
+      }
+      try {
+        await fs.rm(path.join(skillsDir(), slug), { recursive: true, force: true })
+        respond(true, { ok: true, slug })
       } catch (err) { failed(respond, err) }
     }, { scope: WRITE_SCOPE })
 

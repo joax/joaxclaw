@@ -4,10 +4,12 @@ import { persist } from 'zustand/middleware'
 import type { MemoryConnection, MemoryAccess, MemoryGraph, MemoryItem, MemoryConnInfo } from '../lib/memory/types'
 import { memoryProvider, MEMORY_PROVIDERS } from '../lib/memory/providers'
 import { isRemoteGatewayState } from './connection'
+import { gatewayClient } from '../lib/gateway'
 
 // Provider-neutral memory connections: Obsidian, Markdown folder, … Each connection
-// exposes a store to gateway agents via a generated SKILL.md (local-gateway path in P1)
-// and is browsable in the app through its provider adapter.
+// exposes a store to gateway agents via a generated SKILL.md. The skill is written where
+// the agents run: for a LOCAL gateway, the Electron bridge writes ~/.openclaw/skills;
+// for a REMOTE gateway, the joaxclaw-fs plugin's memory.skill.* RPC writes it on the host.
 
 type MemApi = {
   writeSkill: (slug: string, markdown: string) => Promise<{ ok: boolean; error?: string }>
@@ -15,25 +17,35 @@ type MemApi = {
 }
 const memApi = (): MemApi | undefined => (window as unknown as { api?: { memory?: MemApi } }).api?.memory
 
+// True once the connected remote gateway's joaxclaw-fs plugin is confirmed to expose
+// memory.* (via memory.status). Local gateways don't use it. Set by probePlugin().
+let remotePluginReady = false
+
+async function pushSkill(slug: string, markdown: string) {
+  if (isRemoteGatewayState()) await gatewayClient.request('memory.skill.set', { slug, markdown })
+  else await memApi()?.writeSkill(slug, markdown)
+}
+async function dropSkill(slug: string) {
+  if (isRemoteGatewayState()) await gatewayClient.request('memory.skill.remove', { slug })
+  else await memApi()?.removeSkill(slug)
+}
+
 // Rebuild every provider's agent skill from the current connections. A provider with no
 // enabled, non-off connection has its skill removed. Access is conservative: read-write
 // only when EVERY included connection is read-write (never advertise write we don't mean).
 function syncSkills(connections: MemoryConnection[]) {
-  const api = memApi()
-  if (!api) return
-  // P1 writes skills to the LOCAL ~/.openclaw. On a remote gateway that's the wrong
-  // machine, so never write there — the Memory tab shows a "local gateway only" notice
-  // instead, and remote support lands with the P3 gateway plugin (docs/memory-tab.md).
-  if (isRemoteGatewayState()) return
+  // Local needs the Electron bridge; remote needs the joaxclaw-fs memory plugin. If
+  // neither is available, do nothing (the UI shows the appropriate notice).
+  if (isRemoteGatewayState() ? !remotePluginReady : !memApi()) return
   for (const def of MEMORY_PROVIDERS) {
     const active = connections.filter(c => c.providerId === def.id && c.enabled && c.access !== 'off')
     if (active.length === 0) {
-      api.removeSkill(def.skillSlug).catch(() => { /* best-effort */ })
+      void dropSkill(def.skillSlug).catch(() => { /* best-effort */ })
       continue
     }
     const access: Exclude<MemoryAccess, 'off'> = active.every(c => c.access === 'read-write') ? 'read-write' : 'read-only'
     const spec = def.buildSkill(active.map(c => ({ name: c.name, config: c.config })), access)
-    api.writeSkill(spec.slug, spec.markdown).catch(() => { /* best-effort */ })
+    void pushSkill(spec.slug, spec.markdown).catch(() => { /* best-effort */ })
   }
 }
 
@@ -58,6 +70,12 @@ interface MemoryState {
   preview: { id: string; title: string; content: string } | null
   previewLoading: boolean
 
+  // Remote plugin readiness: null when the gateway is local (n/a), true/false when the
+  // gateway is remote (whether joaxclaw-fs exposes memory.*). Drives the Memory tab's
+  // "install the plugin" notice vs. the full management UI.
+  remoteReady: boolean | null
+
+  probePlugin: () => Promise<void>
   addConnection: (providerId: string, name: string, config: Record<string, string>, access: MemoryAccess) => void
   updateConnection: (id: string, patch: Partial<Pick<MemoryConnection, 'name' | 'config'>>) => void
   removeConnection: (id: string) => void
@@ -73,6 +91,11 @@ interface MemoryState {
 async function loadContent(get: () => MemoryState, set: (p: Partial<MemoryState>) => void, id: string) {
   const conn = get().connections.find(c => c.id === id)
   if (!conn) return
+  // Browsing runs the provider adapter from the CLIENT (HTTP fetch / local files). For a
+  // remote gateway that's the wrong machine for server-local stores, so we don't browse
+  // here — host-side browse (memory.list/read over the plugin) is Slice 2. Management
+  // (adding connections, agent access → skill install) still works remotely.
+  if (isRemoteGatewayState()) { set({ loading: false, graph: null, items: null, info: null, preview: null, error: null }); return }
   const def = memoryProvider(conn.providerId)
   if (!def?.adapter) { set({ error: 'This provider has no browser yet.', loading: false }); return }
   set({ loading: true, error: null, graph: null, items: null, info: null, preview: null, progress: 0 })
@@ -120,6 +143,19 @@ export const useMemoryStore = create<MemoryState>()(
       error: null,
       preview: null,
       previewLoading: false,
+      remoteReady: null,
+
+      async probePlugin() {
+        if (!isRemoteGatewayState()) { remotePluginReady = false; set({ remoteReady: null }); return }
+        try {
+          await gatewayClient.request('memory.status', {}, 8000)
+          remotePluginReady = true
+          set({ remoteReady: true })
+        } catch {
+          remotePluginReady = false
+          set({ remoteReady: false })
+        }
+      },
 
       addConnection(providerId, name, config, access) {
         const conn: MemoryConnection = { id: newId(), providerId, name: name.trim() || providerId, enabled: true, access, config }
