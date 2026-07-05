@@ -4,8 +4,14 @@ import type { ConnectionStatus, GatewayConnection } from '../lib/types'
 import { gatewayClient } from '../lib/gateway'
 import { gatewayHost, isLocalGateway } from '../lib/ollamaHealth'
 import { readLocalStore, patchLocalStore } from '../lib/localStore'
+import { connectionSignal, type ConnectionSignal, type PingSample } from '../lib/connectionSignal'
 
 interface HeartbeatEntry { time: number; ok: boolean }
+
+// How often we ping the gateway to sample round-trip latency. Frequent enough to
+// feel live in the status bar, but the ping is a cached-snapshot `health` call so
+// the cost is negligible.
+const PING_INTERVAL_MS = 10000
 
 // How many times we silently retry a dropped connection before giving up and
 // falling back to the manual connect screen. The gateway reloads (and briefly
@@ -20,6 +26,9 @@ interface ConnectionState {
   savedConnections: GatewayConnection[]
   heartbeats: HeartbeatEntry[]
   lastHeartbeat: number | null
+  // Recent round-trip latency samples, used to gauge connection strength.
+  pings: PingSample[]
+  lastRtt: number | null
   uptime: number
   uptimeStart: number | null
   // True while we are silently retrying a dropped connection (gateway reload).
@@ -52,6 +61,15 @@ export function isRemoteGatewayState(): boolean {
   return s.status === 'connected' && !isLocalGateway(gatewayHost(s.connection?.url))
 }
 
+// Current connection strength (latency + reliability) derived from recent pings.
+// Recompute in the component from `pings`/`status` rather than memoizing here so
+// the returned object identity doesn't churn the whole store's subscribers.
+export function useConnectionSignal(): ConnectionSignal {
+  const pings = useConnectionStore(s => s.pings)
+  const status = useConnectionStore(s => s.status)
+  return connectionSignal(pings, status)
+}
+
 // True when the connection holds the operator.admin scope — required for managing
 // other devices (approve/reject/remove, token rotate/revoke).
 export function useIsAdmin(): boolean {
@@ -67,6 +85,33 @@ function clearReconnect() {
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
 }
 
+// Latency-ping loop, only alive while connected (also a timer, not UI state).
+let pingTimer: ReturnType<typeof setInterval> | null = null
+
+function stopPingLoop() {
+  if (pingTimer) { clearInterval(pingTimer); pingTimer = null }
+}
+
+function startPingLoop() {
+  stopPingLoop()
+  const run = async () => {
+    if (!gatewayClient.connected) return
+    let sample: PingSample
+    try {
+      const rtt = await gatewayClient.ping()
+      sample = { time: Date.now(), rtt, ok: true }
+    } catch {
+      sample = { time: Date.now(), rtt: 0, ok: false }
+    }
+    useConnectionStore.setState(s => ({
+      lastRtt: sample.ok ? sample.rtt : s.lastRtt,
+      pings: [...s.pings.slice(-29), sample],
+    }))
+  }
+  void run() // sample immediately so the indicator populates on connect
+  pingTimer = setInterval(run, PING_INTERVAL_MS)
+}
+
 export const useConnectionStore = create<ConnectionState>()(
   persist(
     (set, get) => ({
@@ -76,6 +121,8 @@ export const useConnectionStore = create<ConnectionState>()(
       savedConnections: [],
       heartbeats: [],
       lastHeartbeat: null,
+      pings: [],
+      lastRtt: null,
       uptime: 0,
       uptimeStart: null,
       reconnecting: false,
@@ -86,13 +133,15 @@ export const useConnectionStore = create<ConnectionState>()(
         intentionalDisconnect = false
         attempt = 0
         clearReconnect()
-        set({ status: 'connecting', connection: conn, heartbeats: [], lastHeartbeat: null, reconnecting: false, reconnectAttempt: 0 })
+        stopPingLoop()
+        set({ status: 'connecting', connection: conn, heartbeats: [], lastHeartbeat: null, pings: [], lastRtt: null, reconnecting: false, reconnectAttempt: 0 })
 
         gatewayClient.onStatusChange = (status, detail) => {
           if (status === 'connected') {
             attempt = 0
             clearReconnect()
             set({ status: 'connected', statusDetail: '', uptimeStart: Date.now(), reconnecting: false, reconnectAttempt: 0, grantedScopes: [...gatewayClient.grantedScopes] })
+            startPingLoop()
           } else if (status === 'connecting') {
             // Don't clobber the "reconnecting" banner with a plain connecting state.
             if (!get().reconnecting) set({ status: 'connecting', statusDetail: '' })
@@ -100,9 +149,11 @@ export const useConnectionStore = create<ConnectionState>()(
             // Bad token — looping would never succeed, so stop and surface it.
             intentionalDisconnect = true
             clearReconnect()
+            stopPingLoop()
             set({ status: 'error', statusDetail: detail ?? '', uptimeStart: null, uptime: 0, reconnecting: false, reconnectAttempt: 0 })
           } else {
             // Unexpected drop or transient error → auto-reconnect (gateway reload).
+            stopPingLoop()
             set({ status: 'disconnected', statusDetail: detail ?? '', uptimeStart: null, uptime: 0 })
             scheduleReconnect(get, set)
           }
@@ -128,13 +179,15 @@ export const useConnectionStore = create<ConnectionState>()(
       disconnect() {
         intentionalDisconnect = true
         clearReconnect()
+        stopPingLoop()
         gatewayClient.disconnect()
-        set({ status: 'disconnected', connection: null, uptimeStart: null, uptime: 0, reconnecting: false, reconnectAttempt: 0, grantedScopes: [] })
+        set({ status: 'disconnected', connection: null, uptimeStart: null, uptime: 0, pings: [], lastRtt: null, reconnecting: false, reconnectAttempt: 0, grantedScopes: [] })
       },
 
       cancelReconnect() {
         intentionalDisconnect = true
         clearReconnect()
+        stopPingLoop()
         gatewayClient.disconnect()
         set({ status: 'disconnected', statusDetail: '', reconnecting: false, reconnectAttempt: 0 })
       },

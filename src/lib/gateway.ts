@@ -215,6 +215,17 @@ export class GatewayClient {
     })
   }
 
+  // Measure round-trip latency to the gateway. Uses `health` with probe:false —
+  // a scope-free method (authorized for any connected client) that the gateway
+  // answers from its cached snapshot, so it's a cheap universal ping that works
+  // against a local OR remote gateway. Resolves with the round-trip time in ms;
+  // rejects (or times out) when the gateway can't be reached.
+  async ping(timeoutMs = 8000): Promise<number> {
+    const start = Date.now()
+    await this.request('health', { probe: false }, timeoutMs)
+    return Date.now() - start
+  }
+
   on(listener: Listener): () => void {
     this.listeners.push(listener)
     return () => { this.listeners = this.listeners.filter(l => l !== listener) }
