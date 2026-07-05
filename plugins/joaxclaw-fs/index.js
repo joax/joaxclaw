@@ -110,12 +110,43 @@ function obsHeaders(config) {
   const key = resolveSecret(config?.apiKey).trim().replace(/^Bearer\s+/i, '')
   return key ? { Authorization: `Bearer ${key}` } : {}
 }
+
+// The Obsidian Local REST API's HTTPS port (27124) serves a SELF-SIGNED cert, which
+// Node's fetch rejects ("fetch failed"). The desktop app trusts it via the OS cert
+// store; here we skip verification, but ONLY for a LOCAL host (loopback/.local/private
+// IPv4) over https — never for a public URL. Created lazily; degrades to plain fetch
+// if undici's Agent isn't importable.
+let _insecureAgent
+async function insecureAgent() {
+  if (_insecureAgent !== undefined) return _insecureAgent
+  try {
+    const { Agent } = await import('undici')
+    _insecureAgent = new Agent({ connect: { rejectUnauthorized: false } })
+  } catch { _insecureAgent = null }
+  return _insecureAgent
+}
+
+// Single entry point for every Obsidian request, so the self-signed-cert handling and
+// auth header live in one place. `suffix` is the path (+ query) after the base URL.
+async function obsFetch(config, suffix, extraHeaders = {}) {
+  const base = String(config?.url ?? '').replace(/\/$/, '')
+  const url = base + suffix
+  const opts = { headers: { ...obsHeaders(config), ...extraHeaders } }
+  try {
+    const u = new URL(url)
+    if (u.protocol === 'https:' && isLocalEngineHost(u.hostname)) {
+      const agent = await insecureAgent()
+      if (agent) opts.dispatcher = agent
+    }
+  } catch { /* malformed url → let fetch surface it */ }
+  return fetch(url, opts)
+}
+
 async function obsListAll(config, dirPath = '', depth = 0) {
   if (depth > 15) return []
-  const base = String(config?.url ?? '').replace(/\/$/, '')
   const enc = dirPath.split('/').filter(Boolean).map(encodeURIComponent).join('/') + (dirPath ? '/' : '')
   let res
-  try { res = await fetch(base + '/vault/' + enc, { headers: obsHeaders(config) }) } catch { return [] }
+  try { res = await obsFetch(config, '/vault/' + enc) } catch { return [] }
   if (!res.ok) return []
   const data = await res.json().catch(() => ({}))
   const files = []
@@ -139,9 +170,8 @@ async function obsList(config) {
     .sort((a, b) => a.title.localeCompare(b.title))
 }
 async function obsRead(config, id) {
-  const base = String(config?.url ?? '').replace(/\/$/, '')
   const enc = String(id).split('/').map(encodeURIComponent).join('/')
-  const res = await fetch(base + '/vault/' + enc, { headers: { ...obsHeaders(config), Accept: 'text/markdown' } })
+  const res = await obsFetch(config, '/vault/' + enc, { Accept: 'text/markdown' })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   return res.text()
 }
@@ -150,8 +180,7 @@ async function obsRead(config, id) {
 // works when the vault is server-local on a remote gateway.
 async function obsExcludePatterns(config) {
   try {
-    const base = String(config?.url ?? '').replace(/\/$/, '')
-    const res = await fetch(base + '/vault/.obsidian/app.json', { headers: obsHeaders(config) })
+    const res = await obsFetch(config, '/vault/.obsidian/app.json')
     if (!res.ok) return []
     const json = await res.json().catch(() => ({}))
     const raw = json.userIgnoreFilters
@@ -165,8 +194,7 @@ function obsExcluded(p, patterns) {
   return patterns.some(x => lower.includes(x.toLowerCase()))
 }
 async function obsGraph(config) {
-  const base = String(config?.url ?? '').replace(/\/$/, '')
-  const check = await fetch(base + '/vault/', { headers: obsHeaders(config) })
+  const check = await obsFetch(config, '/vault/')
   if (!check.ok) throw new Error(`Cannot list vault: HTTP ${check.status}`)
   const [allFiles, excludePatterns] = await Promise.all([obsListAll(config), obsExcludePatterns(config)])
   const mdFiles = allFiles.filter(f => f.endsWith('.md') && !f.endsWith('.excalidraw.md') && !obsExcluded(f, excludePatterns))
@@ -198,7 +226,7 @@ async function obsGraph(config) {
     await Promise.all(batch.map(async p => {
       try {
         const enc = p.split('/').map(encodeURIComponent).join('/')
-        const res = await fetch(base + '/vault/' + enc, { headers: { ...obsHeaders(config), Accept: 'text/markdown' } })
+        const res = await obsFetch(config, '/vault/' + enc, { Accept: 'text/markdown' })
         if (!res.ok) return
         const text = await res.text()
         const fmEnd = text.indexOf('\n---', 4)
