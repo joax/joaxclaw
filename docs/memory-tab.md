@@ -66,10 +66,10 @@ gateway and the backend live:
     remote + plugin → full management UI, remote + no plugin → "Install via agent"
     (same flow as Teams/Processes), local → unchanged. Needs `joaxclaw-fs ≥ 0.6.0`
     on the host (the install-via-agent flow pulls it from npm).
-  - **Slice 2 (done):** `memory.list/read` on `joaxclaw-fs` browse server-local
-    content over the WS. On a remote gateway every store browses as a notes list +
-    preview (the backlink graph stays a local-gateway richness). Needs
-    `joaxclaw-fs ≥ 0.7.0`.
+  - **Slice 2 (done):** `memory.list/read` (and `memory.graph`) on `joaxclaw-fs`
+    browse server-local content over the WS — notes list + preview for file stores,
+    and the Obsidian backlink graph built host-side. Needs `joaxclaw-fs ≥ 0.9.0` for
+    the graph (≥ 0.7.0 for the list).
   - **Slice 3 (done):** credential hardening. A secret field may be an env-var
     reference `env:VAR` instead of a literal; then the skill references `$VAR` and the
     plaintext key is kept out of `SKILL.md` (and out of localStorage). It's resolved

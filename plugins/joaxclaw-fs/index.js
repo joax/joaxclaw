@@ -146,6 +146,115 @@ async function obsRead(config, id) {
   return res.text()
 }
 
+// Obsidian backlink graph (ported from the app's client adapter) so the graph view
+// works when the vault is server-local on a remote gateway.
+async function obsExcludePatterns(config) {
+  try {
+    const base = String(config?.url ?? '').replace(/\/$/, '')
+    const res = await fetch(base + '/vault/.obsidian/app.json', { headers: obsHeaders(config) })
+    if (!res.ok) return []
+    const json = await res.json().catch(() => ({}))
+    const raw = json.userIgnoreFilters
+    if (Array.isArray(raw)) return raw.filter(s => typeof s === 'string' && s.length > 0)
+  } catch { /* best-effort */ }
+  return []
+}
+function obsExcluded(p, patterns) {
+  if (!patterns.length) return false
+  const lower = p.toLowerCase()
+  return patterns.some(x => lower.includes(x.toLowerCase()))
+}
+async function obsGraph(config) {
+  const base = String(config?.url ?? '').replace(/\/$/, '')
+  const check = await fetch(base + '/vault/', { headers: obsHeaders(config) })
+  if (!check.ok) throw new Error(`Cannot list vault: HTTP ${check.status}`)
+  const [allFiles, excludePatterns] = await Promise.all([obsListAll(config), obsExcludePatterns(config)])
+  const mdFiles = allFiles.filter(f => f.endsWith('.md') && !f.endsWith('.excalidraw.md') && !obsExcluded(f, excludePatterns))
+
+  const titleToId = new Map()
+  const pathToId = new Map()
+  const nodes = mdFiles.map(p => {
+    const parts = p.split('/')
+    const title = parts[parts.length - 1].replace(/\.md$/, '')
+    const folder = parts.length > 1 ? parts[0] : ''
+    const key = title.toLowerCase()
+    if (!titleToId.has(key)) titleToId.set(key, p)
+    pathToId.set(p.replace(/\.md$/i, '').toLowerCase(), p)
+    return { id: p, title, folder, linkCount: 0 }
+  })
+
+  const resolveLink = (raw) => {
+    let clean = raw.trim()
+    try { clean = decodeURIComponent(clean) } catch { /* keep */ }
+    clean = clean.replace(/^\.\//, '').replace(/\.md$/i, '').toLowerCase()
+    return pathToId.get(clean) ?? titleToId.get(clean.split('/').pop() ?? clean)
+  }
+
+  const BATCH = 25
+  const rawLinksByFile = new Map()
+  const aliasToPath = new Map()
+  for (let i = 0; i < mdFiles.length; i += BATCH) {
+    const batch = mdFiles.slice(i, i + BATCH)
+    await Promise.all(batch.map(async p => {
+      try {
+        const enc = p.split('/').map(encodeURIComponent).join('/')
+        const res = await fetch(base + '/vault/' + enc, { headers: { ...obsHeaders(config), Accept: 'text/markdown' } })
+        if (!res.ok) return
+        const text = await res.text()
+        const fmEnd = text.indexOf('\n---', 4)
+        if (text.startsWith('---\n') && fmEnd !== -1) {
+          const fm = text.slice(4, fmEnd)
+          const inline = fm.match(/^aliases:\s*\[([^\]]*)\]/m)
+          if (inline) {
+            for (const part of inline[1].split(',')) {
+              const a = part.trim().replace(/^["']|["']$/g, '').trim().toLowerCase()
+              if (a && !titleToId.has(a) && !aliasToPath.has(a)) aliasToPath.set(a, p)
+            }
+          } else {
+            const block = fm.match(/^aliases:\s*\n((?:[ \t]+-[^\n]*(?:\n|$))+)/m)
+            if (block) {
+              for (const line of block[1].split('\n')) {
+                const lm = line.match(/^[ \t]+-\s*(.+)/)
+                if (lm) {
+                  const a = lm[1].trim().replace(/^["']|["']$/g, '').trim().toLowerCase()
+                  if (a && !titleToId.has(a) && !aliasToPath.has(a)) aliasToPath.set(a, p)
+                }
+              }
+            }
+          }
+        }
+        const links = []
+        for (const m of text.matchAll(/\[\[([^\]|#\n]+)/g)) links.push(m[1])
+        for (const m of text.matchAll(/\[[^\]]*\]\(([^)#\n]+?\.md(?:[^)]*)?)\)/g)) links.push(m[1].split('#')[0].trim())
+        if (links.length) rawLinksByFile.set(p, links)
+      } catch { /* skip per-file */ }
+    }))
+  }
+  for (const [alias, p] of aliasToPath) if (!titleToId.has(alias)) titleToId.set(alias, p)
+
+  const linkMap = new Map()
+  for (const [src, links] of rawLinksByFile) {
+    const targets = new Set()
+    for (const raw of links) { const t = resolveLink(raw); if (t && t !== src) targets.add(t) }
+    if (targets.size) linkMap.set(src, targets)
+  }
+  const edges = []
+  const seen = new Set()
+  const nodeById = new Map(nodes.map(n => [n.id, n]))
+  for (const [src, targets] of linkMap) {
+    for (const tgt of targets) {
+      const key = src < tgt ? `${src}║${tgt}` : `${tgt}║${src}`
+      if (!seen.has(key)) {
+        seen.add(key)
+        edges.push({ source: src, target: tgt })
+        const sn = nodeById.get(src); if (sn) sn.linkCount++
+        const tn = nodeById.get(tgt); if (tn) tn.linkCount++
+      }
+    }
+  }
+  return { nodes, edges }
+}
+
 // ── engines.* host classification + guarded fetch ───────────────────────────────
 // engines.* lets the app probe local LLM engines that live on the GATEWAY host's
 // loopback/LAN — unreachable from a remote client, but reachable from here. To keep
@@ -592,6 +701,19 @@ export default definePluginEntry({
         else if (providerId === 'obsidian') content = await obsRead(config, id)
         else return respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, `memory.read: unknown provider ${JSON.stringify(providerId)}`))
         respond(true, { content })
+      } catch (err) { failed(respond, err) }
+    }, { scope: READ_SCOPE })
+
+    // Backlink graph for a server-local graph store (Obsidian) on a remote gateway.
+    api.registerGatewayMethod('memory.graph', async ({ params, respond }) => {
+      const providerId = params?.providerId
+      const config = params?.config ?? {}
+      try {
+        if (providerId !== 'obsidian') {
+          return respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, `memory.graph: unsupported provider ${JSON.stringify(providerId)}`))
+        }
+        const graph = await obsGraph(config)
+        respond(true, { graph })
       } catch (err) { failed(respond, err) }
     }, { scope: READ_SCOPE })
 

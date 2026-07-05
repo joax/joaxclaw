@@ -44,6 +44,7 @@ gateway RPC methods that read/write those directories on the host.
 | `memory.skill.remove` | write | `{ slug }` | `{ ok, slug }` |
 | `memory.list` | read | `{ providerId, config }` | `{ items: [{ id, title, subtitle? }] }` (host-side browse) |
 | `memory.read` | read | `{ providerId, config, id }` | `{ content }` |
+| `memory.graph` | read | `{ providerId, config }` | `{ graph: { nodes, edges } }` (Obsidian backlink graph) |
 
 Artifacts are passed through verbatim as strings (or `null` when missing); the app
 owns (de)serialization. Ids are validated to stay inside the state directories.

@@ -92,14 +92,22 @@ async function loadContent(get: () => MemoryState, set: (p: Partial<MemoryState>
   const conn = get().connections.find(c => c.id === id)
   if (!conn) return
   set({ loading: true, error: null, graph: null, items: null, info: null, preview: null, progress: 0 })
-  // On a remote gateway the store lives on the host — browse it through the plugin
-  // (memory.list). It returns a flat item list; the graph view stays local-only.
+  // On a remote gateway the store lives on the host — browse it through the plugin:
+  // memory.graph for graph providers (Obsidian), memory.list for the rest.
   if (isRemoteGatewayState()) {
+    const rdef = memoryProvider(conn.providerId)
     try {
-      const res = await gatewayClient.request<{ items?: MemoryItem[] }>('memory.list', { providerId: conn.providerId, config: conn.config })
-      if (get().selectedId !== id) return
-      const items = res?.items ?? []
-      set({ items, info: { totalItems: items.length }, loading: false })
+      if (rdef?.viewer === 'graph') {
+        const res = await gatewayClient.request<{ graph?: MemoryGraph }>('memory.graph', { providerId: conn.providerId, config: conn.config })
+        if (get().selectedId !== id) return
+        const graph = res?.graph ?? { nodes: [], edges: [] }
+        set({ graph, info: { totalItems: graph.nodes.length, note: `${graph.edges.length} links` }, loading: false, progress: 1 })
+      } else {
+        const res = await gatewayClient.request<{ items?: MemoryItem[] }>('memory.list', { providerId: conn.providerId, config: conn.config })
+        if (get().selectedId !== id) return
+        const items = res?.items ?? []
+        set({ items, info: { totalItems: items.length }, loading: false })
+      }
     } catch (e) {
       if (get().selectedId === id) set({ error: String(e), loading: false })
     }
