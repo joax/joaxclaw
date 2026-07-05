@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000" preserveAspectRatio="xMidYMid slice">
+  <defs>
+    <linearGradient id="sky2" x1="0" y1="0" x2="0.15" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="0.6" stop-color="#f2f9ff"/>
+      <stop offset="1" stop-color="#e2f0fd"/>
+    </linearGradient>
+    <radialGradient id="glowC" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#bfe0fb" stop-opacity="0.8"/>
+      <stop offset="1" stop-color="#bfe0fb" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glowD" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.95"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="soft2" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="80"/>
+    </filter>
+  </defs>
+  <rect width="1600" height="1000" fill="url(#sky2)"/>
+  <g filter="url(#soft2)">
+    <ellipse cx="1350" cy="240" rx="440" ry="320" fill="url(#glowC)"/>
+    <ellipse cx="250" cy="360" rx="380" ry="300" fill="url(#glowD)"/>
+    <ellipse cx="900" cy="880" rx="560" ry="340" fill="url(#glowC)"/>
+    <ellipse cx="620" cy="150" rx="360" ry="240" fill="url(#glowD)"/>
+  </g>
+</svg>
