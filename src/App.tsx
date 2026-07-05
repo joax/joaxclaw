@@ -5,14 +5,14 @@ import { TitleBar } from './components/layout/TitleBar'
 import { ChatView } from './components/chat/ChatView'
 import { TalkView } from './components/talk/TalkView'
 import { AgentsView } from './components/agents/AgentsView'
-import { GatewayView, focusGatewayTab } from './components/gateway/GatewayView'
+import { GatewayView } from './components/gateway/GatewayView'
 import { SettingsView } from './components/settings/SettingsView'
 import { ThemesView } from './components/theme/ThemesView'
 import { ThemeBackground } from './components/theme/ThemeBackground'
 import { CronsView } from './components/crons/CronsView'
 import { ProcessesView } from './components/processes/ProcessesView'
 import { TeamsView } from './components/teams/TeamsView'
-import { ObsidianView } from './components/obsidian/ObsidianView'
+import { MemoryView } from './components/memory/MemoryView'
 import { DashboardView } from './components/dashboard/DashboardView'
 import { SystemMonitorHUD } from './components/monitor/SystemMonitorHUD'
 import { ConnectScreen } from './components/layout/ConnectScreen'
@@ -164,7 +164,7 @@ export default function App() {
               {section === 'processes' && <ProcessesView onOpenChat={() => setSection('chat')} />}
               {section === 'teams' && <TeamsView onOpenChat={() => setSection('chat')} />}
               {section === 'crons' && <CronsView onOpenChat={() => setSection('chat')} />}
-              {section === 'obsidian' && <ObsidianView onNavigateExtensions={() => { focusGatewayTab('extensions'); setSection('gateway') }} />}
+              {section === 'obsidian' && <MemoryView />}
               {section === 'gateway' && <GatewayView onOpenChat={() => setSection('chat')} />}
               {section === 'themes' && <ThemesView />}
               {section === 'settings' && <SettingsView />}

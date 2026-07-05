@@ -1,0 +1,220 @@
+import { useMemo } from 'react'
+import { create } from 'zustand'
+import { persist } from 'zustand/middleware'
+import type { MemoryConnection, MemoryAccess, MemoryGraph, MemoryItem, MemoryConnInfo } from '../lib/memory/types'
+import { memoryProvider, MEMORY_PROVIDERS } from '../lib/memory/providers'
+import { isRemoteGatewayState } from './connection'
+
+// Provider-neutral memory connections: Obsidian, Markdown folder, … Each connection
+// exposes a store to gateway agents via a generated SKILL.md (local-gateway path in P1)
+// and is browsable in the app through its provider adapter.
+
+type MemApi = {
+  writeSkill: (slug: string, markdown: string) => Promise<{ ok: boolean; error?: string }>
+  removeSkill: (slug: string) => Promise<{ ok: boolean; error?: string }>
+}
+const memApi = (): MemApi | undefined => (window as unknown as { api?: { memory?: MemApi } }).api?.memory
+
+// Rebuild every provider's agent skill from the current connections. A provider with no
+// enabled, non-off connection has its skill removed. Access is conservative: read-write
+// only when EVERY included connection is read-write (never advertise write we don't mean).
+function syncSkills(connections: MemoryConnection[]) {
+  const api = memApi()
+  if (!api) return
+  // P1 writes skills to the LOCAL ~/.openclaw. On a remote gateway that's the wrong
+  // machine, so never write there — the Memory tab shows a "local gateway only" notice
+  // instead, and remote support lands with the P3 gateway plugin (docs/memory-tab.md).
+  if (isRemoteGatewayState()) return
+  for (const def of MEMORY_PROVIDERS) {
+    const active = connections.filter(c => c.providerId === def.id && c.enabled && c.access !== 'off')
+    if (active.length === 0) {
+      api.removeSkill(def.skillSlug).catch(() => { /* best-effort */ })
+      continue
+    }
+    const access: Exclude<MemoryAccess, 'off'> = active.every(c => c.access === 'read-write') ? 'read-write' : 'read-only'
+    const spec = def.buildSkill(active.map(c => ({ name: c.name, config: c.config })), access)
+    api.writeSkill(spec.slug, spec.markdown).catch(() => { /* best-effort */ })
+  }
+}
+
+let _idCounter = 0
+function newId(): string {
+  // No Math.random / Date.now in this codebase's guarded paths — a monotonic counter
+  // plus the providerId is unique enough for local connection keys.
+  return `mc_${++_idCounter}_${MEMORY_PROVIDERS.length}`
+}
+
+interface MemoryState {
+  connections: MemoryConnection[]
+  selectedId: string | null
+
+  // browse state for the selected connection
+  loading: boolean
+  progress: number
+  graph: MemoryGraph | null
+  items: MemoryItem[] | null
+  info: MemoryConnInfo | null
+  error: string | null
+  preview: { id: string; title: string; content: string } | null
+  previewLoading: boolean
+
+  addConnection: (providerId: string, name: string, config: Record<string, string>, access: MemoryAccess) => void
+  updateConnection: (id: string, patch: Partial<Pick<MemoryConnection, 'name' | 'config'>>) => void
+  removeConnection: (id: string) => void
+  setEnabled: (id: string, enabled: boolean) => void
+  setAccess: (id: string, access: MemoryAccess) => void
+  select: (id: string) => Promise<void>
+  refresh: () => Promise<void>
+  openItem: (itemId: string) => Promise<void>
+  test: (providerId: string, config: Record<string, string>) => Promise<{ ok: boolean; info?: MemoryConnInfo; error?: string }>
+}
+
+// Load content (graph or item list) for the selected connection based on its provider.
+async function loadContent(get: () => MemoryState, set: (p: Partial<MemoryState>) => void, id: string) {
+  const conn = get().connections.find(c => c.id === id)
+  if (!conn) return
+  const def = memoryProvider(conn.providerId)
+  if (!def?.adapter) { set({ error: 'This provider has no browser yet.', loading: false }); return }
+  set({ loading: true, error: null, graph: null, items: null, info: null, preview: null, progress: 0 })
+  try {
+    if (def.viewer === 'graph' && def.adapter.graph) {
+      const graph = await def.adapter.graph(conn.config, p => {
+        if (get().selectedId === id) set({ progress: p })
+      })
+      if (get().selectedId !== id) return   // user switched away mid-load
+      set({ graph, info: { totalItems: graph.nodes.length, note: `${graph.edges.length} links` }, loading: false, progress: 1 })
+    } else {
+      const items = await def.adapter.list(conn.config)
+      if (get().selectedId !== id) return
+      set({ items, info: { totalItems: items.length }, loading: false })
+    }
+  } catch (e) {
+    if (get().selectedId === id) set({ error: String(e), loading: false })
+  }
+}
+
+// Compatibility selector for the few views that still consume the old
+// "Obsidian vaults" shape (Agent map, Process collaboration vault picker) — now
+// derived from the unified memory connections instead of a separate store.
+export interface ObsidianVaultRef { name: string; url: string; apiKey: string }
+export function useObsidianVaults(): ObsidianVaultRef[] {
+  const connections = useMemoryStore(s => s.connections)
+  return useMemo(
+    () => connections
+      .filter(c => c.providerId === 'obsidian' && c.enabled)
+      .map(c => ({ name: c.name, url: c.config.url ?? '', apiKey: c.config.apiKey ?? '' })),
+    [connections],
+  )
+}
+
+export const useMemoryStore = create<MemoryState>()(
+  persist(
+    (set, get) => ({
+      connections: [],
+      selectedId: null,
+      loading: false,
+      progress: 0,
+      graph: null,
+      items: null,
+      info: null,
+      error: null,
+      preview: null,
+      previewLoading: false,
+
+      addConnection(providerId, name, config, access) {
+        const conn: MemoryConnection = { id: newId(), providerId, name: name.trim() || providerId, enabled: true, access, config }
+        const connections = [...get().connections, conn]
+        set({ connections, selectedId: conn.id })
+        syncSkills(connections)
+        void loadContent(get, set, conn.id)
+      },
+
+      updateConnection(id, patch) {
+        const connections = get().connections.map(c => c.id === id ? { ...c, ...patch } : c)
+        set({ connections })
+        syncSkills(connections)
+        if (get().selectedId === id) void loadContent(get, set, id)
+      },
+
+      removeConnection(id) {
+        const connections = get().connections.filter(c => c.id !== id)
+        const selectedId = get().selectedId === id ? (connections[0]?.id ?? null) : get().selectedId
+        set({ connections, selectedId, graph: null, items: null, preview: null })
+        syncSkills(connections)
+        if (selectedId) void loadContent(get, set, selectedId)
+      },
+
+      setEnabled(id, enabled) {
+        const connections = get().connections.map(c => c.id === id ? { ...c, enabled } : c)
+        set({ connections })
+        syncSkills(connections)
+      },
+
+      setAccess(id, access) {
+        const connections = get().connections.map(c => c.id === id ? { ...c, access } : c)
+        set({ connections })
+        syncSkills(connections)
+      },
+
+      async select(id) {
+        set({ selectedId: id })
+        await loadContent(get, set, id)
+      },
+
+      async refresh() {
+        const id = get().selectedId
+        if (id) await loadContent(get, set, id)
+      },
+
+      async openItem(itemId) {
+        const id = get().selectedId
+        const conn = get().connections.find(c => c.id === id)
+        const def = conn && memoryProvider(conn.providerId)
+        if (!conn || !def?.adapter) return
+        const title = get().items?.find(i => i.id === itemId)?.title ?? itemId
+        set({ previewLoading: true, preview: { id: itemId, title, content: '' } })
+        try {
+          const content = await def.adapter.read(conn.config, itemId)
+          if (get().selectedId === id) set({ preview: { id: itemId, title, content }, previewLoading: false })
+        } catch (e) {
+          if (get().selectedId === id) set({ preview: { id: itemId, title, content: `Could not read this item.\n\n${String(e)}` }, previewLoading: false })
+        }
+      },
+
+      async test(providerId, config) {
+        const def = memoryProvider(providerId)
+        if (!def?.adapter) return { ok: false, error: 'No adapter for this provider.' }
+        return def.adapter.test(config)
+      },
+    }),
+    {
+      name: 'joaxclaw-memory',
+      partialize: s => ({ connections: s.connections }),
+      // One-time migration: fold the old single-provider Obsidian vaults into connections.
+      onRehydrateStorage: () => (state) => {
+        if (!state) return
+        if (state.connections.length > 0) return
+        try {
+          const rawVaults = localStorage.getItem('joaxclaw-obsidian-vaults')
+          if (!rawVaults) return
+          const vaults = JSON.parse(rawVaults) as Array<{ name?: string; url?: string; apiKey?: string }>
+          const access = (localStorage.getItem('joaxclaw-obsidian-agent-access') as MemoryAccess) || 'read-write'
+          const migrated: MemoryConnection[] = vaults
+            .filter(v => v?.url)
+            .map((v, i) => ({
+              id: `mc_obsidian_${i}`,
+              providerId: 'obsidian',
+              name: v.name || 'Obsidian',
+              enabled: true,
+              access: access === 'off' ? 'read-only' : access,
+              config: { url: v.url ?? '', apiKey: v.apiKey ?? '' },
+            }))
+          if (migrated.length) {
+            state.connections = migrated
+            state.selectedId = migrated[0].id
+          }
+        } catch { /* migration is best-effort */ }
+      },
+    }
+  )
+)

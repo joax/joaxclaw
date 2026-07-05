@@ -3,7 +3,7 @@ import {
   forceSimulation, forceLink, forceManyBody, forceCenter, forceCollide,
   type Simulation, type SimulationNodeDatum, type SimulationLinkDatum
 } from 'd3-force'
-import type { GraphData, GraphNode } from '../../store/obsidian'
+import type { MemoryGraph as GraphData, MemoryGraphNode as GraphNode } from '../../lib/memory/types'
 
 // d3-force node — extends GraphNode with SimulationNodeDatum (x, y, vx, vy, fx, fy)
 interface SimNode extends GraphNode, SimulationNodeDatum {

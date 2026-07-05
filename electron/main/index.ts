@@ -378,10 +378,16 @@ ipcMain.handle('config:write', async (_event, text: string) => {
   }
 })
 
+// Expand a leading ~ to the user's home dir so config paths like
+// "~/.openclaw/workspace/memory" (e.g. a Markdown-memory folder) resolve.
+function expandHome(p: string): string {
+  return p.replace(/^~(?=\/|$)/, homedir())
+}
+
 // ── IPC: Local file read/write ───────────────────────────────────────────────
 ipcMain.handle('file:read', async (_event, filePath: string) => {
   try {
-    const text = await readFile(filePath, 'utf8')
+    const text = await readFile(expandHome(filePath), 'utf8')
     return { ok: true, text }
   } catch (e: unknown) {
     return { ok: false, error: String(e) }
@@ -428,11 +434,12 @@ ipcMain.handle('file:find', async (_event, filename: string) => {
 // ── IPC: List files in a directory ───────────────────────────────────────────
 ipcMain.handle('file:listdir', async (_event, dirPath: string, ext?: string) => {
   try {
-    await mkdir(dirPath, { recursive: true })
-    const entries = await readdir(dirPath, { withFileTypes: true })
+    const dir = expandHome(dirPath)
+    await mkdir(dir, { recursive: true })
+    const entries = await readdir(dir, { withFileTypes: true })
     const files = entries
       .filter(e => e.isFile() && (!ext || e.name.endsWith(ext)))
-      .map(e => ({ name: e.name, path: `${dirPath}/${e.name}` }))
+      .map(e => ({ name: e.name, path: join(dir, e.name) }))
     return { ok: true, files }
   } catch (e: unknown) {
     return { ok: false, error: String(e), files: [] }
@@ -442,7 +449,7 @@ ipcMain.handle('file:listdir', async (_event, dirPath: string, ext?: string) => 
 // ── IPC: Delete a file ───────────────────────────────────────────────────────
 ipcMain.handle('file:delete', async (_event, filePath: string) => {
   try {
-    await unlink(filePath)
+    await unlink(expandHome(filePath))
     return { ok: true }
   } catch (e: unknown) {
     return { ok: false, error: String(e) }
@@ -452,8 +459,9 @@ ipcMain.handle('file:delete', async (_event, filePath: string) => {
 // ── IPC: Write a file ─────────────────────────────────────────────────────────
 ipcMain.handle('file:write', async (_event, filePath: string, text: string) => {
   try {
-    await mkdir(dirname(filePath), { recursive: true })
-    await writeFile(filePath, text, 'utf8')
+    const full = expandHome(filePath)
+    await mkdir(dirname(full), { recursive: true })
+    await writeFile(full, text, 'utf8')
     return { ok: true }
   } catch (e: unknown) {
     return { ok: false, error: String(e) }
@@ -700,6 +708,36 @@ ipcMain.handle('obsidian:removeSkill', async () => {
   try {
     const skillDir = join(homedir(), '.openclaw', 'skills', 'obsidian-memory')
     await rm(skillDir, { recursive: true, force: true })
+    return { ok: true }
+  } catch (e) {
+    return { ok: false, error: String(e) }
+  }
+})
+
+// ── IPC: Generic memory skill writer ─────────────────────────────────────────
+// The provider-neutral path used by the Memory tab: the app builds the full SKILL.md
+// (per-provider template in src/lib/memory/providers.ts) and this just writes it to
+// ~/.openclaw/skills/<slug>/SKILL.md on the LOCAL host. (Remote gateways / server-side
+// management is the P3 gateway-plugin concern — see docs/memory-tab.md.)
+// slug is validated to a safe skill-dir name.
+const safeSlug = (s: string) => /^[a-z0-9][a-z0-9-]{0,63}$/.test(s)
+
+ipcMain.handle('memory:writeSkill', async (_event, slug: string, markdown: string) => {
+  try {
+    if (!safeSlug(slug)) return { ok: false, error: `Invalid skill slug: ${slug}` }
+    const skillDir = join(homedir(), '.openclaw', 'skills', slug)
+    await mkdir(skillDir, { recursive: true })
+    await writeFile(join(skillDir, 'SKILL.md'), markdown, 'utf-8')
+    return { ok: true }
+  } catch (e) {
+    return { ok: false, error: String(e) }
+  }
+})
+
+ipcMain.handle('memory:removeSkill', async (_event, slug: string) => {
+  try {
+    if (!safeSlug(slug)) return { ok: false, error: `Invalid skill slug: ${slug}` }
+    await rm(join(homedir(), '.openclaw', 'skills', slug), { recursive: true, force: true })
     return { ok: true }
   } catch (e) {
     return { ok: false, error: String(e) }

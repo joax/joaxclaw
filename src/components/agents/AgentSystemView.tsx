@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react'
 import { Bot, MessageSquare, Wrench, Loader2, BookOpen, FolderOpen, X } from 'lucide-react'
 import { useAgentsStore } from '../../store/agents'
-import { useObsidianStore } from '../../store/obsidian'
+import { useObsidianVaults } from '../../store/memory'
 import { useSessionsStore } from '../../store/sessions'
 import { useCronsStore } from '../../store/crons'
 import { gatewayClient } from '../../lib/gateway'
@@ -560,7 +560,7 @@ async function probeBackgroundTasks(): Promise<string[]> {
 
 export function AgentSystemView() {
   const { agents, fetch: fetchAgents } = useAgentsStore()
-  const { vaults, loadConfig } = useObsidianStore()
+  const vaults = useObsidianVaults()
   const sessions = useSessionsStore(s => s.sessions)
   const fetchSessions = useSessionsStore(s => s.fetch)
   const cronJobs = useCronsStore(s => s.jobs)
@@ -573,7 +573,6 @@ export function AgentSystemView() {
   const [backgroundAgentIds, setBackgroundAgentIds] = useState<string[]>([])
 
   useEffect(() => {
-    loadConfig()
     fetchAgents()
     fetchCronJobs()
     setLoading(true)
