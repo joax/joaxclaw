@@ -91,14 +91,22 @@ interface MemoryState {
 async function loadContent(get: () => MemoryState, set: (p: Partial<MemoryState>) => void, id: string) {
   const conn = get().connections.find(c => c.id === id)
   if (!conn) return
-  // Browsing runs the provider adapter from the CLIENT (HTTP fetch / local files). For a
-  // remote gateway that's the wrong machine for server-local stores, so we don't browse
-  // here — host-side browse (memory.list/read over the plugin) is Slice 2. Management
-  // (adding connections, agent access → skill install) still works remotely.
-  if (isRemoteGatewayState()) { set({ loading: false, graph: null, items: null, info: null, preview: null, error: null }); return }
+  set({ loading: true, error: null, graph: null, items: null, info: null, preview: null, progress: 0 })
+  // On a remote gateway the store lives on the host — browse it through the plugin
+  // (memory.list). It returns a flat item list; the graph view stays local-only.
+  if (isRemoteGatewayState()) {
+    try {
+      const res = await gatewayClient.request<{ items?: MemoryItem[] }>('memory.list', { providerId: conn.providerId, config: conn.config })
+      if (get().selectedId !== id) return
+      const items = res?.items ?? []
+      set({ items, info: { totalItems: items.length }, loading: false })
+    } catch (e) {
+      if (get().selectedId === id) set({ error: String(e), loading: false })
+    }
+    return
+  }
   const def = memoryProvider(conn.providerId)
   if (!def?.adapter) { set({ error: 'This provider has no browser yet.', loading: false }); return }
-  set({ loading: true, error: null, graph: null, items: null, info: null, preview: null, progress: 0 })
   try {
     if (def.viewer === 'graph' && def.adapter.graph) {
       const graph = await def.adapter.graph(conn.config, p => {
@@ -206,11 +214,15 @@ export const useMemoryStore = create<MemoryState>()(
         const id = get().selectedId
         const conn = get().connections.find(c => c.id === id)
         const def = conn && memoryProvider(conn.providerId)
-        if (!conn || !def?.adapter) return
+        if (!conn) return
         const title = get().items?.find(i => i.id === itemId)?.title ?? itemId
         set({ previewLoading: true, preview: { id: itemId, title, content: '' } })
         try {
-          const content = await def.adapter.read(conn.config, itemId)
+          const content = isRemoteGatewayState()
+            ? (await gatewayClient.request<{ content?: string }>('memory.read', { providerId: conn.providerId, config: conn.config, id: itemId }))?.content ?? ''
+            : def?.adapter
+              ? await def.adapter.read(conn.config, itemId)
+              : ''
           if (get().selectedId === id) set({ preview: { id: itemId, title, content }, previewLoading: false })
         } catch (e) {
           if (get().selectedId === id) set({ preview: { id: itemId, title, content: `Could not read this item.\n\n${String(e)}` }, previewLoading: false })

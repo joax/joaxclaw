@@ -18,6 +18,7 @@
 
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
+import os from 'node:os'
 import { randomUUID } from 'node:crypto'
 import { definePluginEntry } from 'openclaw/plugin-sdk/plugin-entry'
 import { resolveStateDir } from 'openclaw/plugin-sdk/state-paths'
@@ -74,6 +75,66 @@ function skillsDir() { return path.join(resolveStateDir(), 'skills') }
 // Memory skills are written to <stateDir>/skills/<slug>/SKILL.md — the same directory
 // the gateway loads skills from. Slug is a kebab dir name (matches the app side).
 const SKILL_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,63}$/
+
+// ── memory content browsing (host-side) ─────────────────────────────────────────
+// memory.list / memory.read let the app browse a server-local memory store from a
+// REMOTE gateway: the store lives on THIS host, unreachable from the client. Mirrors
+// the app's client-side adapters (src/lib/memory/adapters). Returns a flat item list
+// (the graph view stays local-gateway-only).
+function expandHome(p) { return String(p ?? '').replace(/^~(?=\/|$)/, os.homedir()) }
+
+async function mdList(config) {
+  const dir = expandHome(config?.path)
+  let entries = []
+  try { entries = await fs.readdir(dir, { withFileTypes: true }) } catch { return [] }
+  return entries
+    .filter(e => e.isFile() && e.name.endsWith('.md'))
+    .map(e => ({ id: path.join(dir, e.name), title: e.name.replace(/\.md$/, '') }))
+    .sort((a, b) => a.title.localeCompare(b.title))
+}
+async function mdRead(id) {
+  return fs.readFile(expandHome(id), 'utf8')
+}
+
+function obsHeaders(config) {
+  const key = String(config?.apiKey ?? '').trim().replace(/^Bearer\s+/i, '')
+  return key ? { Authorization: `Bearer ${key}` } : {}
+}
+async function obsListAll(config, dirPath = '', depth = 0) {
+  if (depth > 15) return []
+  const base = String(config?.url ?? '').replace(/\/$/, '')
+  const enc = dirPath.split('/').filter(Boolean).map(encodeURIComponent).join('/') + (dirPath ? '/' : '')
+  let res
+  try { res = await fetch(base + '/vault/' + enc, { headers: obsHeaders(config) }) } catch { return [] }
+  if (!res.ok) return []
+  const data = await res.json().catch(() => ({}))
+  const files = []
+  const subs = []
+  for (const e of (data.files ?? [])) {
+    if (e.startsWith('.')) continue
+    if (e.endsWith('/')) subs.push(obsListAll(config, dirPath + e, depth + 1))
+    else files.push(dirPath + e)
+  }
+  for (const s of await Promise.all(subs)) files.push(...s)
+  return files
+}
+async function obsList(config) {
+  const files = await obsListAll(config)
+  return files
+    .filter(f => f.endsWith('.md') && !f.endsWith('.excalidraw.md'))
+    .map(p => {
+      const parts = p.split('/')
+      return { id: p, title: parts[parts.length - 1].replace(/\.md$/, ''), subtitle: parts.length > 1 ? parts.slice(0, -1).join('/') : undefined }
+    })
+    .sort((a, b) => a.title.localeCompare(b.title))
+}
+async function obsRead(config, id) {
+  const base = String(config?.url ?? '').replace(/\/$/, '')
+  const enc = String(id).split('/').map(encodeURIComponent).join('/')
+  const res = await fetch(base + '/vault/' + enc, { headers: { ...obsHeaders(config), Accept: 'text/markdown' } })
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.text()
+}
 
 // ── engines.* host classification + guarded fetch ───────────────────────────────
 // engines.* lets the app probe local LLM engines that live on the GATEWAY host's
@@ -494,6 +555,35 @@ export default definePluginEntry({
         respond(true, { ok: true, slug })
       } catch (err) { failed(respond, err) }
     }, { scope: WRITE_SCOPE })
+
+    // Browse a server-local memory store from a remote gateway (content lives on this host).
+    api.registerGatewayMethod('memory.list', async ({ params, respond }) => {
+      const providerId = params?.providerId
+      const config = params?.config ?? {}
+      try {
+        let items
+        if (providerId === 'markdown') items = await mdList(config)
+        else if (providerId === 'obsidian') items = await obsList(config)
+        else return respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, `memory.list: unknown provider ${JSON.stringify(providerId)}`))
+        respond(true, { items })
+      } catch (err) { failed(respond, err) }
+    }, { scope: READ_SCOPE })
+
+    api.registerGatewayMethod('memory.read', async ({ params, respond }) => {
+      const providerId = params?.providerId
+      const config = params?.config ?? {}
+      const id = params?.id
+      if (typeof id !== 'string' || !id) {
+        return respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, 'memory.read requires id'))
+      }
+      try {
+        let content
+        if (providerId === 'markdown') content = await mdRead(id)
+        else if (providerId === 'obsidian') content = await obsRead(config, id)
+        else return respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, `memory.read: unknown provider ${JSON.stringify(providerId)}`))
+        respond(true, { content })
+      } catch (err) { failed(respond, err) }
+    }, { scope: READ_SCOPE })
 
     // ── reminder_set / reminder_cancel (agent tools) ────────────────────────────
     if (typeof api.registerTool === 'function' && typeof api.scheduleSessionTurn === 'function') {
