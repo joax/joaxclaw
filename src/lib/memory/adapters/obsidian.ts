@@ -3,6 +3,7 @@
 // Obsidian is just one memory provider. config = { url, apiKey }.
 
 import type { MemoryAdapter, MemoryItem, MemoryGraphNode, MemoryGraphEdge } from '../types'
+import { resolveConfig } from '../secrets'
 
 type Cfg = Record<string, string>
 
@@ -61,6 +62,7 @@ async function listAllFiles(config: Cfg, dirPath = '', depth = 0): Promise<strin
 
 export const obsidianAdapter: MemoryAdapter = {
   async test(config) {
+    config = await resolveConfig(config)
     try {
       const res = await apiFetch(config, '/vault/')
       if (res.status === 401) throw new Error('Invalid API key — copy it exactly from Obsidian → Settings → Local REST API → API Key')
@@ -80,6 +82,7 @@ export const obsidianAdapter: MemoryAdapter = {
   },
 
   async list(config) {
+    config = await resolveConfig(config)
     const files = await listAllFiles(config)
     return files
       .filter(f => f.endsWith('.md') && !f.endsWith('.excalidraw.md'))
@@ -91,6 +94,7 @@ export const obsidianAdapter: MemoryAdapter = {
   },
 
   async read(config, id) {
+    config = await resolveConfig(config)
     const encodedPath = id.split('/').map(encodeURIComponent).join('/')
     const res = await apiFetch(config, '/vault/' + encodedPath, { 'Accept': 'text/markdown' })
     if (!res.ok) throw new Error(`Cannot read note: HTTP ${res.status}`)
@@ -98,6 +102,7 @@ export const obsidianAdapter: MemoryAdapter = {
   },
 
   async graph(config, onProgress) {
+    config = await resolveConfig(config)
     const checkRes = await apiFetch(config, '/vault/')
     if (!checkRes.ok) throw new Error(`Cannot list vault: HTTP ${checkRes.status}`)
     onProgress?.(0.02)

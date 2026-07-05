@@ -70,17 +70,30 @@ gateway and the backend live:
     content over the WS. On a remote gateway every store browses as a notes list +
     preview (the backlink graph stays a local-gateway richness). Needs
     `joaxclaw-fs ≥ 0.7.0`.
-  - **Slice 3:** credential hardening — SecretRefs / scoped tokens instead of
-    plaintext keys in `SKILL.md`. See [the memory-backends research](#see-also).
+  - **Slice 3 (done):** credential hardening. A secret field may be an env-var
+    reference `env:VAR` instead of a literal; then the skill references `$VAR` and the
+    plaintext key is kept out of `SKILL.md` (and out of localStorage). It's resolved
+    only where the request runs: the joaxclaw-fs plugin uses the host's `process.env`;
+    the local client uses an Electron `env:get`. Literals still work (convenient, less
+    secure). Needs `joaxclaw-fs ≥ 0.8.0` for remote browse of env-ref stores. True
+    read-vs-write enforcement remains backend-dependent (Obsidian's REST API has no
+    scoped tokens) — see [the memory-backends research](#see-also) for MCP/OAuth-scoped
+    backends where it can be enforced.
 
-## Known weakness we're deliberately deferring
+## Credential handling
 
-Today (and in P1) the generated skill embeds the backend URL + **API key in
-plaintext**, and "read-only" is enforced only by what the skill's prose advertises —
-not a real capability gate. P3's plugin (and, where a backend offers it, an
-MCP/OAuth-scoped token with `memory:read` / `memory:write` scopes) is where this gets
-fixed. Candidate backends and the transport/scoping analysis are in the memory
-research (Cognee, Mem0/OpenMemory, Logseq, Graphiti, Qdrant, MCP reference server).
+By default a pasted key is embedded in the generated skill (convenient). For a
+hardened setup, enter the secret as an env-var reference `env:VAR` in the connect
+form: the skill then references `$VAR` and the plaintext key is never written to
+`SKILL.md` or localStorage (P3 Slice 3). The value is resolved at request time on the
+machine that runs it — the host's `process.env` (plugin) or the local client (Electron
+`env:get`).
+
+**Still open:** true read-vs-write *enforcement* is backend-dependent — Obsidian's
+Local REST API has no scoped tokens, so read-only is advertised in the skill prose,
+not gated. Backends that expose MCP/OAuth scopes (`memory:read` / `memory:write`) can
+enforce it; see the memory research (Cognee, Mem0/OpenMemory, Logseq, Graphiti, Qdrant,
+MCP reference server).
 
 ## Key files
 

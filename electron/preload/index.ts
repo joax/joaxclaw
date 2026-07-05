@@ -125,6 +125,11 @@ contextBridge.exposeInMainWorld('api', {
     removeSkill: (slug: string) => ipcRenderer.invoke('memory:removeSkill', slug),
   },
 
+  // Read a single named environment variable (for memory "env:VAR" credential refs).
+  env: {
+    get: (name: string) => ipcRenderer.invoke('env:get', name),
+  },
+
   // App-native agent skills (process-builder, teams-blueprint)
   skills: {
     installNative: (force?: boolean) => ipcRenderer.invoke('skills:installNative', force),

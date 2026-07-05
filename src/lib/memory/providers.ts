@@ -9,6 +9,7 @@
 import type { MemoryProviderDef, MemorySkillSpec } from './types'
 import { obsidianAdapter } from './adapters/obsidian'
 import { markdownAdapter } from './adapters/markdown'
+import { isEnvRef, envRefName } from './secrets'
 
 // Obsidian — a vault reached over the Local REST API (HTTP + bearer key). Local to the
 // gateway host (loopback) or a reachable LAN/cloud URL. Graph-viewable.
@@ -29,9 +30,14 @@ const OBSIDIAN: MemoryProviderDef = {
     const desc = write
       ? 'Read and write the user\'s Obsidian notes for durable memory. Use it to recall context and to save notes/facts the user should keep across sessions.'
       : 'Read the user\'s Obsidian notes for context. This is READ-ONLY — never create, edit, or delete notes.'
-    const vaults = conns.map(c =>
-      `- **${c.name}** — base URL \`${c.config.url}\`, header \`Authorization: Bearer ${c.config.apiKey}\``,
-    ).join('\n')
+    const vaults = conns.map(c => {
+      // An env-ref key stays out of the skill file: reference the env var instead of
+      // embedding the secret. A literal is embedded (convenient, but less secure).
+      const auth = isEnvRef(c.config.apiKey)
+        ? `header \`Authorization: Bearer $${envRefName(c.config.apiKey)}\` — read the token from the \`${envRefName(c.config.apiKey)}\` environment variable (it is not stored here)`
+        : `header \`Authorization: Bearer ${c.config.apiKey}\``
+      return `- **${c.name}** — base URL \`${c.config.url}\`, ${auth}`
+    }).join('\n')
     const rows = [
       '| List folder | GET | `/vault/{path}/` |',
       '| Read note | GET | `/vault/{path}` (`Accept: text/markdown`) |',
