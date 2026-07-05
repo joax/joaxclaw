@@ -3,12 +3,14 @@ import { Plus, Search, Pencil, Trash2, ChevronDown, Loader2, Brain, KeyRound, Ch
 import { useMemoryStore } from '../../store/memory'
 import { useIsRemoteGateway, useConnectionStore } from '../../store/connection'
 import { gatewayHost } from '../../lib/ollamaHealth'
+import { buildPluginInstallPrompt } from '../../lib/joaxclawFsInstall'
+import { sendViaAgent } from '../../lib/agentPrompt'
 import { MEMORY_PROVIDERS, memoryProvider } from '../../lib/memory/providers'
 import type { MemoryAccess, MemoryConnection, MemoryLocation } from '../../lib/memory/types'
 import { ForceGraph } from '../obsidian/ForceGraph'
 import { Btn } from '../ui/Btn'
 import { Input } from '../ui/Input'
-import { Server } from 'lucide-react'
+import { Server, Wrench, BookOpen } from 'lucide-react'
 
 const ACCESS_LABEL: Record<MemoryAccess, string> = { 'off': 'Off', 'read-only': 'Read-only', 'read-write': 'Read & write' }
 const LOCATION_LABEL: Record<MemoryLocation, string> = { 'server-local': 'On the server', 'cloud': 'Cloud' }
@@ -17,15 +19,21 @@ function configSummary(conn: MemoryConnection): string {
   return conn.config.url || conn.config.path || conn.config.space || ''
 }
 
-export function MemoryView() {
+export function MemoryView({ onOpenChat }: { onOpenChat?: () => void } = {}) {
   const {
     connections, selectedId, select, setEnabled, setAccess, removeConnection,
     loading, progress, graph, items, info, error, preview, openItem,
+    remoteReady, probePlugin,
   } = useMemoryStore()
   const [adding, setAdding] = useState(false)
   const [editing, setEditing] = useState<MemoryConnection | null>(null)
   const remote = useIsRemoteGateway()
+  const status = useConnectionStore(s => s.status)
   const gwHost = useConnectionStore(s => gatewayHost(s.connection?.url))
+
+  // On a remote gateway, memory is managed by the joaxclaw-fs plugin — probe for it
+  // whenever the connection/remoteness changes.
+  useEffect(() => { void probePlugin() }, [remote, status, probePlugin])
 
   // Select + load the first connection on mount if nothing is active yet.
   useEffect(() => {
@@ -33,6 +41,10 @@ export function MemoryView() {
     else if (selectedId && !graph && !items && !loading) void select(selectedId)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // Management (add / access / skill install) works on a local gateway, or a remote
+  // gateway once the plugin is confirmed. Browsing content is local-gateway-only in P1.
+  const showManagement = !remote || remoteReady === true
 
   const selected = connections.find(c => c.id === selectedId) ?? null
 
@@ -55,11 +67,13 @@ export function MemoryView() {
             Connect your agents to knowledge stores, and see what they remember.
           </p>
         </div>
-        {!remote && <Btn size="sm" icon={<Plus size={13} />} onClick={() => { setEditing(null); setAdding(true) }}>Add memory</Btn>}
+        {showManagement && <Btn size="sm" icon={<Plus size={13} />} onClick={() => { setEditing(null); setAdding(true) }}>Add memory</Btn>}
       </div>
 
-      {remote ? (
-        <RemoteMemoryNotice host={gwHost} />
+      {remote && remoteReady === null ? (
+        <CheckingPlugin />
+      ) : remote && remoteReady === false ? (
+        <RemoteMemoryInstallNotice host={gwHost} onOpenChat={onOpenChat} />
       ) : connections.length === 0 ? (
         <EmptyState onAdd={() => { setEditing(null); setAdding(true) }} />
       ) : (
@@ -81,6 +95,7 @@ export function MemoryView() {
             <Detail
               key={selected.id}
               conn={selected}
+              remote={remote}
               loading={loading} progress={progress} graph={graph} items={items} info={info} error={error}
               preview={preview}
               onOpenItem={openItem}
@@ -131,8 +146,9 @@ function ConnRow({ conn, active, onClick }: { conn: MemoryConnection; active: bo
   )
 }
 
-function Detail({ conn, loading, progress, graph, items, info, error, preview, onOpenItem, onSetEnabled, onSetAccess, onEdit, onRemove }: {
+function Detail({ conn, remote, loading, progress, graph, items, info, error, preview, onOpenItem, onSetEnabled, onSetAccess, onEdit, onRemove }: {
   conn: MemoryConnection
+  remote: boolean
   loading: boolean; progress: number
   graph: ReturnType<typeof useMemoryStore.getState>['graph']
   items: ReturnType<typeof useMemoryStore.getState>['items']
@@ -188,7 +204,13 @@ function Detail({ conn, loading, progress, graph, items, info, error, preview, o
 
       {/* Browse */}
       <div className="flex flex-col flex-1 min-h-0">
-        {error ? (
+        {remote ? (
+          <div className="flex flex-1 flex-col items-center justify-center gap-2 px-6 text-center" style={{ color: 'var(--text-secondary)' }}>
+            <Server size={26} style={{ opacity: 0.35 }} />
+            <p className="text-sm">Browsing this store's content on a remote gateway is coming next.</p>
+            <p className="text-xs" style={{ opacity: 0.75, maxWidth: 300 }}>Managing the connection and its agent access works now — the content lives on the gateway host.</p>
+          </div>
+        ) : error ? (
           <div className="m-4 px-3 py-2 rounded text-sm" style={{ background: 'color-mix(in srgb, var(--danger) 10%, transparent)', border: '1px solid var(--danger)', color: 'var(--danger)' }}>{error}</div>
         ) : loading ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-3" style={{ color: 'var(--text-secondary)' }}>
@@ -342,24 +364,51 @@ function IconBtn({ children, title, onClick, danger }: { children: React.ReactNo
   )
 }
 
-// A memory connection installs a SKILL.md on the gateway host and (for server-local
-// stores) is browsed on that host. The app can only do that for a gateway running on
-// THIS machine — so on a remote gateway we surface this rather than silently writing
-// to the wrong machine. Remote support lands with the P3 memory plugin.
-function RemoteMemoryNotice({ host }: { host?: string }) {
+// While we check whether the remote gateway has the joaxclaw-fs memory plugin.
+function CheckingPlugin() {
+  return (
+    <div className="flex flex-1 flex-col items-center justify-center gap-3" style={{ color: 'var(--text-secondary)' }}>
+      <Loader2 size={20} className="animate-spin" style={{ color: 'var(--accent)' }} />
+      <span className="text-sm">Checking the gateway for memory support…</span>
+    </div>
+  )
+}
+
+// Shown on a remote gateway whose joaxclaw-fs plugin doesn't expose memory.* yet. The
+// plugin manages the SKILL.md files on the host; "Install via agent" hands the install
+// to an agent running there (the same flow Teams/Processes use), then the tab lights up.
+function RemoteMemoryInstallNotice({ host, onOpenChat }: { host?: string; onOpenChat?: () => void }) {
+  const probePlugin = useMemoryStore(s => s.probePlugin)
+  const [phase, setPhase] = useState<'idle' | 'working' | 'error'>('idle')
+  const [err, setErr] = useState('')
+
+  const install = async () => {
+    setPhase('working'); setErr('')
+    const built = await buildPluginInstallPrompt()
+    if (!built.ok || !built.prompt) { setPhase('error'); setErr(built.error ?? 'Failed to prepare the install'); return }
+    sendViaAgent(built.prompt, onOpenChat)
+    setPhase('idle')
+  }
+
   return (
     <div className="flex flex-1 items-center justify-center p-8" style={{ background: 'var(--bg-primary)' }}>
-      <div style={{ maxWidth: 460, textAlign: 'center', padding: 30, background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius)' }}>
+      <div style={{ maxWidth: 470, textAlign: 'center', padding: 30, background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius)' }}>
         <Server size={38} style={{ color: 'var(--text-secondary)', opacity: 0.45, marginBottom: 14 }} />
-        <h2 className="text-base font-semibold" style={{ color: 'var(--text-primary)', margin: '0 0 8px' }}>Memory is managed on the gateway host</h2>
+        <h2 className="text-base font-semibold" style={{ color: 'var(--text-primary)', margin: '0 0 8px' }}>Install the plugin to manage memory remotely</h2>
         <p className="text-sm" style={{ color: 'var(--text-secondary)', lineHeight: 1.6, margin: 0 }}>
-          Connecting a memory store writes a skill (and, for server-local stores, reads files) on the
-          machine your gateway runs on{host ? <> — <b style={{ color: 'var(--text-primary)', fontFamily: 'monospace' }}>{host}</b></> : null}.
-          The app can do that for a gateway running <b style={{ color: 'var(--text-primary)' }}>on this machine</b>. For a
-          remote gateway, memory management arrives with the upcoming <b style={{ color: 'var(--text-primary)' }}>memory plugin</b>.
+          Memory skills live on the gateway host
+          {host ? <> (<b style={{ color: 'var(--text-primary)', fontFamily: 'monospace' }}>{host}</b>)</> : null}.
+          Install the <b style={{ color: 'var(--text-primary)' }}>joaxclaw-fs</b> plugin (v0.6+) on that host once, and this
+          tab can add and manage memory connections over the connection — the same plugin that powers Teams &amp; Processes.
         </p>
-        <p className="text-xs" style={{ color: 'var(--text-secondary)', opacity: 0.75, lineHeight: 1.6, margin: '14px 0 0' }}>
-          Existing memory skills on the host keep working — this only limits adding or changing them from here.
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'center', marginTop: 18 }}>
+          <Btn size="sm" icon={phase === 'working' ? <Loader2 size={13} className="animate-spin" /> : <Wrench size={13} />} loading={phase === 'working'} onClick={install}>Install via agent</Btn>
+          <Btn size="sm" variant="ghost" icon={<BookOpen size={13} />} onClick={() => void probePlugin()}>Re-check</Btn>
+        </div>
+        {phase === 'error' && <p style={{ fontSize: 12, color: 'var(--danger)', margin: '12px 0 0' }}>{err}</p>}
+        <p style={{ fontSize: 12, color: 'var(--text-secondary)', opacity: 0.75, lineHeight: 1.6, margin: '14px 0 0' }}>
+          Install via agent opens a chat and asks an agent on the host to run it (you approve the command). On a gateway
+          running on this machine, memory works without the plugin.
         </p>
       </div>
     </div>

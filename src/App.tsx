@@ -164,7 +164,7 @@ export default function App() {
               {section === 'processes' && <ProcessesView onOpenChat={() => setSection('chat')} />}
               {section === 'teams' && <TeamsView onOpenChat={() => setSection('chat')} />}
               {section === 'crons' && <CronsView onOpenChat={() => setSection('chat')} />}
-              {section === 'obsidian' && <MemoryView />}
+              {section === 'obsidian' && <MemoryView onOpenChat={() => setSection('chat')} />}
               {section === 'gateway' && <GatewayView onOpenChat={() => setSection('chat')} />}
               {section === 'themes' && <ThemesView />}
               {section === 'settings' && <SettingsView />}
