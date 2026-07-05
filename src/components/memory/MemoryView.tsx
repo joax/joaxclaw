@@ -202,22 +202,17 @@ function Detail({ conn, remote, loading, progress, graph, items, info, error, pr
         </div>
       </div>
 
-      {/* Browse */}
+      {/* Browse — the graph is a local-gateway richness; on a remote gateway every store
+          browses as a notes list + preview (served by the plugin's memory.list/read). */}
       <div className="flex flex-col flex-1 min-h-0">
-        {remote ? (
-          <div className="flex flex-1 flex-col items-center justify-center gap-2 px-6 text-center" style={{ color: 'var(--text-secondary)' }}>
-            <Server size={26} style={{ opacity: 0.35 }} />
-            <p className="text-sm">Browsing this store's content on a remote gateway is coming next.</p>
-            <p className="text-xs" style={{ opacity: 0.75, maxWidth: 300 }}>Managing the connection and its agent access works now — the content lives on the gateway host.</p>
-          </div>
-        ) : error ? (
+        {error ? (
           <div className="m-4 px-3 py-2 rounded text-sm" style={{ background: 'color-mix(in srgb, var(--danger) 10%, transparent)', border: '1px solid var(--danger)', color: 'var(--danger)' }}>{error}</div>
         ) : loading ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-3" style={{ color: 'var(--text-secondary)' }}>
             <Loader2 size={22} className="animate-spin" style={{ color: 'var(--accent)' }} />
-            <span className="text-sm">Loading{def?.viewer === 'graph' ? ` graph… ${Math.round(progress * 100)}%` : '…'}</span>
+            <span className="text-sm">Loading{def?.viewer === 'graph' && !remote ? ` graph… ${Math.round(progress * 100)}%` : '…'}</span>
           </div>
-        ) : def?.viewer === 'graph' ? (
+        ) : def?.viewer === 'graph' && !remote ? (
           <GraphPane graph={graph} info={info} />
         ) : (
           <NotesPane items={items} preview={preview} onOpen={onOpenItem} />
@@ -398,8 +393,8 @@ function RemoteMemoryInstallNotice({ host, onOpenChat }: { host?: string; onOpen
         <p className="text-sm" style={{ color: 'var(--text-secondary)', lineHeight: 1.6, margin: 0 }}>
           Memory skills live on the gateway host
           {host ? <> (<b style={{ color: 'var(--text-primary)', fontFamily: 'monospace' }}>{host}</b>)</> : null}.
-          Install the <b style={{ color: 'var(--text-primary)' }}>joaxclaw-fs</b> plugin (v0.6+) on that host once, and this
-          tab can add and manage memory connections over the connection — the same plugin that powers Teams &amp; Processes.
+          Install the <b style={{ color: 'var(--text-primary)' }}>joaxclaw-fs</b> plugin (v0.7+) on that host once, and this
+          tab can add, manage, and browse memory connections over the connection — the same plugin that powers Teams &amp; Processes.
         </p>
         <div style={{ display: 'flex', gap: 8, justifyContent: 'center', marginTop: 18 }}>
           <Btn size="sm" icon={phase === 'working' ? <Loader2 size={13} className="animate-spin" /> : <Wrench size={13} />} loading={phase === 'working'} onClick={install}>Install via agent</Btn>

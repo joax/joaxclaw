@@ -42,6 +42,8 @@ gateway RPC methods that read/write those directories on the host.
 | `memory.status` | read | — | `{ ok, feature: 'memory-skills' }` (presence probe) |
 | `memory.skill.set` | write | `{ slug, markdown }` | `{ ok, slug }` (writes `skills/<slug>/SKILL.md`) |
 | `memory.skill.remove` | write | `{ slug }` | `{ ok, slug }` |
+| `memory.list` | read | `{ providerId, config }` | `{ items: [{ id, title, subtitle? }] }` (host-side browse) |
+| `memory.read` | read | `{ providerId, config, id }` | `{ content }` |
 
 Artifacts are passed through verbatim as strings (or `null` when missing); the app
 owns (de)serialization. Ids are validated to stay inside the state directories.

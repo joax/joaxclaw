@@ -66,8 +66,10 @@ gateway and the backend live:
     remote + plugin → full management UI, remote + no plugin → "Install via agent"
     (same flow as Teams/Processes), local → unchanged. Needs `joaxclaw-fs ≥ 0.6.0`
     on the host (the install-via-agent flow pulls it from npm).
-  - **Slice 2:** `memory.list/read` so the app browses server-local content over the
-    WS (today browsing is local-gateway-only; remote shows a "coming next" note).
+  - **Slice 2 (done):** `memory.list/read` on `joaxclaw-fs` browse server-local
+    content over the WS. On a remote gateway every store browses as a notes list +
+    preview (the backlink graph stays a local-gateway richness). Needs
+    `joaxclaw-fs ≥ 0.7.0`.
   - **Slice 3:** credential hardening — SecretRefs / scoped tokens instead of
     plaintext keys in `SKILL.md`. See [the memory-backends research](#see-also).
 
