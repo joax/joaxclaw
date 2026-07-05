@@ -2,7 +2,7 @@ import { useState, useRef, useCallback, useEffect } from 'react'
 import { Plus, Trash2, X, Save, ZoomIn, ZoomOut, Maximize2, LayoutGrid, Bot, Database, FolderOpen, Brain, Radio, ChevronDown, AlertCircle, Shuffle, UserCheck } from 'lucide-react'
 import type { ProcessDef, GraphNode, GraphEdge, Deliverable, ProcessGraph, PortSide } from '../../lib/processParser'
 import { useAgentsStore } from '../../store/agents'
-import { useObsidianStore } from '../../store/obsidian'
+import { useObsidianVaults, type ObsidianVaultRef } from '../../store/memory'
 import { ModelIcon } from '../ui/ModelIcon'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -422,7 +422,7 @@ function CollaborationPanel({ node, nodes, edges, agents, vaults, onChange, onCl
   nodes: GraphNode[]
   edges: GraphEdge[]
   agents: ReturnType<typeof useAgentsStore>['agents']
-  vaults: ReturnType<typeof useObsidianStore>['vaults']
+  vaults: ObsidianVaultRef[]
   onChange: (patch: Partial<GraphNode>) => void
   onClose: () => void
 }) {
@@ -691,7 +691,7 @@ interface Props {
 
 export function ProcessGraphEditor({ def, onSave, onClose }: Props) {
   const { agents, fetch: fetchAgents } = useAgentsStore()
-  const { vaults, loadConfig: loadVaults } = useObsidianStore()
+  const vaults = useObsidianVaults()
 
   const initGraph = (): ProcessGraph => {
     if (def.graph && def.graph.nodes.length > 0) return def.graph
@@ -722,8 +722,7 @@ export function ProcessGraphEditor({ def, onSave, onClose }: Props) {
   useEffect(() => { zoomRef.current = zoom }, [zoom])
   useEffect(() => {
     void fetchAgents()
-    void loadVaults()
-  }, [fetchAgents, loadVaults])
+  }, [fetchAgents])
 
   // Restore the saved graph, then fit it into view. The team/process compiler emits
   // every node on a single row (a flat line), so when the restored graph has just one

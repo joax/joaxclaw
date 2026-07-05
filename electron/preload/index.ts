@@ -118,6 +118,13 @@ contextBridge.exposeInMainWorld('api', {
     removeSkill: () => ipcRenderer.invoke('obsidian:removeSkill'),
   },
 
+  // Provider-neutral memory skill management (Memory tab). The app builds the full
+  // SKILL.md; main writes/removes it under ~/.openclaw/skills/<slug>/.
+  memory: {
+    writeSkill: (slug: string, markdown: string) => ipcRenderer.invoke('memory:writeSkill', slug, markdown),
+    removeSkill: (slug: string) => ipcRenderer.invoke('memory:removeSkill', slug),
+  },
+
   // App-native agent skills (process-builder, teams-blueprint)
   skills: {
     installNative: (force?: boolean) => ipcRenderer.invoke('skills:installNative', force),
