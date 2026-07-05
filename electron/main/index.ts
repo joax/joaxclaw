@@ -744,6 +744,14 @@ ipcMain.handle('memory:removeSkill', async (_event, slug: string) => {
   }
 })
 
+// ── IPC: Read a single environment variable ──────────────────────────────────
+// Backs memory credential "env:VAR" references on a LOCAL gateway (this machine is
+// the host). Name-validated; only reads the one requested var, never enumerates.
+ipcMain.handle('env:get', (_event, name: string) => {
+  if (typeof name !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) return { ok: false }
+  return { ok: true, value: process.env[name] ?? '' }
+})
+
 // ── IPC: Install app-native agent skills ─────────────────────────────────────
 // Writes SKILL.md files into ~/.openclaw/skills/<slug>/ so the gateway surfaces
 // them to agents (the `description` frontmatter is the "when to use" trigger).

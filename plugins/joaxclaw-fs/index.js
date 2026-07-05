@@ -96,8 +96,18 @@ async function mdRead(id) {
   return fs.readFile(expandHome(id), 'utf8')
 }
 
+// A memory credential is a literal or an "env:VAR" reference resolved from the host's
+// environment — so the plaintext secret never has to live in the SKILL.md or config.
+function resolveSecret(v) {
+  if (typeof v !== 'string') return ''
+  if (!v.startsWith('env:')) return v
+  const name = v.slice(4).trim()
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) return ''
+  return process.env[name] ?? ''
+}
+
 function obsHeaders(config) {
-  const key = String(config?.apiKey ?? '').trim().replace(/^Bearer\s+/i, '')
+  const key = resolveSecret(config?.apiKey).trim().replace(/^Bearer\s+/i, '')
   return key ? { Authorization: `Bearer ${key}` } : {}
 }
 async function obsListAll(config, dirPath = '', depth = 0) {

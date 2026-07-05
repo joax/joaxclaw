@@ -48,7 +48,10 @@ gateway RPC methods that read/write those directories on the host.
 Artifacts are passed through verbatim as strings (or `null` when missing); the app
 owns (de)serialization. Ids are validated to stay inside the state directories.
 `memory.skill.*` lets the Memory tab manage a memory connection's agent skill on a
-remote gateway host (the local `~/.openclaw` is the wrong machine there).
+remote gateway host (the local `~/.openclaw` is the wrong machine there); `memory.list`
+/`memory.read` browse a server-local store's content. A credential in `config` may be an
+`env:VAR` reference, resolved from the host's environment so the secret stays out of the
+config and the skill file.
 
 `teams.run` lets an agent launch a saved team against a concrete `task`. It's thin by
 design: it only records the request as `<id>.runrequest.json` (with a one-shot `nonce`);

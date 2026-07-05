@@ -1,6 +1,6 @@
 {
   "name": "openclaw-joaxclaw-fs",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "OpenClaw gateway plugin: exposes JoaxClaw teams (~/.openclaw/teams) and processes (~/.openclaw/processes) over the gateway as teams.* / processes.* RPC methods, plus engines.* host-side local-LLM probing and memory.* host-side skill management — so they all work on a remote gateway.",
   "license": "MIT",
   "author": "Joaquin Ayuso <joaxap@gmail.com>",

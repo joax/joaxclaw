@@ -6,6 +6,7 @@ import { gatewayHost } from '../../lib/ollamaHealth'
 import { buildPluginInstallPrompt } from '../../lib/joaxclawFsInstall'
 import { sendViaAgent } from '../../lib/agentPrompt'
 import { MEMORY_PROVIDERS, memoryProvider } from '../../lib/memory/providers'
+import { isEnvRef } from '../../lib/memory/secrets'
 import type { MemoryAccess, MemoryConnection, MemoryLocation } from '../../lib/memory/types'
 import { ForceGraph } from '../obsidian/ForceGraph'
 import { Btn } from '../ui/Btn'
@@ -393,7 +394,7 @@ function RemoteMemoryInstallNotice({ host, onOpenChat }: { host?: string; onOpen
         <p className="text-sm" style={{ color: 'var(--text-secondary)', lineHeight: 1.6, margin: 0 }}>
           Memory skills live on the gateway host
           {host ? <> (<b style={{ color: 'var(--text-primary)', fontFamily: 'monospace' }}>{host}</b>)</> : null}.
-          Install the <b style={{ color: 'var(--text-primary)' }}>joaxclaw-fs</b> plugin (v0.7+) on that host once, and this
+          Install the <b style={{ color: 'var(--text-primary)' }}>joaxclaw-fs</b> plugin (v0.8+) on that host once, and this
           tab can add, manage, and browse memory connections over the connection — the same plugin that powers Teams &amp; Processes.
         </p>
         <div style={{ display: 'flex', gap: 8, justifyContent: 'center', marginTop: 18 }}>
@@ -485,15 +486,24 @@ function ConnectSheet({ edit, onClose }: { edit: MemoryConnection | null; onClos
                 <label className="block text-xs mb-1" style={{ color: 'var(--text-secondary)' }}>Name</label>
                 <Input value={name} onChange={setName} placeholder={def.label} style={{ fontSize: 12.5 }} />
               </div>
-              {def.fields.map(f => (
+              {def.fields.map(f => {
+                const envRef = f.kind === 'secret' && isEnvRef(config[f.key])
+                return (
                 <div key={f.key} className="mb-3">
                   <label className="block text-xs mb-1" style={{ color: 'var(--text-secondary)' }}>{f.label}{f.required && <span style={{ color: 'var(--danger)' }}> *</span>}</label>
                   <Input value={config[f.key] ?? ''} onChange={v => { setConfig(c => ({ ...c, [f.key]: v })); setTestState({ phase: 'idle' }) }}
-                    type={f.kind === 'secret' ? 'password' : 'text'} placeholder={f.placeholder}
-                    style={{ fontSize: 12.5, fontFamily: f.kind === 'path' || f.kind === 'url' ? 'monospace' : undefined }} />
+                    type={f.kind === 'secret' && !envRef ? 'password' : 'text'} placeholder={f.placeholder}
+                    style={{ fontSize: 12.5, fontFamily: (f.kind === 'path' || f.kind === 'url' || envRef) ? 'monospace' : undefined }} />
                   {f.help && <p className="text-[11.5px] mt-1" style={{ color: 'var(--text-secondary)', opacity: 0.7 }}>{f.help}</p>}
+                  {f.kind === 'secret' && (
+                    <p className="text-[11.5px] mt-1" style={{ color: envRef ? 'var(--success)' : 'var(--text-secondary)', opacity: envRef ? 1 : 0.7 }}>
+                      {envRef
+                        ? 'Referencing a host environment variable — the secret is not stored here or in the skill.'
+                        : 'Tip: enter env:VAR_NAME to reference a host environment variable instead of storing the key.'}
+                    </p>
+                  )}
                 </div>
-              ))}
+              )})}
               <div className="flex items-center gap-2 mt-4">
                 <Btn size="sm" variant="outline" loading={testState.phase === 'testing'} onClick={runTest}>Test connection</Btn>
                 <Btn size="sm" disabled={!canSave} onClick={save}>{edit ? 'Save' : 'Add & connect'}</Btn>
