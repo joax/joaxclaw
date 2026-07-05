@@ -10,7 +10,7 @@ import type { ThemeSettings } from './types'
 const themeModules = import.meta.glob<Record<string, unknown>>('/themes/*/theme.json', { eager: true, import: 'default' })
 const bgModules = import.meta.glob<string>('/themes/*/backgrounds/*', { eager: true, import: 'default', query: '?url' })
 
-const PRESET_ORDER = ['default-dark', 'ocean-dark', 'rose-light', 'forest-dark', 'retro-terminal']
+const PRESET_ORDER = ['default-dark', 'ocean-dark', 'rose-light', 'sky-light', 'forest-dark', 'retro-terminal']
 const rank = (id: string) => { const i = PRESET_ORDER.indexOf(id); return i < 0 ? 99 : i }
 
 function buildPreset(themePath: string, raw: Record<string, unknown>): ThemeSettings | null {
