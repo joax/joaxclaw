@@ -19,6 +19,7 @@
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
+import https from 'node:https'
 import { randomUUID } from 'node:crypto'
 import { definePluginEntry } from 'openclaw/plugin-sdk/plugin-entry'
 import { resolveStateDir } from 'openclaw/plugin-sdk/state-paths'
@@ -113,17 +114,29 @@ function obsHeaders(config) {
 
 // The Obsidian Local REST API's HTTPS port (27124) serves a SELF-SIGNED cert, which
 // Node's fetch rejects ("fetch failed"). The desktop app trusts it via the OS cert
-// store; here we skip verification, but ONLY for a LOCAL host (loopback/.local/private
-// IPv4) over https — never for a public URL. Created lazily; degrades to plain fetch
-// if undici's Agent isn't importable.
-let _insecureAgent
-async function insecureAgent() {
-  if (_insecureAgent !== undefined) return _insecureAgent
-  try {
-    const { Agent } = await import('undici')
-    _insecureAgent = new Agent({ connect: { rejectUnauthorized: false } })
-  } catch { _insecureAgent = null }
-  return _insecureAgent
+// store. Here we make the request with node:https and rejectUnauthorized:false — which
+// reliably skips verification (unlike a fetch dispatcher) — but ONLY for a LOCAL host
+// (loopback/.local/private IPv4) over https, never for a public URL. Returns a minimal
+// Response-like object so callers can use res.ok / res.status / res.json() / res.text().
+function insecureLocalHttps(url, headers) {
+  return new Promise((resolve, reject) => {
+    const req = https.request(url, { method: 'GET', headers, rejectUnauthorized: false }, res => {
+      const chunks = []
+      res.on('data', c => chunks.push(c))
+      res.on('end', () => {
+        const body = Buffer.concat(chunks).toString('utf8')
+        resolve({
+          ok: res.statusCode >= 200 && res.statusCode < 300,
+          status: res.statusCode,
+          text: async () => body,
+          json: async () => JSON.parse(body),
+        })
+      })
+    })
+    req.on('error', reject)
+    req.setTimeout(20000, () => req.destroy(new Error('request timed out')))
+    req.end()
+  })
 }
 
 // Single entry point for every Obsidian request, so the self-signed-cert handling and
@@ -131,15 +144,14 @@ async function insecureAgent() {
 async function obsFetch(config, suffix, extraHeaders = {}) {
   const base = String(config?.url ?? '').replace(/\/$/, '')
   const url = base + suffix
-  const opts = { headers: { ...obsHeaders(config), ...extraHeaders } }
+  const headers = { ...obsHeaders(config), ...extraHeaders }
   try {
     const u = new URL(url)
     if (u.protocol === 'https:' && isLocalEngineHost(u.hostname)) {
-      const agent = await insecureAgent()
-      if (agent) opts.dispatcher = agent
+      return await insecureLocalHttps(url, headers)
     }
-  } catch { /* malformed url → let fetch surface it */ }
-  return fetch(url, opts)
+  } catch { /* malformed url → fall through to fetch, which will surface it */ }
+  return fetch(url, { headers })
 }
 
 async function obsListAll(config, dirPath = '', depth = 0) {
