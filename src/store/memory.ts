@@ -49,6 +49,17 @@ function syncSkills(connections: MemoryConnection[]) {
   }
 }
 
+// Gateway errors arrive as an Error whose message is a JSON string
+// ({"code":…,"message":…}); surface just the human message.
+function cleanErr(e: unknown): string {
+  const s = e instanceof Error ? e.message : String(e)
+  try {
+    const p = JSON.parse(s) as { message?: string }
+    if (p?.message) return p.message
+  } catch { /* not JSON */ }
+  return s
+}
+
 let _idCounter = 0
 function newId(): string {
   // No Math.random / Date.now in this codebase's guarded paths — a monotonic counter
@@ -109,7 +120,7 @@ async function loadContent(get: () => MemoryState, set: (p: Partial<MemoryState>
         set({ items, info: { totalItems: items.length }, loading: false })
       }
     } catch (e) {
-      if (get().selectedId === id) set({ error: String(e), loading: false })
+      if (get().selectedId === id) set({ error: cleanErr(e), loading: false })
     }
     return
   }
@@ -233,7 +244,7 @@ export const useMemoryStore = create<MemoryState>()(
               : ''
           if (get().selectedId === id) set({ preview: { id: itemId, title, content }, previewLoading: false })
         } catch (e) {
-          if (get().selectedId === id) set({ preview: { id: itemId, title, content: `Could not read this item.\n\n${String(e)}` }, previewLoading: false })
+          if (get().selectedId === id) set({ preview: { id: itemId, title, content: `Could not read this item.\n\n${cleanErr(e)}` }, previewLoading: false })
         }
       },
 
@@ -248,7 +259,7 @@ export const useMemoryStore = create<MemoryState>()(
             const n = res?.items?.length ?? 0
             return { ok: true, info: { totalItems: n, note: `${n} item${n === 1 ? '' : 's'} on the gateway host` } }
           } catch (e) {
-            return { ok: false, error: String(e) }
+            return { ok: false, error: cleanErr(e) }
           }
         }
         const def = memoryProvider(providerId)
