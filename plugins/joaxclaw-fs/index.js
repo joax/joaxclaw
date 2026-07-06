@@ -429,7 +429,13 @@ function badId(respond, kind, id) {
   respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, `invalid ${kind} id ${JSON.stringify(id)}`))
 }
 function failed(respond, err) {
-  respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, `joaxclaw-fs: ${err?.message ?? String(err)}`))
+  // Surface the underlying cause: `fetch` TypeErrors read "fetch failed", but the real
+  // reason (ECONNREFUSED, self-signed certificate, timeout, …) lives in err.cause.
+  const base = err?.message ?? String(err)
+  const cause = err?.cause
+  const detail = cause?.code || cause?.message
+  const msg = detail && detail !== base ? `${base} (${detail})` : base
+  respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, `joaxclaw-fs: ${msg}`))
 }
 
 export default definePluginEntry({
