@@ -1,9 +1,11 @@
 import { useState, useEffect, type ReactNode, type MouseEvent as ReactMouseEvent } from 'react'
-import { Plus, Search, Trash2, MessageSquare, Radio, Heart, ExternalLink, ArrowLeftToLine, ChevronDown, Pencil } from 'lucide-react'
+import { Plus, Search, Trash2, MessageSquare, Radio, Heart, ExternalLink, ArrowLeftToLine, ChevronDown, Pencil, Clock } from 'lucide-react'
 import { ModelIcon } from '../ui/ModelIcon'
 import { useChatStore } from '../../store/chat'
 import { useAgentsStore } from '../../store/agents'
 import { useSessionsStore } from '../../store/sessions'
+import { useCronsStore } from '../../store/crons'
+import { cronJobForSession } from '../../lib/reminders'
 import { useModelsStore } from '../../store/models'
 import { useSettingsStore } from '../../store/settings'
 import { MessageThread } from './MessageThread'
@@ -28,6 +30,7 @@ interface ChatItem {
   running: boolean
   isActive: boolean
   heartbeat?: boolean
+  cron?: boolean          // a cron-triggered run — grouped under "Scheduled"
   onOpen: () => void
   onDelete?: () => void
   onPopOut?: () => void
@@ -40,6 +43,9 @@ export function ChatView({ solo }: { solo?: string } = {}) {
   const { conversations, activeConvId, newConversation, selectConversation, deleteConversation, loadSessionMessages, watchSession, setModelOverride, setThinkingLevel } = useChatStore()
   const { agents, defaultId, fetch: fetchAgents } = useAgentsStore()
   const { sessions, customLabels, derivedNames, rename: renameSession, fetch: fetchSessions } = useSessionsStore()
+  const cronJobs = useCronsStore(s => s.jobs)
+  const cronSessions = useCronsStore(s => s.cronSessions)
+  const fetchCrons = useCronsStore(s => s.fetch)
   const [search, setSearch] = useState('')
   const [showNewMenu, setShowNewMenu] = useState(false)
   const [filter, setFilter] = useState<'all' | 'active'>('all')
@@ -62,6 +68,10 @@ export function ChatView({ solo }: { solo?: string } = {}) {
     const t = setInterval(fetchSessions, 12_000)
     return () => clearInterval(t)
   }, [])
+
+  // Load crons + subscribe to cron events so cron-triggered sessions can be
+  // grouped under "Scheduled" and labelled by their job name.
+  useEffect(() => { fetchCrons() }, [])
 
   // Solo (pop-out) window: open the target session as the active conversation.
   useEffect(() => {
@@ -205,7 +215,14 @@ export function ChatView({ solo }: { solo?: string } = {}) {
     onRename: (name: string) => renameSession(s.key, name),
   }))
 
-  const activeItems = [...convItems.filter(i => i.running), ...sessionItems].sort((a, b) => b.ts - a.ts)
+  // Tag any active item whose session is driven by a cron job, and relabel it with the
+  // job name (a bare cron run otherwise shows up as the raw agent, e.g. "main").
+  const activeCandidates = [...convItems.filter(i => i.running), ...sessionItems].map(i => {
+    const job = i.sessionKey ? cronJobForSession(cronJobs, cronSessions, i.sessionKey) : undefined
+    return job ? { ...i, cron: true, name: job.name } : i
+  })
+  const cronItems = activeCandidates.filter(i => i.cron).sort((a, b) => b.ts - a.ts)
+  const activeItems = activeCandidates.filter(i => !i.cron).sort((a, b) => b.ts - a.ts)
   const restItems = convItems.filter(i => !i.running)
 
   const today = new Date().toDateString()
@@ -218,7 +235,7 @@ export function ChatView({ solo }: { solo?: string } = {}) {
     .map(label => ({ label, items: restItems.filter(i => dayLabel(i.ts) === label) }))
     .filter(g => g.items.length)
 
-  const isEmpty = !activeItems.length && !dateGroups.length
+  const isEmpty = !activeItems.length && !cronItems.length && !dateGroups.length
 
   return (
     <div className="flex flex-1 min-h-0">
@@ -291,7 +308,7 @@ export function ChatView({ solo }: { solo?: string } = {}) {
         {/* Segmented filter */}
         <div className="flex items-center gap-1 px-3 pb-2">
           <FilterTab label="All" active={filter === 'all'} onClick={() => setFilter('all')} />
-          <FilterTab label="Active" count={activeItems.length} active={filter === 'active'} onClick={() => setFilter('active')} />
+          <FilterTab label="Active" count={activeItems.length + cronItems.length} active={filter === 'active'} onClick={() => setFilter('active')} />
         </div>
 
         <div className="flex-1 overflow-y-auto px-2 pb-2">
@@ -315,6 +332,20 @@ export function ChatView({ solo }: { solo?: string } = {}) {
                 </span>
               </div>
               {activeItems.map(item => <ChatRow key={item.key} item={item} />)}
+            </div>
+          )}
+
+          {/* Scheduled: sessions currently being driven by a cron job, labelled by job name. */}
+          {cronItems.length > 0 && (
+            <div className="mb-2">
+              <div className="flex items-center gap-1.5 px-2 py-1.5">
+                <Clock size={11} style={{ color: 'var(--text-secondary)' }} />
+                <p className="text-xs font-semibold" style={{ color: 'var(--text-secondary)' }}>Scheduled</p>
+                <span className="text-xs px-1.5 rounded-full ml-auto" style={{ background: 'var(--bg-elevated)', color: 'var(--text-secondary)', fontSize: 10 }}>
+                  {cronItems.length}
+                </span>
+              </div>
+              {cronItems.map(item => <ChatRow key={item.key} item={item} />)}
             </div>
           )}
 
@@ -598,6 +629,7 @@ function ChatRow({ item }: { item: ChatItem }) {
             {item.name}
           </p>
         )}
+        {item.cron && !editing && <Clock size={11} title="Scheduled run (cron job)" style={{ color: 'var(--text-secondary)', flexShrink: 0 }} />}
         {item.heartbeat && !editing && <Heart size={11} title="Heartbeat session" style={{ color: 'var(--accent)', opacity: 0.8, flexShrink: 0 }} />}
         {!editing && !hovered && item.time && <span className="text-xs shrink-0" style={{ color: 'var(--text-secondary)' }}>{item.time}</span>}
       </div>

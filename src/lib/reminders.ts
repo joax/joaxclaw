@@ -59,6 +59,22 @@ export function reminderForSession(jobs: CronJob[], sessionKey: string): Pending
   return reminderBySession(jobs).get(sessionKey)
 }
 
+// The cron job a session belongs to — from live run events (cronSessions) or a job that
+// explicitly targets the session. Reminder jobs are excluded: their target is a normal
+// chat being pinged, not a cron-run session, so it should stay labelled as that chat.
+export function cronJobForSession(
+  jobs: CronJob[],
+  cronSessions: Record<string, string>,
+  sessionKey: string,
+): CronJob | undefined {
+  const jobId = cronSessions[sessionKey]
+  if (jobId) {
+    const j = jobs.find(x => x.id === jobId)
+    if (j && !isReminderJob(j)) return j
+  }
+  return jobs.find(j => !isReminderJob(j) && sessionKeyOfJob(j) === sessionKey)
+}
+
 // Compact countdown to a fire time: "34s", "5m", "2h 10m", "3d", or "now".
 export function fmtCountdown(fireAtMs?: number, nowMs = Date.now()): string {
   if (!fireAtMs) return ''

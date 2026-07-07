@@ -10,6 +10,10 @@ interface CronsState {
   loadingJobs: boolean
   loadingRuns: Set<string>
   runningNow: Set<string>
+  // Gateway sessions that belong to a cron run, sessionKey → jobId. Learned from
+  // cron run events (started/finished carry the run's sessionKey), so the chat list
+  // can label a cron-triggered session by its job instead of the bare agent name.
+  cronSessions: Record<string, string>
   error: string | null
   _subscribed: boolean
   fetch: () => Promise<void>
@@ -29,6 +33,7 @@ export const useCronsStore = create<CronsState>((set, get) => ({
   loadingJobs: false,
   loadingRuns: new Set(),
   runningNow: new Set(),
+  cronSessions: {},
   error: null,
   _subscribed: false,
 
@@ -78,7 +83,9 @@ export const useCronsStore = create<CronsState>((set, get) => ({
           jobs: s.jobs.map(j => j.id === jobId ? {
             ...j,
             state: { ...j.state, runningAtMs: p.runAtMs ?? Date.now(), nextRunAtMs: p.nextRunAtMs }
-          } : j)
+          } : j),
+          // Record which live session this run drives, so the chat list can label it.
+          cronSessions: p.sessionKey ? { ...s.cronSessions, [p.sessionKey]: jobId } : s.cronSessions,
         }))
         return
       }
@@ -115,7 +122,8 @@ export const useCronsStore = create<CronsState>((set, get) => ({
           } : j),
           runs: s.runs[jobId]
             ? { ...s.runs, [jobId]: [newEntry, ...s.runs[jobId]] }
-            : s.runs
+            : s.runs,
+          cronSessions: p.sessionKey ? { ...s.cronSessions, [p.sessionKey]: jobId } : s.cronSessions,
         }))
       }
     })
