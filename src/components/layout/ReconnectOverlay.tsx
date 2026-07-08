@@ -1,5 +1,5 @@
 import { Loader2, RefreshCw, Server } from 'lucide-react'
-import logoUrl from '../../assets/logo-dark.png'
+import { useLogoUrl } from '../../lib/logo'
 import { useConnectionStore, RECONNECT_MAX_ATTEMPTS } from '../../store/connection'
 import { Btn } from '../ui/Btn'
 
@@ -10,6 +10,7 @@ import { Btn } from '../ui/Btn'
 // and silently retry.
 export function ReconnectOverlay() {
   const { reconnectAttempt, statusDetail, connection, cancelReconnect } = useConnectionStore()
+  const logoUrl = useLogoUrl()
 
   return (
     <div className="flex flex-1 items-center justify-center min-h-0" style={{ background: 'var(--bg-primary)' }}>

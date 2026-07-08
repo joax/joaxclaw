@@ -1,5 +1,5 @@
 import { Minus, Square, X } from 'lucide-react'
-import logoUrl from '../../assets/logo-dark.png'
+import { useLogoUrl } from '../../lib/logo'
 
 declare global {
   interface Window {
@@ -26,6 +26,7 @@ declare global {
 
 export function TitleBar() {
   const isElectron = !!window.api?.window
+  const logoUrl = useLogoUrl()
 
   return (
     <div
