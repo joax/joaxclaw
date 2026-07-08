@@ -171,6 +171,19 @@ function attachChatStream(
       observedTokens?: number | string; error?: string; diagId?: string; spawnedBy?: string
     }
 
+    // Transient gateway race: two initializations of the same session's reply context
+    // collided ("reply session initialization conflicted"). The turn never started, so
+    // tear this stream down silently and let the send path re-fire — don't leave a dead
+    // ⚠ bubble. The error can arrive as either an agent-stream error or a chat-state
+    // error, so both branches funnel through here. Returns true if it handled the error.
+    const handleInitConflict = (errText: string): boolean => {
+      if (!opts?.onInitConflict || !/initialization conflicted/i.test(errText)) return false
+      activeStreams.delete(convId)
+      unsub()
+      opts.onInitConflict()
+      return true
+    }
+
     // Frames from a spawned sub-agent (different session key) are routed into a thread
     // on the live message instead of being dropped. A direct child carries
     // spawnedBy === our session key; once seen, its key is remembered.
@@ -206,15 +219,7 @@ function attachChatStream(
         const errText = (raw.errorMessage as string | undefined)
           ?? (raw.message as string | undefined)
           ?? 'Agent runtime error'
-        // Transient gateway race: two initializations of the same session's reply
-        // context collided. The turn never started, so tear the stream down silently
-        // and let the send path re-fire — don't leave a dead ⚠ bubble.
-        if (opts?.onInitConflict && /initialization conflicted/i.test(errText)) {
-          activeStreams.delete(convId)
-          unsub()
-          opts.onInitConflict()
-          return
-        }
+        if (handleInitConflict(errText)) return
         update(m => ({
           ...m,
           content: m.content ? `${m.content}\n\n⚠ ${errText}` : `⚠ ${errText}`,
@@ -346,6 +351,7 @@ function attachChatStream(
       // Resolve error text from errorMessage, or fall back to p.message text (gateway may use either)
       const errText = (p.errorMessage ?? extractText(p.message))
         || (p.state === 'incomplete' ? 'Incomplete turn — the agent stopped without producing a response' : 'Unknown error')
+      if (handleInitConflict(errText)) return
       update(m => ({
         ...m,
         // Always surface the error. If there was partial content, append so nothing is lost.
