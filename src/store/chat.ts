@@ -853,9 +853,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const key = sessionKey
       // The gateway occasionally rejects the first turn on a fresh session with a transient
       // "reply session initialization conflicted" (two inits of the same reply context race).
-      // The turn dies with no reply, so re-fire once after a short backoff — by then the
-      // gateway has finished initializing and the retry lands cleanly.
-      let initRetries = 1
+      // The turn dies with no reply, so re-fire with an escalating backoff — by then the
+      // gateway has finished initializing and a retry lands cleanly. A single quick retry
+      // isn't always enough when the gateway is slow to initialize, so give it a few tries
+      // (~400/800/1600ms) before surfacing the dead ⚠ turn.
+      const INIT_BACKOFFS = [400, 800, 1600]
+      let initAttempt = 0
 
       const isInitConflict = (s: string) => /initialization conflicted/i.test(s)
 
@@ -872,9 +875,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
           settled = true
           const entry = activeStreams.get(convId)
           if (entry?.sessionKey === key) { entry.unsub(); activeStreams.delete(convId) }
-          if (initRetries > 0) {
-            initRetries--
-            setTimeout(doSend, 600)  // re-fire once the gateway has finished initializing
+          if (initAttempt < INIT_BACKOFFS.length) {
+            setTimeout(doSend, INIT_BACKOFFS[initAttempt])  // re-fire once the gateway has finished initializing
+            initAttempt++
             return
           }
           updateAssistant(m => m.streaming
