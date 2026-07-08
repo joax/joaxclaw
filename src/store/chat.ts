@@ -851,22 +851,32 @@ export const useChatStore = create<ChatState>((set, get) => ({
       // gateway has finished initializing and the retry lands cleanly.
       let initRetries = 1
 
+      const isInitConflict = (s: string) => /initialization conflicted/i.test(s)
+
       const doSend = () => {
         // Bail if the conversation moved on (deleted, or the user started another turn).
         if (get().conversations.find(c => c.id === convId)?.sessionKey !== key) return
 
-        attachChatStream(convId, key, updateAssistant, {
-          onInitConflict: () => {
-            if (initRetries <= 0) {
-              updateAssistant(m => m.streaming
-                ? { ...m, content: m.content || '⚠ reply session initialization conflicted', streaming: false, waitingForSession: undefined }
-                : m)
-              return
-            }
+        // This attempt's transient-conflict handler. The conflict can surface either as an
+        // agent-stream 'error' event or as the chat.send RPC rejection, and occasionally
+        // both — `settled` makes it fire at most once per attempt.
+        let settled = false
+        const onConflict = () => {
+          if (settled) return
+          settled = true
+          const entry = activeStreams.get(convId)
+          if (entry?.sessionKey === key) { entry.unsub(); activeStreams.delete(convId) }
+          if (initRetries > 0) {
             initRetries--
-            setTimeout(doSend, 600)
-          },
-        })
+            setTimeout(doSend, 600)  // re-fire once the gateway has finished initializing
+            return
+          }
+          updateAssistant(m => m.streaming
+            ? { ...m, content: m.content || '⚠ reply session initialization conflicted', streaming: false, waitingForSession: undefined }
+            : m)
+        }
+
+        attachChatStream(convId, key, updateAssistant, { onInitConflict: onConflict })
 
         // The turn's lifecycle is driven entirely by the event stream (final / error /
         // aborted), NOT by chat.send's reply. A slow local model can take far longer than
@@ -891,9 +901,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
           } : {}),
           idempotencyKey: nanoid(16)
         }, 0).catch(err => {
+          const msg = String(err)
+          if (isInitConflict(msg)) { onConflict(); return }
+          if (settled) return
           // A late event may have already finished the turn — don't clobber it.
           updateAssistant(m => m.streaming
-            ? { ...m, content: m.content || `Error: ${String(err)}`, streaming: false, waitingForSession: undefined }
+            ? { ...m, content: m.content || `Error: ${msg}`, streaming: false, waitingForSession: undefined }
             : m)
           const entry = activeStreams.get(convId)
           if (entry?.sessionKey === key) { entry.unsub(); activeStreams.delete(convId) }
