@@ -11,7 +11,7 @@ import { useSettingsStore } from '../../store/settings'
 import { MessageThread } from './MessageThread'
 import { ThemeBackground } from '../theme/ThemeBackground'
 import { MessageInput } from './MessageInput'
-import logoUrl from '../../assets/logo-dark.png'
+import { useLogoUrl } from '../../lib/logo'
 import { ModelSelect, ThinkingSelect, DisplayMenu } from './ChatHeaderControls'
 import { formatRelativeDate } from '../../lib/dateUtils'
 import type { Session } from '../../lib/types'
@@ -46,9 +46,13 @@ export function ChatView({ solo }: { solo?: string } = {}) {
   const cronJobs = useCronsStore(s => s.jobs)
   const cronSessions = useCronsStore(s => s.cronSessions)
   const fetchCrons = useCronsStore(s => s.fetch)
+  const logoUrl = useLogoUrl()
   const [search, setSearch] = useState('')
   const [showNewMenu, setShowNewMenu] = useState(false)
   const [filter, setFilter] = useState<'all' | 'active'>('all')
+  // Recent chats are capped so reopening the app lands on the few you were last working
+  // on, not a wall of every session; "Show older" reveals the rest on demand.
+  const [showAllRecent, setShowAllRecent] = useState(false)
   const [showTools, setShowTools] = useState(true)
   const [showReasoning, setShowReasoning] = useState(true)
   const [showContext, setShowContext] = useState(true)
@@ -120,6 +124,20 @@ export function ChatView({ solo }: { solo?: string } = {}) {
   // Sessions that are running but not yet opened as conversations (and not popped out)
   const activeSessions = sessions.filter(s =>
     isRunning(s) && !conversationSessionKeys.has(s.key) && !poppedOut.has(s.key)
+  )
+
+  const isHeartbeatSession = (s: Session) => s.isHeartbeat || s.key.includes(':heartbeat')
+
+  // Idle sessions from the gateway (which survive an app restart, unlike the in-memory
+  // conversation list) — the durable source for "the chats I was last working on".
+  // Running ones are excluded (they surface under Active/Scheduled); heartbeats and
+  // popped-out windows are noise; anything already opened as a conversation is deduped.
+  const recentSessions = sessions.filter(s =>
+    !isRunning(s) &&
+    !conversationSessionKeys.has(s.key) &&
+    !poppedOut.has(s.key) &&
+    !isHeartbeatSession(s) &&
+    (s.updatedAt || s.startedAt)
   )
 
   const agentName = (sessionKey: string) => {
@@ -223,7 +241,38 @@ export function ChatView({ solo }: { solo?: string } = {}) {
   })
   const cronItems = activeCandidates.filter(i => i.cron).sort((a, b) => b.ts - a.ts)
   const activeItems = activeCandidates.filter(i => !i.cron).sort((a, b) => b.ts - a.ts)
-  const restItems = convItems.filter(i => !i.running)
+
+  // Idle gateway sessions as chat rows (same shape as the running ones, minus the live
+  // state), honouring the search box just like opened conversations do.
+  const matchesSearch = (name: string) => name.toLowerCase().includes(search.toLowerCase())
+  const recentSessionItems: ChatItem[] = recentSessions
+    .filter(s => matchesSearch(sessionDisplayName(s)))
+    .map(s => {
+      const at = s.updatedAt ?? s.startedAt ?? 0
+      return {
+        key: `session:${s.key}`,
+        sessionKey: s.key,
+        emoji: agentEmoji(sessionAgentId(s.key)),
+        name: sessionDisplayName(s),
+        ts: at,
+        time: at ? formatRelativeDate(new Date(at).toISOString()) : undefined,
+        subtitle: s.lastMessage || undefined,
+        running: false,
+        isActive: false,
+        onOpen: () => handleOpenSession(s),
+        onPopOut: () => popOut(s.key),
+        onRename: (name: string) => renameSession(s.key, name),
+      }
+    })
+
+  // The recency stream: opened-but-idle conversations + idle gateway sessions, newest
+  // first. Capped so a fresh launch shows the handful you were last on; the remainder is
+  // one "Show older" click away rather than dumped into the list.
+  const RECENT_LIMIT = 8
+  const restItems = [...convItems.filter(i => !i.running), ...recentSessionItems]
+    .sort((a, b) => b.ts - a.ts)
+  const visibleRest = showAllRecent ? restItems : restItems.slice(0, RECENT_LIMIT)
+  const hiddenRestCount = restItems.length - visibleRest.length
 
   const today = new Date().toDateString()
   const yesterday = new Date(Date.now() - 86400000).toDateString()
@@ -232,7 +281,7 @@ export function ChatView({ solo }: { solo?: string } = {}) {
     return d === today ? 'Today' : d === yesterday ? 'Yesterday' : 'Earlier'
   }
   const dateGroups = (['Today', 'Yesterday', 'Earlier'] as const)
-    .map(label => ({ label, items: restItems.filter(i => dayLabel(i.ts) === label) }))
+    .map(label => ({ label, items: visibleRest.filter(i => dayLabel(i.ts) === label) }))
     .filter(g => g.items.length)
 
   const isEmpty = !activeItems.length && !cronItems.length && !dateGroups.length
@@ -357,6 +406,18 @@ export function ChatView({ solo }: { solo?: string } = {}) {
               {group.items.map(item => <ChatRow key={item.key} item={item} />)}
             </div>
           ))}
+
+          {filter === 'all' && (hiddenRestCount > 0 || showAllRecent) && (
+            <button
+              onClick={() => setShowAllRecent(v => !v)}
+              className="w-full text-xs px-2 py-1.5 rounded"
+              style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', textAlign: 'left' }}
+              onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--bg-elevated)' }}
+              onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = 'none' }}
+            >
+              {showAllRecent ? 'Show less' : `Show ${hiddenRestCount} older…`}
+            </button>
+          )}
         </div>
       </div>
       )}
