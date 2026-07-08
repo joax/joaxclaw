@@ -5,6 +5,32 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.18.0] - 2026-07-09
+
+### Added
+
+- **The Memory tab, rebuilt as pluggable connections.** What was a hardcoded Obsidian view is now a provider-neutral memory manager: **Connect** a store (Obsidian, or a new zero-dependency **Markdown folder**), **Manage** which agents can reach it and whether it's read-only, and **Browse** its contents in-app — a backlink graph for Obsidian, a notes list + preview for Markdown. Agents reach each store through a generated OpenClaw skill, so adding a backend is a single registry entry. Existing Obsidian vaults are folded into connections automatically, so nothing is lost.
+- **Memory on a remote gateway.** Enabling a connection against a remote gateway now installs its skill, browses its server-local stores, and renders the Obsidian backlink graph — all **on the gateway host**, over the connection, via the existing `joaxclaw-fs` plugin (no separate install). When the host doesn't have the plugin yet, the tab offers a one-click **Install via agent** (the same flow as Teams/Processes); local gateways keep working as before.
+- **Env-var credential references for memory stores.** A secret field can be an `env:VAR` reference instead of a literal key, so the plaintext credential stays out of both the generated skill file and localStorage. It's resolved where the request actually runs — the gateway host's environment for a remote store, a name-validated local lookup otherwise.
+- **Live gateway connection-strength indicator.** A wifi-style signal meter in the status bar reflects how healthy the gateway connection is — sampling round-trip latency on a rolling window and showing 0–4 colored bars (green / amber / red) with median RTT and loss. Works against a local or remote gateway.
+- **Sky Light theme.** A bright light theme built around whites and soft light blues, with matching gentle sky-toned backgrounds for the app and chat.
+- **Theme-aware app logo.** The logo now matches the active theme — the dark-navy artwork on light themes (e.g. Sky Light), the pale artwork on dark themes — following the OS scheme for `system` themes.
+- **Recent chats in the sidebar.** Reopening the app now surfaces the chats you were last working on, newest first, under the Today / Yesterday / Earlier groups. The list is driven by the gateway's session history (so it survives a restart) and is capped to the most recent few, with **Show older** to reveal the rest — instead of showing nothing until you re-open a chat by hand.
+- **Scheduled section in the chat list.** Sessions currently being driven by a cron job are grouped under their own **Scheduled** heading and labelled by the job's name, instead of showing up as a bare agent run.
+
+### Changed
+
+- **Management surfaces consolidated under Settings.** The top navigation is now just the things you use day-to-day; **Sessions**, **Models**, and **Extensions** move into Settings sub-tabs (Connection · Gateway · Sessions · Devices · Channels · Local LLM · Models · Extensions). Deep links (e.g. "manage plugin") jump straight to the right sub-tab.
+- **Sessions view de-technified.** It's now a management view (Chats is where you resume live sessions): name-first rows with the raw session key on hover, plain-language status (Completed / Stopped / Timed out), and a cost-first usage cell with the token breakdown on hover — no more raw keys or "ctx tokens" jargon.
+- **Extensions redesigned into a scannable library.** A segmented **Skills / Plugins** control with search and a context-aware **Add**, rows grouped by attention (Needs setup → Active → Off), each leading with name + description + clear state, with Configure/Update inline and the technical details tucked into the expanded row.
+
+### Fixed
+
+- **Transient "reply session initialization conflicted" turns now recover on their own.** When the gateway briefly races two initializations of a fresh session's reply context, the turn is retried automatically — up to three times with an escalating backoff, across both the agent-stream and chat-state error paths — instead of stranding a dead ⚠ bubble that you had to re-send by hand.
+- **Memory errors say what actually went wrong.** The real cause (ECONNREFUSED / TLS certificate / timeout) is surfaced instead of a bare "fetch failed", and the tab shows just the message rather than a raw `{"code":…}` blob.
+- **Obsidian over local HTTPS is reliable.** A local Obsidian host's self-signed certificate is tolerated (and TLS skipped via `node:https` for localhost), so a local vault connects without cert errors.
+- **Memory connection tests run on the right machine.** For a remote gateway, a connection is tested from the gateway host rather than your local machine, so the result reflects what the agents will actually see.
+
 ## [0.17.1] - 2026-07-03
 
 ### Added
