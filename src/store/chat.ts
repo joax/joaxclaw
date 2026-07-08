@@ -148,8 +148,16 @@ function applyChildFrame(event: string, p: ChatEventPayload & AgentEventPayload,
   }
 }
 
-// Shared chat event handler — used by both sendMessage and watchSession
-function attachChatStream(convId: string, sessionKey: string, update: UpdateFn): void {
+// Shared chat event handler — used by both sendMessage and watchSession.
+// onInitConflict (send path only) is invoked when the gateway rejects the turn with a
+// transient "reply session initialization conflicted" — the stream is torn down silently
+// and the caller decides whether to re-send, instead of surfacing a dead ⚠ turn.
+function attachChatStream(
+  convId: string,
+  sessionKey: string,
+  update: UpdateFn,
+  opts?: { onInitConflict?: () => void },
+): void {
   // Sub-agent thread routing for this stream. childKeys: a spawned child's session key
   // → its threadId. spawnCalls: a sessions_spawn toolCallId → threadId (the child's
   // session key only arrives later, on the spawn tool's result).
@@ -198,6 +206,15 @@ function attachChatStream(convId: string, sessionKey: string, update: UpdateFn):
         const errText = (raw.errorMessage as string | undefined)
           ?? (raw.message as string | undefined)
           ?? 'Agent runtime error'
+        // Transient gateway race: two initializations of the same session's reply
+        // context collided. The turn never started, so tear the stream down silently
+        // and let the send path re-fire — don't leave a dead ⚠ bubble.
+        if (opts?.onInitConflict && /initialization conflicted/i.test(errText)) {
+          activeStreams.delete(convId)
+          unsub()
+          opts.onInitConflict()
+          return
+        }
         update(m => ({
           ...m,
           content: m.content ? `${m.content}\n\n⚠ ${errText}` : `⚠ ${errText}`,
@@ -827,37 +844,63 @@ export const useChatStore = create<ChatState>((set, get) => ({
         }))
       }
 
-      attachChatStream(convId, sessionKey, updateAssistant)
+      const key = sessionKey
+      // The gateway occasionally rejects the first turn on a fresh session with a transient
+      // "reply session initialization conflicted" (two inits of the same reply context race).
+      // The turn dies with no reply, so re-fire once after a short backoff — by then the
+      // gateway has finished initializing and the retry lands cleanly.
+      let initRetries = 1
 
-      // The turn's lifecycle is driven entirely by the event stream (final / error /
-      // aborted), NOT by chat.send's reply. A slow local model can take far longer than
-      // any request timeout to produce its first token, so we send WITHOUT a timeout
-      // (timeoutMs=0) — otherwise the 30s default would fire, the catch below would set
-      // streaming:false, and the chat would go silent (no indicator, no stop button)
-      // while Ollama is still generating. Don't await it either: the UI updates live
-      // from events. Only a genuine send failure surfaces here, and only if the stream
-      // hasn't already moved on.
-      gatewayClient.request('chat.send', {
-        sessionKey,
-        message: text,
-        ...(conv.thinkingLevel ? { thinking: conv.thinkingLevel } : {}),
-        ...(attachments?.length ? {
-          attachments: attachments.map(a => ({
-            type: a.type,
-            content: a.data,
-            mimeType: a.mediaType,
-            fileName: a.name,
-          }))
-        } : {}),
-        idempotencyKey: nanoid(16)
-      }, 0).catch(err => {
-        // A late event may have already finished the turn — don't clobber it.
-        updateAssistant(m => m.streaming
-          ? { ...m, content: m.content || `Error: ${String(err)}`, streaming: false, waitingForSession: undefined }
-          : m)
-        const entry = activeStreams.get(convId)
-        if (entry?.sessionKey === sessionKey) { entry.unsub(); activeStreams.delete(convId) }
-      })
+      const doSend = () => {
+        // Bail if the conversation moved on (deleted, or the user started another turn).
+        if (get().conversations.find(c => c.id === convId)?.sessionKey !== key) return
+
+        attachChatStream(convId, key, updateAssistant, {
+          onInitConflict: () => {
+            if (initRetries <= 0) {
+              updateAssistant(m => m.streaming
+                ? { ...m, content: m.content || '⚠ reply session initialization conflicted', streaming: false, waitingForSession: undefined }
+                : m)
+              return
+            }
+            initRetries--
+            setTimeout(doSend, 600)
+          },
+        })
+
+        // The turn's lifecycle is driven entirely by the event stream (final / error /
+        // aborted), NOT by chat.send's reply. A slow local model can take far longer than
+        // any request timeout to produce its first token, so we send WITHOUT a timeout
+        // (timeoutMs=0) — otherwise the 30s default would fire, the catch below would set
+        // streaming:false, and the chat would go silent (no indicator, no stop button)
+        // while Ollama is still generating. Don't await it either: the UI updates live
+        // from events. Only a genuine send failure surfaces here, and only if the stream
+        // hasn't already moved on. A fresh idempotencyKey per attempt so a retry isn't
+        // deduped as the (failed) original send.
+        gatewayClient.request('chat.send', {
+          sessionKey: key,
+          message: text,
+          ...(conv.thinkingLevel ? { thinking: conv.thinkingLevel } : {}),
+          ...(attachments?.length ? {
+            attachments: attachments.map(a => ({
+              type: a.type,
+              content: a.data,
+              mimeType: a.mediaType,
+              fileName: a.name,
+            }))
+          } : {}),
+          idempotencyKey: nanoid(16)
+        }, 0).catch(err => {
+          // A late event may have already finished the turn — don't clobber it.
+          updateAssistant(m => m.streaming
+            ? { ...m, content: m.content || `Error: ${String(err)}`, streaming: false, waitingForSession: undefined }
+            : m)
+          const entry = activeStreams.get(convId)
+          if (entry?.sessionKey === key) { entry.unsub(); activeStreams.delete(convId) }
+        })
+      }
+
+      doSend()
     } catch (err) {
       updateAssistant(m => ({ ...m, content: `Error: ${String(err)}`, streaming: false }))
     }
