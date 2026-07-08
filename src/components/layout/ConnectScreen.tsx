@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import logoUrl from '../../assets/logo-dark.png'
+import { useLogoUrl } from '../../lib/logo'
 import { Wifi, Trash2, ChevronDown, ChevronRight, AlertCircle, CheckCircle2, Zap } from 'lucide-react'
 import { useConnectionStore } from '../../store/connection'
 import { gatewayClient, type ConnLog } from '../../lib/gateway'
@@ -10,6 +10,7 @@ interface Props { onConnect: () => void }
 
 export function ConnectScreen({ onConnect }: Props) {
   const { connect, disconnect, savedConnections, removeConnection, status, statusDetail } = useConnectionStore()
+  const logoUrl = useLogoUrl()
   const [url, setUrl] = useState('ws://localhost:18789')
   const [token, setToken] = useState('')
   const [label, setLabel] = useState('')

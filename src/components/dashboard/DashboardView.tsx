@@ -10,7 +10,7 @@ import { useAgentsStore } from '../../store/agents'
 import { useSessionsStore } from '../../store/sessions'
 import { useProcessesStore } from '../../store/processes'
 import { useTeamsStore } from '../../store/teams'
-import logoUrl from '../../assets/logo-dark.png'
+import { useLogoUrl } from '../../lib/logo'
 import { useCronsStore } from '../../store/crons'
 import { useMetricsStore } from '../../store/metrics'
 import { formatRelativeDate } from '../../lib/dateUtils'
@@ -698,6 +698,7 @@ function LeftPanel({ onSendMessage, onOpenConversation, onNavigate }: {
   onOpenConversation: (convId: string) => void
   onNavigate: (s: NavSection) => void
 }) {
+  const logoUrl = useLogoUrl()
   return (
     <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '40px 32px 32px' }}>
       <div style={{ width: '100%', maxWidth: 600 }}>

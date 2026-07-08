@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Github, Heart, RefreshCw, CheckCircle2, Sparkles, ExternalLink } from 'lucide-react'
 import { TitleBar } from './TitleBar'
 import { useUpdaterStore } from '../../store/updater'
-import logoUrl from '../../assets/logo-dark.png'
+import { useLogoUrl } from '../../lib/logo'
 
 const REPO_URL    = 'https://github.com/joax/joaxclaw'
 const SPONSOR_URL = 'https://github.com/sponsors/joax'
@@ -16,6 +16,7 @@ function openExternal(url: string) {
 // check, repository link, sponsorship/donation link, and copyright.
 export function AboutWindow() {
   const { status, info, error, check } = useUpdaterStore()
+  const logoUrl = useLogoUrl()
   const [version, setVersion] = useState('')
 
   useEffect(() => {
