@@ -1,4 +1,4 @@
-import { Heart, X, Cpu, MemoryStick, Monitor, Server } from 'lucide-react'
+import { Heart, X, Cpu, Monitor, Server } from 'lucide-react'
 import { useConnectionStore, useIsRemoteGateway } from '../../store/connection'
 import { useMetricsStore } from '../../store/metrics'
 import { useSettingsStore } from '../../store/settings'
@@ -77,21 +77,29 @@ export function SystemMonitorHUD() {
           </div>
         </Section>
 
-        {/* Hardware + local models. These come from THIS machine, so when the
-            gateway is remote they don't describe the gateway host — hide them. */}
-        {remoteGateway ? (
+        {/* Hardware. On a remote gateway these come from the HOST via the joaxclaw-fs
+            plugin's host.metrics RPC; if it's unavailable (older plugin) `metrics` is null
+            and we prompt to update it rather than show the client machine's numbers. Loaded
+            models stay client-side, so that list is local-gateway-only. */}
+        {remoteGateway && !metrics ? (
           <Section label="Hardware">
             <div className="flex items-start gap-2 px-2.5 py-2 rounded" style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)' }}>
               <Server size={13} style={{ color: 'var(--text-secondary)', flexShrink: 0, marginTop: 1 }} />
               <p className="text-xs" style={{ color: 'var(--text-secondary)', lineHeight: 1.5 }}>
                 Gateway runs on <b style={{ color: 'var(--text-primary)', fontFamily: 'monospace' }}>{gwHost}</b>.
-                GPU/CPU/RAM and loaded models are read from this client machine, so they're hidden — they wouldn't reflect the gateway host.
+                Update the <b style={{ color: 'var(--text-primary)' }}>joaxclaw-fs</b> plugin on the host to see its CPU / RAM / GPU here.
               </p>
             </div>
           </Section>
         ) : (
         <>
-        {/* Loaded models */}
+        {remoteGateway && (
+          <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+            Hardware on gateway host <b style={{ color: 'var(--text-primary)', fontFamily: 'monospace' }}>{gwHost}</b>
+          </p>
+        )}
+        {/* Loaded models — read from THIS client's Ollama, so local-gateway only. */}
+        {!remoteGateway && (
         <Section label="Models in VRAM">
           {ollamaModels.filter(m => m.loaded).length === 0 ? (
             <p className="text-xs font-mono" style={{ color: 'var(--text-secondary)' }}>None loaded</p>
@@ -106,6 +114,7 @@ export function SystemMonitorHUD() {
             ))
           )}
         </Section>
+        )}
 
         {/* GPU hardware details */}
         {gpu && (
