@@ -851,16 +851,25 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }
 
       const key = sessionKey
-      // The gateway occasionally rejects the first turn on a fresh session with a transient
-      // "reply session initialization conflicted" (two inits of the same reply context race).
-      // The turn dies with no reply, so re-fire with an escalating backoff — by then the
-      // gateway has finished initializing and a retry lands cleanly. A single quick retry
-      // isn't always enough when the gateway is slow to initialize, so give it a few tries
-      // (~400/800/1600ms) before surfacing the dead ⚠ turn.
-      const INIT_BACKOFFS = [400, 800, 1600]
+      // The gateway sometimes rejects a turn with a transient "reply session initialization
+      // conflicted" — two inits of the same reply context race. It shows up two ways:
+      //   • fresh session: the very first turn races the session's own init;
+      //   • mid-conversation: a stale/half-initialized reply context from the PRIOR turn is
+      //     still held server-side (common on a remote gateway, where release lags), so the
+      //     new turn collides with it.
+      // The turn dies with no reply, so re-fire with an escalating, jittered backoff. Simply
+      // waiting isn't enough for the mid-conversation case — the stuck context won't clear on
+      // its own — so from the second retry on we also abort the session first (same call the
+      // Stop button uses; it cancels the in-flight turn but keeps history) to release it, then
+      // retry into a clean slate. Remote gateways need a longer budget than local, hence the
+      // extended ladder before we surface the dead ⚠ turn.
+      const INIT_BACKOFFS = [400, 900, 1800, 3500, 5000]  // ~11.6s total across 5 retries
+      const ABORT_FROM_ATTEMPT = 1  // plain retry once; escalate to abort+retry after that
       let initAttempt = 0
 
       const isInitConflict = (s: string) => /initialization conflicted/i.test(s)
+      // ±25% jitter so retries de-correlate from whatever init they're racing.
+      const jitter = (ms: number) => Math.round(ms * (0.75 + Math.random() * 0.5))
 
       const doSend = () => {
         // Bail if the conversation moved on (deleted, or the user started another turn).
@@ -876,8 +885,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
           const entry = activeStreams.get(convId)
           if (entry?.sessionKey === key) { entry.unsub(); activeStreams.delete(convId) }
           if (initAttempt < INIT_BACKOFFS.length) {
-            setTimeout(doSend, INIT_BACKOFFS[initAttempt])  // re-fire once the gateway has finished initializing
+            const attempt = initAttempt
             initAttempt++
+            const fire = () => setTimeout(doSend, jitter(INIT_BACKOFFS[attempt]))
+            if (attempt >= ABORT_FROM_ATTEMPT) {
+              // Release any stuck server-side reply context, then retry once it's cleared.
+              gatewayClient.request('sessions.abort', { key }).catch(() => {}).then(fire)
+            } else {
+              fire()  // re-fire once the gateway has finished initializing
+            }
             return
           }
           updateAssistant(m => m.streaming
@@ -929,6 +945,25 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   async loadSessionMessages(sessionKey, agentId, agentName) {
+    // Switch to the conversation IMMEDIATELY with a loading flag, before the (slow on a
+    // remote gateway) chat.history round-trip — otherwise tapping a chat gives no feedback
+    // until the RPC returns. An already-open conversation keeps its messages (silent
+    // refresh); a not-yet-loaded one shows a spinner via its empty + loadingHistory state.
+    const preexisting = get().conversations.find(c => c.sessionKey === sessionKey)
+    const targetId = preexisting?.id ?? nanoid()
+    if (preexisting) {
+      set(s => ({
+        conversations: s.conversations.map(c => c.id === preexisting.id ? { ...c, loadingHistory: true } : c),
+        activeConvId: preexisting.id,
+      }))
+    } else {
+      const placeholder: Conversation = {
+        id: targetId, sessionKey, agentId, agentName,
+        title: sessionTitle(sessionKey, agentName), messages: [], loadingHistory: true,
+      }
+      set(s => ({ conversations: [placeholder, ...s.conversations], activeConvId: targetId }))
+    }
+
     try {
       const history = await gatewayClient.request<{ messages: unknown[] }>('chat.history', { sessionKey })
       const messages: ChatMessage[] = (history.messages ?? [])
@@ -967,20 +1002,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
           return bare !== ''
         })
 
-      const existing = get().conversations.find(c => c.sessionKey === sessionKey)
-      const convId = existing?.id ?? nanoid()
-      if (existing) {
-        set(s => ({
-          conversations: s.conversations.map(c => c.sessionKey === sessionKey ? { ...c, messages } : c),
-          activeConvId: existing.id
-        }))
-      } else {
-        const conv: Conversation = {
-          id: convId, sessionKey, agentId, agentName,
-          title: sessionTitle(sessionKey, agentName), messages
-        }
-        set(s => ({ conversations: [conv, ...s.conversations], activeConvId: convId }))
-      }
+      // The conversation was already selected above; fill in its history and clear the
+      // loading flag. Match by sessionKey so we hit it whether it was pre-existing or the
+      // placeholder we just inserted.
+      set(s => ({
+        conversations: s.conversations.map(c => c.sessionKey === sessionKey ? { ...c, messages, loadingHistory: false } : c),
+      }))
 
       // Sub-agent yields live in child sessions, not the parent history — reattach them
       // asynchronously. Completed ones go on their finished turn; running ones on the
@@ -999,10 +1026,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
         }))
       }).catch(() => { /* best-effort */ })
 
-      return convId
+      return targetId
     } catch (err) {
       console.error('Failed to load session:', err)
-      return ''
+      // Clear the spinner but keep the conversation selected so the user isn't stranded
+      // on a blank pane — the empty state explains there's nothing (or a retry is a tap away).
+      set(s => ({
+        conversations: s.conversations.map(c => c.sessionKey === sessionKey ? { ...c, loadingHistory: false } : c),
+      }))
+      return targetId
     }
   }
 }))

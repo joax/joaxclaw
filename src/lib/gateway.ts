@@ -23,6 +23,13 @@ const wsApi = (): WsApi => (window as unknown as { api: { ws: WsApi } }).api.ws
 let _reqCounter = 0
 function nextId(): string { return `req_${++_reqCounter}` }
 
+// A gateway rejects an RPC it doesn't implement with an INVALID_REQUEST whose message
+// reads "unknown method: <name>". Match that so we can stop re-sending it.
+function isUnknownMethodError(error: unknown): boolean {
+  const s = typeof error === 'string' ? error : JSON.stringify(error ?? '')
+  return /unknown method/i.test(s)
+}
+
 export class GatewayClient {
   private pending = new Map<string, { resolve: (r: GwResFrame) => void; reject: (e: unknown) => void }>()
   private listeners: Listener[] = []
@@ -30,6 +37,12 @@ export class GatewayClient {
   private _token = ''
   private _handshakeDone = false
   private _connected = false
+  // Methods this gateway answered with "unknown method" — older gateways don't
+  // implement every RPC the client knows (e.g. plugins.list). We skip re-sending a
+  // doomed request each fetch, which also stops the host logging an INVALID_REQUEST
+  // every time. Cleared on each new handshake so a re-connected/upgraded gateway is
+  // re-probed.
+  private unsupportedMethods = new Set<string>()
 
   private _unsubMessage: (() => void) | null = null
   private _unsubStatus: (() => void) | null = null
@@ -160,6 +173,7 @@ export class GatewayClient {
     this.request<{ auth?: { scopes?: string[] } }>('connect', params as Record<string, unknown>).then((res) => {
       this._handshakeDone = true
       this._connected = true
+      this.unsupportedMethods.clear()  // fresh connection — re-probe method support
       this.grantedScopes = Array.isArray(res?.auth?.scopes) ? res.auth!.scopes! : []
       this._addLog('info', 'Handshake complete ✓')
       this.onStatusChange?.('connected')
@@ -176,6 +190,7 @@ export class GatewayClient {
     this._handshakeDone = false
     this._connected = false
     this.grantedScopes = []
+    this.unsupportedMethods.clear()
     wsApi().disconnect()
     this.onStatusChange?.('disconnected')
     this.pending.forEach(cb => cb.reject(new Error('Disconnected')))
@@ -189,6 +204,11 @@ export class GatewayClient {
     if (!this._connected && method !== 'connect') {
       throw new Error('Not connected')
     }
+    // This gateway already told us it doesn't implement this method — reject client-side
+    // instead of re-sending (and re-logging INVALID_REQUEST on the host) every fetch.
+    if (this.unsupportedMethods.has(method)) {
+      throw new Error(`unknown method: ${method}`)
+    }
     const id = nextId()
     const frame = { type: 'req', id, method, params }
     const json = JSON.stringify(frame)
@@ -200,7 +220,10 @@ export class GatewayClient {
       this.pending.set(id, {
         resolve: (res) => {
           if (res.ok) resolve(res.payload as T)
-          else reject(new Error(JSON.stringify(res.error)))
+          else {
+            if (isUnknownMethodError(res.error)) this.unsupportedMethods.add(method)
+            reject(new Error(JSON.stringify(res.error)))
+          }
         },
         reject
       })
