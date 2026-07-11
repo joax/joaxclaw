@@ -486,9 +486,10 @@ function ResourcesSection() {
 
   const sectionLabelHdr: React.CSSProperties = { fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text-secondary)' }
 
-  // Resources are read from this client machine; when the gateway is remote they
-  // don't describe the gateway host, so we explain that instead of showing them.
-  if (remoteGateway) {
+  // On a remote gateway the metrics come from the HOST via the joaxclaw-fs plugin's
+  // host.metrics RPC (see store/metrics). If the plugin is too old to provide it,
+  // `metrics` stays null — explain that instead of showing the client machine's numbers.
+  if (remoteGateway && !metrics) {
     return (
       <div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
@@ -497,7 +498,7 @@ function ResourcesSection() {
         </div>
         <p style={{ fontSize: 11, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
           Gateway runs on <b style={{ color: 'var(--text-primary)', fontFamily: 'monospace' }}>{gwHost}</b>.
-          GPU/CPU/RAM here are from this client machine, not the gateway host — hidden to avoid confusion.
+          Update the <b style={{ color: 'var(--text-primary)' }}>joaxclaw-fs</b> plugin on the host to see its CPU / RAM / GPU here.
         </p>
       </div>
     )
@@ -530,21 +531,40 @@ function ResourcesSection() {
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
         <Cpu size={11} style={{ color: 'var(--text-secondary)' }} />
         <span style={sectionLabel}>Resources</span>
+        {/* Make it unmistakable these numbers are the gateway host's, not this client's. */}
+        {remoteGateway && (
+          <span
+            title={`Live from the gateway host ${gwHost ?? ''}`.trim()}
+            style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--accent)', background: 'color-mix(in srgb, var(--accent) 15%, transparent)', padding: '1px 5px', borderRadius: 4 }}
+          >
+            host
+          </span>
+        )}
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
 
-        {/* GPU compute % — only if systeminformation has GPU data */}
-        {gpu && (
+        {/* GPU — utilization bar when it's measurable (NVIDIA/AMD); model name only when
+            it isn't (e.g. Apple Silicon: unified memory, no util without sudo). The model
+            is on the label's tooltip in both cases. */}
+        {gpu && (gpu.memTotal > 0 || gpu.utilizationGpu > 0 ? (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={labelW}>GPU</span>
+            <span style={labelW} title={gpu.model}>GPU</span>
             <ResourceBar value={gpuPct} color={barColor(gpuPct)} />
             <span style={valueW}>{gpuPct}%</span>
           </div>
-        )}
+        ) : (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={labelW}>GPU</span>
+            <span style={{ fontSize: 10, color: 'var(--text-secondary)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={gpu.model}>
+              {gpu.model}
+            </span>
+          </div>
+        ))}
 
-        {/* VRAM — derived from loaded models; bar % shown when total is known, track always visible */}
-        {hasVram && (
+        {/* VRAM — derived from THIS client's loaded Ollama models, so only meaningful for a
+            local gateway. On remote we still show host GPU%/RAM above, but not this. */}
+        {!remoteGateway && hasVram && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <span style={labelW}>VRAM</span>
             <ResourceBar value={vramTotalBytes > 0 ? vramPct : 0} color={barColor(vramPct)} />
@@ -559,8 +579,8 @@ function ResourcesSection() {
           <span style={valueW}>{ramUsed.toFixed(1)}G</span>
         </div>
 
-        {/* Loaded models breakdown */}
-        {loaded.length > 0 && (
+        {/* Loaded models breakdown — client-side Ollama, local gateway only (see VRAM note) */}
+        {!remoteGateway && loaded.length > 0 && (
           <div style={{ marginTop: 2, display: 'flex', flexDirection: 'column', gap: 4 }}>
             {loaded.map(m => {
               const vram     = modelVram(m)

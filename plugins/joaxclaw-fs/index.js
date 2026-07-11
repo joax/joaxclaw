@@ -20,6 +20,8 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import https from 'node:https'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import { randomUUID } from 'node:crypto'
 import { definePluginEntry } from 'openclaw/plugin-sdk/plugin-entry'
 import { resolveStateDir } from 'openclaw/plugin-sdk/state-paths'
@@ -438,10 +440,138 @@ function failed(respond, err) {
   respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, `joaxclaw-fs: ${msg}`))
 }
 
+// ── host.metrics : the gateway host's CPU / RAM / GPU ────────────────────────────
+// The desktop app's local metrics (`window.api.metrics.get`) describe the CLIENT
+// machine, so on a REMOTE gateway the dashboard showed the wrong host. This reports
+// the actual gateway host's load, shaped exactly like the app's SystemMetrics
+// (cpu %, ramUsed/ramTotal in bytes, gpu[] with memory in MB). CPU% and RAM use only
+// Node built-ins (no systeminformation dep); GPU is a best-effort nvidia-smi read.
+const execFileP = promisify(execFile)
+
+function cpuSnapshot() {
+  let idle = 0, total = 0
+  for (const c of os.cpus()) {
+    for (const t of Object.values(c.times)) total += t
+    idle += c.times.idle
+  }
+  return { idle, total }
+}
+
+// Sample CPU times twice over a short window and derive a busy percentage — os.cpus()
+// gives cumulative counters, so a single read can't yield a rate.
+async function cpuPercent() {
+  const a = cpuSnapshot()
+  await new Promise(r => setTimeout(r, 150))
+  const b = cpuSnapshot()
+  const idleDelta = b.idle - a.idle
+  const totalDelta = b.total - a.total
+  if (totalDelta <= 0) return 0
+  return Math.max(0, Math.min(100, Math.round((1 - idleDelta / totalDelta) * 100)))
+}
+
+// GPU stats, best-effort across vendors — each probe returns [] when its tool/GPU is
+// absent, and we use the first that reports something. Memory is normalized to MB and
+// utilization to a 0–100 int, matching the app's SystemMetrics.gpu shape.
+
+// NVIDIA — nvidia-smi (Linux/Windows). One row per GPU.
+async function gpuNvidia() {
+  try {
+    const { stdout } = await execFileP('nvidia-smi', [
+      '--query-gpu=name,utilization.gpu,memory.used,memory.total,temperature.gpu',
+      '--format=csv,noheader,nounits',
+    ], { timeout: 4000 })
+    return String(stdout).trim().split('\n').filter(Boolean).map(line => {
+      const p = line.split(',').map(s => s.trim())
+      return {
+        model:          p[0] || 'NVIDIA GPU',
+        utilizationGpu: parseInt(p[1], 10) || 0,
+        memUsed:        parseInt(p[2], 10) || 0,   // MB
+        memTotal:       parseInt(p[3], 10) || 0,   // MB
+        temperatureGpu: parseInt(p[4], 10) || 0,
+      }
+    })
+  } catch {
+    return []
+  }
+}
+
+// AMD — rocm-smi --json (Linux). JSON keys vary by ROCm version, so match by
+// case-insensitive substring rather than exact keys.
+async function gpuAmd() {
+  if (os.platform() !== 'linux') return []
+  try {
+    const { stdout } = await execFileP('rocm-smi',
+      ['--showuse', '--showmeminfo', 'vram', '--showtemp', '--showproductname', '--json'],
+      { timeout: 4000 })
+    const data = JSON.parse(stdout)
+    const out = []
+    for (const [card, info] of Object.entries(data)) {
+      if (!info || typeof info !== 'object' || !/^card\d+/i.test(card)) continue
+      const num = (sub) => {
+        for (const [k, v] of Object.entries(info)) {
+          if (k.toLowerCase().includes(sub)) {
+            const n = parseFloat(String(v).replace(/[^\d.-]/g, ''))
+            if (Number.isFinite(n)) return n
+          }
+        }
+        return 0
+      }
+      const str = (sub) => {
+        for (const [k, v] of Object.entries(info)) {
+          if (k.toLowerCase().includes(sub)) return String(v)
+        }
+        return ''
+      }
+      out.push({
+        model:          str('card series') || str('card model') || str('product') || 'AMD GPU',
+        utilizationGpu: Math.round(num('gpu use')),
+        memUsed:        Math.round(num('used memory') / (1024 * 1024)),        // bytes → MB
+        memTotal:       Math.round(num('vram total memory') / (1024 * 1024)),  // bytes → MB
+        temperatureGpu: Math.round(num('temperature')),
+      })
+    }
+    return out
+  } catch {
+    return []
+  }
+}
+
+// Apple Silicon — system_profiler (macOS). Reports the GPU model; per-GPU utilization
+// and dedicated VRAM aren't available without elevated powermetrics (Apple uses unified
+// memory, already covered by RAM), so those stay 0 and the app shows the model instead
+// of a misleading 0% bar.
+async function gpuApple() {
+  if (os.platform() !== 'darwin') return []
+  try {
+    const { stdout } = await execFileP('system_profiler', ['SPDisplaysDataType', '-json'], { timeout: 5000 })
+    const data = JSON.parse(stdout)
+    const displays = Array.isArray(data?.SPDisplaysDataType) ? data.SPDisplaysDataType : []
+    return displays
+      .map(d => ({
+        model:          d?.sppci_model || d?._name || 'Apple GPU',
+        utilizationGpu: 0,
+        memUsed:        0,
+        memTotal:       0,
+        temperatureGpu: 0,
+      }))
+      .filter(g => g.model)
+  } catch {
+    return []
+  }
+}
+
+async function gpuStats() {
+  const nv = await gpuNvidia()
+  if (nv.length) return nv
+  const amd = await gpuAmd()
+  if (amd.length) return amd
+  return gpuApple()
+}
+
 export default definePluginEntry({
   id: 'joaxclaw-fs',
   name: 'JoaxClaw FS',
-  description: 'teams.* / processes.* (backed by <stateDir>) and engines.* (host-side local-LLM probing) gateway methods.',
+  description: 'teams.* / processes.* (backed by <stateDir>), engines.* (host-side local-LLM probing), and host.metrics (host CPU/RAM/GPU) gateway methods.',
   register(api) {
     // ── teams.* ────────────────────────────────────────────────────────────────
     api.registerGatewayMethod('teams.list', async ({ respond }) => {
@@ -760,6 +890,17 @@ export default definePluginEntry({
         }
         const graph = await obsGraph(config)
         respond(true, { graph })
+      } catch (err) { failed(respond, err) }
+    }, { scope: READ_SCOPE })
+
+    // ── host.metrics : the gateway host's live CPU / RAM / GPU ────────────────────
+    // So the desktop dashboard shows the REMOTE host's load instead of the client's.
+    api.registerGatewayMethod('host.metrics', async ({ respond }) => {
+      try {
+        const [cpu, gpu] = await Promise.all([cpuPercent(), gpuStats()])
+        const ramTotal = os.totalmem()
+        const ramUsed = ramTotal - os.freemem()
+        respond(true, { ok: true, cpu, ramUsed, ramTotal, gpu })
       } catch (err) { failed(respond, err) }
     }, { scope: READ_SCOPE })
 

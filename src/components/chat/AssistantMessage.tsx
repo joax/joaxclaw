@@ -12,6 +12,9 @@ import { formatTimestamp } from '../../lib/dateUtils'
 import { extractThinkTags, fmtThoughtDuration } from '../../lib/reasoning'
 import { extractResultDiff } from '../../lib/diffModel'
 import { MarkdownContent } from './MarkdownContent'
+import { QuestionsBlock } from './QuestionCard'
+import { parseAskBlocks } from '../../lib/askQuestion'
+import { useChatStore } from '../../store/chat'
 import { DiffView } from './DiffView'
 import { AudioPlayer } from './AudioPlayer'
 import { WorkspaceImage, VideoPlayer } from './WorkspaceMedia'
@@ -280,12 +283,22 @@ function MessageFeedback({ message }: { message: ChatMessage }) {
   )
 }
 
-interface Props { message: ChatMessage; showTools?: boolean; showReasoning?: boolean }
+interface Props { message: ChatMessage; showTools?: boolean; showReasoning?: boolean; convId?: string; isLast?: boolean }
 
-export function AssistantMessage({ message, showTools = true, showReasoning = true }: Props) {
+export function AssistantMessage({ message, showTools = true, showReasoning = true, convId, isLast = false }: Props) {
   const stripped = stripProtocolTags(message.content)
   const { actions: gatewayActions, text: noActions } = extractGatewayActions(stripped)
-  const { thinking: inlineThinking, text: cleanContent } = extractThinkTags(noActions)
+  const { thinking: inlineThinking, text: afterThink } = extractThinkTags(noActions)
+  // Structured questions the model asked (Claude-Code-style). Lifted out of the
+  // transcript and rendered as interactive option buttons below the answer.
+  const { questions, text: cleanContent } = parseAskBlocks(afterThink, { streaming: message.streaming })
+  const hasQuestions = questions.length > 0
+  // A question is answerable only while it's the tail of the conversation and the
+  // turn has finished; sending the answer is just the user's next chat message.
+  const questionsActive = isLast && !message.streaming && !!convId
+  const answerQuestion = (text: string) => {
+    if (convId) useChatStore.getState().sendMessage(convId, text).catch(() => {})
+  }
   const allReasoning = [message.reasoning, inlineThinking].filter(Boolean).join('\n\n')
   const hasReasoning = !!allReasoning
   // sessions_spawn is represented as an inline thread, not a raw tool card.
@@ -369,6 +382,13 @@ export function AssistantMessage({ message, showTools = true, showReasoning = tr
               {message.attachments?.filter(a => a.type === 'audio').map((a, i) => (
                 <AudioPlayer key={i} attachment={a} />
               ))}
+            </div>
+          )}
+
+          {/* Structured questions the model asked — interactive option buttons */}
+          {hasQuestions && (
+            <div className="mt-2">
+              <QuestionsBlock questions={questions} active={questionsActive} onAnswer={answerQuestion} />
             </div>
           )}
 
@@ -504,6 +524,13 @@ export function AssistantMessage({ message, showTools = true, showReasoning = tr
             {message.attachments?.filter(a => a.type === 'audio').map((a, i) => (
               <AudioPlayer key={i} attachment={a} />
             ))}
+          </div>
+        )}
+
+        {/* Structured questions the model asked — interactive option buttons */}
+        {hasQuestions && (
+          <div className="mt-2">
+            <QuestionsBlock questions={questions} active={questionsActive} onAnswer={answerQuestion} />
           </div>
         )}
 

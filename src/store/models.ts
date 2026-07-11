@@ -3,6 +3,26 @@ import { gatewayClient } from '../lib/gateway'
 import { readLocalStore, patchLocalStore } from '../lib/localStore'
 import type { GwModelProvider, GwModelDef } from '../lib/types'
 
+// Collect every array path inside a config-patch payload, in the gateway's dotted
+// notation with `[]` for arrays nested inside array elements (e.g.
+// `models.providers.google.models[].input`). A config.patch is an RFC-7396 merge and
+// the gateway refuses to SHRINK any array unless its exact path is named in
+// `replacePaths` — and naming a parent array is NOT enough: each nested array (an
+// `input`/`output` modality list on a model, etc.) must be listed independently.
+// Model objects round-trip through the app, so a save replaces these arrays wholesale;
+// listing them all marks every replacement as intentional. Paths are de-duplicated by
+// the caller (many array elements yield the same `...models[].input` path).
+export function collectArrayPaths(obj: unknown, prefix: string, out: string[]): void {
+  if (Array.isArray(obj)) {
+    out.push(prefix)
+    for (const item of obj) collectArrayPaths(item, `${prefix}[]`, out)
+  } else if (obj && typeof obj === 'object') {
+    for (const [k, v] of Object.entries(obj)) {
+      collectArrayPaths(v, prefix ? `${prefix}.${k}` : k, out)
+    }
+  }
+}
+
 interface ModelsState {
   providers: Record<string, GwModelProvider>
   // provider IDs that came from plugin discovery (not originally in config.models.providers)
@@ -247,8 +267,17 @@ export const useModelsStore = create<ModelsState>((set, get) => ({
         models: { providers: providersToSave },
         plugins: { entries: pluginEntries },
       }
+      // The gateway refuses to SHRINK any array in a merge patch unless its exact path
+      // is named in replacePaths — including arrays NESTED in model elements (e.g.
+      // `models.providers.google.models[].input`), which round-tripping replaces
+      // wholesale. Collect every array path in the payload so each is treated as an
+      // intentional replacement, not an accidental removal.
+      const arrayPaths: string[] = []
+      collectArrayPaths(patch, '', arrayPaths)
+      const replacePaths = [...new Set(arrayPaths)]
       const params: Record<string, unknown> = { raw: JSON.stringify(patch) }
       if (_baseHash) params.baseHash = _baseHash
+      if (replacePaths.length) params.replacePaths = replacePaths
 
       await gatewayClient.request('config.patch', params)
       await get().load()

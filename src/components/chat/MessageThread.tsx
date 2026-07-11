@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { Clock } from 'lucide-react'
+import { Clock, Loader2 } from 'lucide-react'
 import type { Conversation } from '../../lib/types'
 import { UserMessage } from './UserMessage'
 import { AssistantMessage } from './AssistantMessage'
@@ -70,16 +70,21 @@ export function MessageThread({ conv, showTools, showReasoning }: Props) {
   return (
     <div ref={scrollRef} onScroll={onScroll} className="flex-1 overflow-y-auto" style={{ userSelect: 'text', overflowAnchor: 'none' }}>
       <div ref={contentRef} className="px-4 py-4 space-y-4">
-        {conv.messages.length === 0 ? (
+        {conv.messages.length === 0 && conv.loadingHistory ? (
+          <div className="flex flex-col items-center justify-center gap-3" style={{ minHeight: '60vh', color: 'var(--text-secondary)' }}>
+            <Loader2 size={26} className="animate-spin" style={{ color: 'var(--accent)' }} />
+            <p className="text-sm">Loading conversation…</p>
+          </div>
+        ) : conv.messages.length === 0 ? (
           <div className="flex flex-col items-center justify-center gap-3" style={{ minHeight: '60vh', color: 'var(--text-secondary)' }}>
             <Clock size={32} style={{ opacity: 0.3 }} />
             <p className="text-sm">No messages in this session</p>
             <p className="text-xs" style={{ opacity: 0.6 }}>{conv.sessionKey}</p>
           </div>
-        ) : conv.messages.map(msg =>
+        ) : conv.messages.map((msg, i) =>
           msg.role === 'user'
             ? <UserMessage key={msg.id} message={msg} />
-            : <AssistantMessage key={msg.id} message={msg} showTools={showTools} showReasoning={showReasoning} />
+            : <AssistantMessage key={msg.id} message={msg} showTools={showTools} showReasoning={showReasoning} convId={conv.id} isLast={i === conv.messages.length - 1} />
         )}
       </div>
     </div>
