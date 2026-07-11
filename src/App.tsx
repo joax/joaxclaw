@@ -119,8 +119,8 @@ export default function App() {
     return () => off?.()
   }, [])
 
-  // Install the app-native agent skills (process-builder, teams-blueprint) on
-  // connect. Local gateways get a direct file write; remote gateways get an
+  // Install the app-native agent skills (ask-user, process-builder, teams-blueprint)
+  // on connect. Local gateways get a direct file write; remote gateways get an
   // upload over the gateway WebSocket (skills.upload.* + skills.install).
   const runSkillInstall = useSkillsStore(s => s.run)
   useEffect(() => {

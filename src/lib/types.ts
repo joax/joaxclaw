@@ -159,6 +159,9 @@ export interface Conversation {
   lastMessage?: string
   lastAt?: string
   messages: ChatMessage[]
+  // True while chat.history is being fetched for this conversation (esp. slow on a
+  // remote gateway). Drives the loading state so tapping a chat gives instant feedback.
+  loadingHistory?: boolean
   // Per-chat overrides, independent of the agent's configured model.
   modelOverride?: string       // 'provider/model' — empty/undefined = agent default
   thinkingLevel?: ThinkingLevel // undefined / 'adaptive' = no override
