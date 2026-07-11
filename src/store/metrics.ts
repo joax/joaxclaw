@@ -4,6 +4,12 @@ import { listOllamaModels } from '../lib/ollama'
 import { gatewayClient } from '../lib/gateway'
 import { isRemoteGatewayState } from './connection'
 
+// Which machine the current `metrics` value came from — so a stale reading from the
+// OTHER context (e.g. local metrics seeded before a remote connect) is cleared rather
+// than shown, while a transient same-context miss keeps the last-good value.
+type MetricsSource = 'host' | 'local' | null
+let lastMetricsSource: MetricsSource = null
+
 interface MetricsState {
   metrics: SystemMetrics | null
   ollamaModels: OllamaModel[]
@@ -37,14 +43,29 @@ export const useMetricsStore = create<MetricsState>((set, get) => ({
         remote ? remoteMetrics() : localMetrics(),
         listOllamaModels()
       ])
+      const ok = !!(metricsResult && metricsResult.ok !== false)
+      const wantSource: MetricsSource = remote ? 'host' : 'local'
 
-      set(state => ({
-        // Only overwrite metrics with a usable frame; on failure keep the last-good value
-        // (avoids flicker to null on a transient miss; stays null when unavailable).
-        metrics: metricsResult && metricsResult.ok !== false ? metricsResult : state.metrics,
-        ollamaModels,
-        activeModel: ollamaModels.find(m => m.loaded)?.name ?? null
-      }))
+      set(state => {
+        let metrics = state.metrics
+        if (ok) {
+          metrics = metricsResult
+          lastMetricsSource = wantSource
+        } else if (lastMetricsSource !== wantSource) {
+          // No fresh reading AND the last value came from a DIFFERENT context — e.g. local
+          // metrics seeded before connect, now that we're remote. Clear rather than show the
+          // client machine's numbers under a "host" label. A transient miss in the same
+          // context keeps the last-good value (no flicker); an unavailable host.metrics
+          // (older plugin) leaves this null, so the UI shows the "update the plugin" hint.
+          metrics = null
+          lastMetricsSource = null
+        }
+        return {
+          metrics,
+          ollamaModels,
+          activeModel: ollamaModels.find(m => m.loaded)?.name ?? null
+        }
+      })
     }
 
     tick()
