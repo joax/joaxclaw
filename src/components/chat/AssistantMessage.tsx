@@ -21,6 +21,8 @@ import { WorkspaceImage, VideoPlayer } from './WorkspaceMedia'
 import { useFeedbackStore } from '../../store/feedback'
 import { MessageReactions } from './MessageReactions'
 import { parseReactAction } from '../../lib/reactionActions'
+import { ScriptJobCard } from './ScriptJobCard'
+import { parseJobId } from '../../lib/scriptJobs'
 
 
 // Strip gateway protocol wrapper tags from content.
@@ -817,6 +819,17 @@ function ToolCallsBlock({ calls }: { calls: ToolCall[] }) {
         // A model reaction (message/react) renders as a chip, not a tool card.
         const react = parseReactAction(call.name, call.args)
         if (react) return <ReactionChip key={call.id} react={react} status={call.status} error={call.error} />
+
+        // A launched background script (script_start) renders as a live progress card
+        // that follows the job on the host. Falls through to a normal card until the
+        // start returns a jobId.
+        if (/^script_start$/i.test(call.name)) {
+          const jobId = parseJobId(call.result)
+          if (jobId) {
+            const cmd = typeof parseArgs(call.args).command === 'string' ? parseArgs(call.args).command as string : undefined
+            return <ScriptJobCard key={call.id} jobId={jobId} command={cmd} />
+          }
+        }
 
         const kind = detectKind(call.name)
         const summary = toolSummary(kind, call.args)
