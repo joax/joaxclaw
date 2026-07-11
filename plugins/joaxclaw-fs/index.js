@@ -20,7 +20,7 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import https from 'node:https'
-import { execFile } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
 import { randomUUID } from 'node:crypto'
 import { definePluginEntry } from 'openclaw/plugin-sdk/plugin-entry'
@@ -568,6 +568,89 @@ async function gpuStats() {
   return gpuApple()
 }
 
+// ── script jobs : track long-running host scripts the model launches ─────────────
+// The gateway's built-in bash tool can't be followed once a command backgrounds, so
+// the model launches long scripts via the script_start tool: it spawns the process
+// HERE, keeps it alive with stdout/stderr captured into a bounded buffer, and returns
+// a jobId. The desktop app polls jobs.get to render a live progress card; the model
+// polls script_status or sets a reminder to check back. Jobs live on the host, so
+// progress survives an app reconnect/restart.
+const jobs = new Map()               // jobId -> job
+const JOB_MAX_BYTES = 256 * 1024     // keep only the last 256 KiB of a job's output
+const JOB_TAIL_BYTES = 16 * 1024     // most we return to a poller in one go
+const JOB_GC_MS = 10 * 60 * 1000     // forget a finished job 10 min after it ends
+
+// Best-effort progress: the last NN% seen in recent output. Scripts that don't print a
+// percentage simply have no bar (status + live log still track them).
+function parsePercent(text) {
+  let pct = null
+  for (const m of text.slice(-4000).matchAll(/(\d{1,3})\s?%/g)) {
+    const n = parseInt(m[1], 10)
+    if (Number.isFinite(n) && n >= 0 && n <= 100) pct = n
+  }
+  return pct
+}
+
+function startJob(command, cwd) {
+  const id = randomUUID()
+  const job = {
+    id, command, cwd: cwd || undefined, startedAt: Date.now(), finishedAt: null,
+    running: true, done: false, exitCode: null, error: null, output: '', percent: null, pid: null,
+  }
+  jobs.set(id, job)
+  let child
+  try {
+    child = spawn(command, { shell: true, cwd: cwd || undefined, env: process.env })
+  } catch (err) {
+    job.running = false; job.done = true; job.error = String(err?.message ?? err); job.finishedAt = Date.now()
+    return job
+  }
+  job.pid = child.pid ?? null
+  const append = (buf) => {
+    job.output += buf.toString('utf8')
+    if (job.output.length > JOB_MAX_BYTES) job.output = job.output.slice(-JOB_MAX_BYTES)
+    const pct = parsePercent(job.output)
+    if (pct != null) job.percent = pct
+  }
+  child.stdout?.on('data', append)
+  child.stderr?.on('data', append)
+  child.on('error', (err) => { job.error = String(err?.message ?? err) })
+  child.on('close', (code, signal) => {
+    job.running = false
+    job.done = true
+    job.exitCode = code
+    if (code == null && signal) job.error = job.error || `terminated by ${signal}`
+    job.finishedAt = Date.now()
+    setTimeout(() => jobs.delete(id), JOB_GC_MS)
+  })
+  return job
+}
+
+function stopJob(id) {
+  const job = jobs.get(id)
+  if (!job) return false
+  if (job.running && job.pid != null) {
+    try { process.kill(job.pid, 'SIGTERM') } catch { /* already gone */ }
+  }
+  return true
+}
+
+// Serializable view for pollers. `includeOutput` off for the list; on (tail-capped) for
+// a single job's live card.
+function jobView(job, includeOutput = true) {
+  const view = {
+    id: job.id, command: job.command, cwd: job.cwd,
+    running: job.running, done: job.done, exitCode: job.exitCode, error: job.error,
+    percent: job.percent, startedAt: job.startedAt, finishedAt: job.finishedAt,
+    elapsedMs: (job.finishedAt ?? Date.now()) - job.startedAt,
+  }
+  if (includeOutput) {
+    view.output = job.output.length > JOB_TAIL_BYTES ? job.output.slice(-JOB_TAIL_BYTES) : job.output
+    view.outputTruncated = job.output.length > JOB_TAIL_BYTES
+  }
+  return view
+}
+
 export default definePluginEntry({
   id: 'joaxclaw-fs',
   name: 'JoaxClaw FS',
@@ -903,6 +986,92 @@ export default definePluginEntry({
         respond(true, { ok: true, cpu, ramUsed, ramTotal, gpu })
       } catch (err) { failed(respond, err) }
     }, { scope: READ_SCOPE })
+
+    // ── jobs.* : desktop app reads live progress of script_start background jobs ───
+    api.registerGatewayMethod('jobs.list', async ({ respond }) => {
+      const list = [...jobs.values()].sort((a, b) => b.startedAt - a.startedAt).map(j => jobView(j, false))
+      respond(true, { jobs: list })
+    }, { scope: READ_SCOPE })
+
+    api.registerGatewayMethod('jobs.get', async ({ params, respond }) => {
+      const job = jobs.get(String(params?.jobId ?? ''))
+      if (!job) return respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, 'unknown jobId'))
+      respond(true, jobView(job, true))
+    }, { scope: READ_SCOPE })
+
+    api.registerGatewayMethod('jobs.stop', async ({ params, respond }) => {
+      if (!stopJob(String(params?.jobId ?? ''))) {
+        return respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, 'unknown jobId'))
+      }
+      respond(true, { ok: true })
+    }, { scope: WRITE_SCOPE })
+
+    // ── script_start / script_status / script_stop (agent tools) ────────────────
+    if (typeof api.registerTool === 'function') {
+      api.registerTool(() => ({
+        name: 'script_start',
+        label: 'Start script',
+        description:
+          'Launch a long-running shell command/script on the host and track it in the BACKGROUND, returning a jobId immediately instead of blocking. Use this — not the bash/shell tool — for anything slow or long-lived: builds, installs, deploys, test suites, training runs, servers, data jobs. JoaxClaw shows the user a live progress card (status, elapsed, streaming output, a % bar if the script prints one). After starting, do NOT sit and wait: either continue other work, call script_status(jobId) to check in, or set a reminder to come back.',
+        parameters: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            command: { type: 'string', description: 'Shell command/script to run (executed via the shell on the gateway host).' },
+            cwd: { type: 'string', description: 'Optional working directory.' },
+          },
+          required: ['command'],
+        },
+        execute: async (_toolCallId, params) => {
+          const command = typeof params?.command === 'string' ? params.command.trim() : ''
+          if (!command) return toolText('script_start: `command` is required.')
+          const cwd = typeof params?.cwd === 'string' && params.cwd.trim() ? params.cwd.trim() : undefined
+          const job = startJob(command, cwd)
+          if (job.done && job.error) return toolText(`Could not start script: ${job.error}`)
+          return toolText(
+            `Script started in the background.\njobId: ${job.id}\n` +
+            `The user now sees a live progress card for it. Don't block waiting — call ` +
+            `script_status with this jobId to check on it, or set a reminder to come back.`,
+          )
+        },
+      }))
+
+      api.registerTool(() => ({
+        name: 'script_status',
+        label: 'Script status',
+        description: 'Check a background script started with script_start: whether it is still running, its exit code, elapsed time, and the most recent output.',
+        parameters: {
+          type: 'object', additionalProperties: false,
+          properties: { jobId: { type: 'string', description: 'The jobId returned by script_start.' } },
+          required: ['jobId'],
+        },
+        execute: async (_toolCallId, params) => {
+          const job = jobs.get(String(params?.jobId ?? ''))
+          if (!job) return toolText('No such job (it may have finished and been cleaned up).')
+          const v = jobView(job, true)
+          const tail = (v.output ?? '').split('\n').slice(-40).join('\n')
+          const head = v.running
+            ? `Still running (${Math.round(v.elapsedMs / 1000)}s elapsed${v.percent != null ? `, ~${v.percent}%` : ''}).`
+            : v.error ? `Finished with error: ${v.error}.`
+            : `Finished with exit code ${v.exitCode} after ${Math.round(v.elapsedMs / 1000)}s.`
+          return toolText(`${head}\n\n--- recent output ---\n${tail || '(no output yet)'}`)
+        },
+      }))
+
+      api.registerTool(() => ({
+        name: 'script_stop',
+        label: 'Stop script',
+        description: 'Stop (SIGTERM) a background script started with script_start.',
+        parameters: {
+          type: 'object', additionalProperties: false,
+          properties: { jobId: { type: 'string', description: 'The jobId returned by script_start.' } },
+          required: ['jobId'],
+        },
+        execute: async (_toolCallId, params) => {
+          return toolText(stopJob(String(params?.jobId ?? '')) ? 'Sent stop signal to the script.' : 'No such job to stop.')
+        },
+      }))
+    }
 
     // ── reminder_set / reminder_cancel (agent tools) ────────────────────────────
     if (typeof api.registerTool === 'function' && typeof api.scheduleSessionTurn === 'function') {
