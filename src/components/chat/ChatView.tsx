@@ -42,7 +42,7 @@ interface ChatItem {
 export function ChatView({ solo }: { solo?: string } = {}) {
   const { conversations, activeConvId, newConversation, selectConversation, deleteConversation, loadSessionMessages, watchSession, setModelOverride, setThinkingLevel } = useChatStore()
   const { agents, defaultId, fetch: fetchAgents } = useAgentsStore()
-  const { sessions, customLabels, derivedNames, rename: renameSession, fetch: fetchSessions } = useSessionsStore()
+  const { sessions, customLabels, derivedNames, rename: renameSession, fetch: fetchSessions, delete: deleteSession } = useSessionsStore()
   const cronJobs = useCronsStore(s => s.jobs)
   const cronSessions = useCronsStore(s => s.cronSessions)
   const fetchCrons = useCronsStore(s => s.fetch)
@@ -196,6 +196,14 @@ export function ChatView({ solo }: { solo?: string } = {}) {
   const agentEmoji = (agentId: string) => agents.find(a => a.id === agentId)?.identity?.emoji ?? '🤖'
   const popOut = (key: string) => { window.api?.window?.popOutChat?.(key); selectConversation('') }
 
+  // Deleting a chat must remove BOTH the in-memory conversation AND its durable gateway
+  // session — otherwise the session survives and immediately re-surfaces as an idle
+  // "recent" row (re-sorted by timestamp), which reads as "delete didn't work".
+  const removeChat = (convId?: string, sessionKey?: string) => {
+    if (sessionKey) deleteSession(sessionKey)
+    if (convId) deleteConversation(convId)
+  }
+
   const convItems: ChatItem[] = filtered.map(conv => {
     const sess = conv.sessionKey ? sessions.find(s => s.key === conv.sessionKey) : undefined
     const running = (!!sess && isRunning(sess)) || conv.messages.some(m => m.streaming)
@@ -211,7 +219,7 @@ export function ChatView({ solo }: { solo?: string } = {}) {
       running,
       isActive: conv.id === activeConvId,
       onOpen: () => selectConversation(conv.id),
-      onDelete: () => deleteConversation(conv.id),
+      onDelete: () => removeChat(conv.id, conv.sessionKey || undefined),
       onPopOut: conv.sessionKey ? () => popOut(conv.sessionKey!) : undefined,
       onRename: conv.sessionKey ? (name: string) => renameSession(conv.sessionKey!, name) : undefined,
     }
@@ -260,6 +268,7 @@ export function ChatView({ solo }: { solo?: string } = {}) {
         running: false,
         isActive: false,
         onOpen: () => handleOpenSession(s),
+        onDelete: () => removeChat(undefined, s.key),
         onPopOut: () => popOut(s.key),
         onRename: (name: string) => renameSession(s.key, name),
       }
