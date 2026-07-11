@@ -46,6 +46,14 @@ gateway RPC methods that read/write those directories on the host.
 | `memory.read` | read | `{ providerId, config, id }` | `{ content }` |
 | `memory.graph` | read | `{ providerId, config }` | `{ graph: { nodes, edges } }` (Obsidian backlink graph) |
 | `host.metrics` | read | — | `{ ok, cpu, ramUsed, ramTotal, gpu: [{ model, utilizationGpu, memUsed, memTotal, temperatureGpu }] }` (gateway host CPU %/RAM bytes/GPU MB) |
+| `jobs.list` | read | — | `{ jobs: [{ id, command, running, done, exitCode, percent, startedAt, elapsedMs }] }` (background script jobs) |
+| `jobs.get` | read | `{ jobId }` | `{ id, command, running, done, exitCode, error, percent, elapsedMs, output, outputTruncated }` (live tail) |
+| `jobs.stop` | write | `{ jobId }` | `{ ok }` (SIGTERM the job) |
+
+Agent tools `script_start` / `script_status` / `script_stop` let the model launch a
+long-running script in the background (returns a `jobId`), poll it, or stop it — so the
+turn doesn't block and JoaxClaw can show a live progress card. `jobs.*` are the app-side
+readers for that card.
 
 Artifacts are passed through verbatim as strings (or `null` when missing); the app
 owns (de)serialization. Ids are validated to stay inside the state directories.
