@@ -663,6 +663,14 @@ function jobView(job, includeOutput = true) {
 // reminder auto-cancel doesn't touch it).
 const SCRIPT_DONE_TAG = 'jc-script-done'
 
+// Sub-agent sessions (agent:<parent>:subagent:<uuid>) are ephemeral and owned by their
+// parent. Delivering an out-of-band turn to one (a reminder ping, a script wake-up) makes
+// the gateway re-initialize its reply context, which races into "reply session
+// initialization conflicted". So we never schedule turns to a sub-agent session.
+function isSubagentSession(key) {
+  return typeof key === 'string' && key.includes(':subagent:')
+}
+
 // The message delivered to the launching session when its script finishes, so the model
 // can pick up the result. Includes a bounded output tail.
 function jobWakeMessage(job) {
@@ -1062,7 +1070,10 @@ export default definePluginEntry({
           if (!command) return toolText('script_start: `command` is required.')
           const cwd = typeof params?.cwd === 'string' && params.cwd.trim() ? params.cwd.trim() : undefined
           const sessionKey = toolContext?.sessionKey
-          const notify = params?.notifyOnDone !== false && !!sessionKey && canWake
+          // Never auto-wake a sub-agent session — it's parent-owned and ephemeral, and
+          // delivering a turn to it triggers the replyResolver init-conflict. The sub-agent
+          // should poll script_status / report back to its parent instead.
+          const notify = params?.notifyOnDone !== false && !!sessionKey && canWake && !isSubagentSession(sessionKey)
           // On completion, schedule a one-shot turn back to the launching session carrying
           // the result — the same session-turn scheduler the reminder tool uses.
           const onExit = notify ? (job) => {
@@ -1145,6 +1156,12 @@ export default definePluginEntry({
         execute: async (_toolCallId, params) => {
           const sessionKey = toolContext?.sessionKey
           if (!sessionKey) return toolText('Reminder not set: no session context available.')
+          // A sub-agent can't be reliably revived out-of-band (delivering the ping races the
+          // gateway's reply-session init → "initialization conflicted"). Finish your work and
+          // return to your parent instead of scheduling a self-ping.
+          if (isSubagentSession(sessionKey)) {
+            return toolText('Reminders are not available inside a sub-agent session — a sub-agent can\'t be reliably revived on its own. Finish the task and return your result to the parent agent instead.')
+          }
           const prompt = typeof params?.prompt === 'string' ? params.prompt.trim() : ''
           if (!prompt) return toolText('Reminder not set: `prompt` is required.')
 
