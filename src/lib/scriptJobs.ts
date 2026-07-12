@@ -34,6 +34,23 @@ export function jobStatus(jobId: string): Promise<ScriptJob> {
   return gatewayClient.request<ScriptJob>('jobs.get', { jobId })
 }
 
+// All script jobs the gateway is tracking (running + recently finished). Returns [] when
+// the plugin is too old to provide jobs.list (unknown method), so callers stay simple.
+export function listJobs(): Promise<ScriptJob[]> {
+  return gatewayClient.request<{ jobs: ScriptJob[] }>('jobs.list')
+    .then(r => r.jobs ?? [])
+    .catch(() => [])
+}
+
+// Compact elapsed formatter shared by the job card and the dashboard.
+export function fmtElapsed(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000))
+  if (s < 60) return `${s}s`
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m}m ${s % 60}s`
+  return `${Math.floor(m / 60)}h ${m % 60}m`
+}
+
 export function stopJob(jobId: string): Promise<{ ok: boolean }> {
   return gatewayClient.request<{ ok: boolean }>('jobs.stop', { jobId })
 }

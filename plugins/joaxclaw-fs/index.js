@@ -591,11 +591,12 @@ function parsePercent(text) {
   return pct
 }
 
-function startJob(command, cwd) {
+function startJob(command, cwd, opts = {}) {
   const id = randomUUID()
   const job = {
     id, command, cwd: cwd || undefined, startedAt: Date.now(), finishedAt: null,
     running: true, done: false, exitCode: null, error: null, output: '', percent: null, pid: null,
+    sessionKey: opts.sessionKey,   // the session that launched it, for the finish wake-up
   }
   jobs.set(id, job)
   let child
@@ -627,6 +628,7 @@ function startJob(command, cwd) {
     job.exitCode = code
     if (code == null && signal) job.error = job.error || `terminated by ${signal}`
     job.finishedAt = Date.now()
+    try { opts.onExit && opts.onExit(job) } catch { /* wake-up is best-effort */ }
     setTimeout(() => jobs.delete(id), JOB_GC_MS)
   })
   return job
@@ -655,6 +657,31 @@ function jobView(job, includeOutput = true) {
     view.outputTruncated = job.output.length > JOB_TAIL_BYTES
   }
   return view
+}
+
+// Tag for the "your script finished" wake-up turn (distinct from reminders so the
+// reminder auto-cancel doesn't touch it).
+const SCRIPT_DONE_TAG = 'jc-script-done'
+
+// The message delivered to the launching session when its script finishes, so the model
+// can pick up the result. Includes a bounded output tail.
+function jobWakeMessage(job) {
+  const secs = Math.round(((job.finishedAt ?? Date.now()) - job.startedAt) / 1000)
+  const status = job.error ? `failed (${job.error})`
+    : job.exitCode === 0 ? 'finished successfully'
+    : `finished with exit code ${job.exitCode}`
+  const tail = job.output.split('\n').slice(-40).join('\n')
+  return [
+    `A background script you started has ${status} after ${secs}s.`,
+    '',
+    `Command: ${job.command}`,
+    `jobId: ${job.id}`,
+    '',
+    '--- recent output ---',
+    tail || '(no output)',
+    '',
+    'Process this result and continue.',
+  ].join('\n')
 }
 
 export default definePluginEntry({
@@ -1014,17 +1041,19 @@ export default definePluginEntry({
 
     // ── script_start / script_status / script_stop (agent tools) ────────────────
     if (typeof api.registerTool === 'function') {
-      api.registerTool(() => ({
+      const canWake = typeof api.scheduleSessionTurn === 'function'
+      api.registerTool((toolContext) => ({
         name: 'script_start',
         label: 'Start script',
         description:
-          'Launch a long-running shell command/script on the host and track it in the BACKGROUND, returning a jobId immediately instead of blocking. Use this — not the bash/shell tool — for anything slow or long-lived: builds, installs, deploys, test suites, training runs, servers, data jobs. JoaxClaw shows the user a live progress card (status, elapsed, streaming output, a % bar if the script prints one). After starting, do NOT sit and wait: either continue other work, call script_status(jobId) to check in, or set a reminder to come back.',
+          'Launch a long-running shell command/script on the host and track it in the BACKGROUND, returning a jobId immediately instead of blocking. Use this — not the bash/shell tool — for anything slow or long-lived: builds, installs, deploys, test suites, training runs, servers, data jobs. JoaxClaw shows the user a live progress card (status, elapsed, streaming output, a % bar if the script prints one). When the script finishes, THIS session is automatically woken with the result — so you do NOT need to poll or block: launch it, then continue other work or end your turn, and the result will be delivered back to you. (Set notifyOnDone:false to opt out — e.g. for a server you intend to leave running.)',
         parameters: {
           type: 'object',
           additionalProperties: false,
           properties: {
             command: { type: 'string', description: 'Shell command/script to run (executed via the shell on the gateway host).' },
             cwd: { type: 'string', description: 'Optional working directory.' },
+            notifyOnDone: { type: 'boolean', description: 'Wake this session with the result when the script finishes. Default true. Set false for fire-and-forget / long-lived servers.' },
           },
           required: ['command'],
         },
@@ -1032,12 +1061,24 @@ export default definePluginEntry({
           const command = typeof params?.command === 'string' ? params.command.trim() : ''
           if (!command) return toolText('script_start: `command` is required.')
           const cwd = typeof params?.cwd === 'string' && params.cwd.trim() ? params.cwd.trim() : undefined
-          const job = startJob(command, cwd)
+          const sessionKey = toolContext?.sessionKey
+          const notify = params?.notifyOnDone !== false && !!sessionKey && canWake
+          // On completion, schedule a one-shot turn back to the launching session carrying
+          // the result — the same session-turn scheduler the reminder tool uses.
+          const onExit = notify ? (job) => {
+            api.scheduleSessionTurn({
+              delayMs: 1000, deleteAfterRun: true, sessionKey,
+              message: jobWakeMessage(job), tag: SCRIPT_DONE_TAG, name: 'Script finished',
+              deliveryMode: 'announce',
+            }).catch(() => { /* best-effort wake */ })
+          } : undefined
+          const job = startJob(command, cwd, { sessionKey, onExit })
           if (job.done && job.error) return toolText(`Could not start script: ${job.error}`)
           return toolText(
             `Script started in the background.\njobId: ${job.id}\n` +
-            `The user now sees a live progress card for it. Don't block waiting — call ` +
-            `script_status with this jobId to check on it, or set a reminder to come back.`,
+            (notify
+              ? `When it finishes I'll automatically wake this session with the result — don't poll or wait, just continue or end your turn.`
+              : `Don't block waiting — call script_status with this jobId to check on it, or set a reminder to come back.`),
           )
         },
       }))
