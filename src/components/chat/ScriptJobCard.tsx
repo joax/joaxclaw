@@ -1,19 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { Terminal, Loader2, CheckCircle2, XCircle, ChevronDown, ChevronRight, Square, AlertTriangle } from 'lucide-react'
-import { jobStatus, stopJob, type ScriptJob } from '../../lib/scriptJobs'
+import { jobStatus, stopJob, fmtElapsed, type ScriptJob } from '../../lib/scriptJobs'
 
 // Live card for a background script started via the joaxclaw-fs `script_start` tool.
 // Polls jobs.get on the host while the job runs; shows status, elapsed, a % bar when
 // the script prints one, and a streaming output tail. Because the job lives on the
 // host, this reconnects to live progress even after an app reload.
-
-function fmtElapsed(ms: number): string {
-  const s = Math.max(0, Math.round(ms / 1000))
-  if (s < 60) return `${s}s`
-  const m = Math.floor(s / 60)
-  if (m < 60) return `${m}m ${s % 60}s`
-  return `${Math.floor(m / 60)}h ${m % 60}m`
-}
 
 export function ScriptJobCard({ jobId, command }: { jobId: string; command?: string }) {
   const [job, setJob] = useState<ScriptJob | null>(null)
