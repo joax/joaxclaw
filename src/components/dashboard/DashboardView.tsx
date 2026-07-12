@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import {
   Send, ChevronDown, Loader2, CheckCircle2, XCircle,
-  ArrowRight, Activity, Timer, Cpu, Clock, Zap, UsersRound,
+  ArrowRight, Activity, Timer, Cpu, Clock, Zap, UsersRound, Terminal, Square, Bell, X,
 } from 'lucide-react'
 import { useConnectionStore, useIsRemoteGateway } from '../../store/connection'
 import { gatewayHost } from '../../lib/ollamaHealth'
@@ -13,6 +13,8 @@ import { useTeamsStore } from '../../store/teams'
 import { useLogoUrl } from '../../lib/logo'
 import { useCronsStore } from '../../store/crons'
 import { useMetricsStore } from '../../store/metrics'
+import { listJobs, stopJob, type ScriptJob } from '../../lib/scriptJobs'
+import { reminderBySession, fmtCountdown, isReminderJob } from '../../lib/reminders'
 import { formatRelativeDate } from '../../lib/dateUtils'
 import type { NavSection } from '../../App'
 
@@ -419,7 +421,8 @@ function CronsSection({ onNavigate }: { onNavigate: (s: NavSection) => void }) {
   }, [])
 
   const visible = jobs
-    .filter(j => j.enabled)
+    // Reminders are one-shot session-turn crons — shown in their own Reminders section.
+    .filter(j => j.enabled && !isReminderJob(j))
     .sort((a, b) => {
       const aRunning = runningNow.has(a.id) || Boolean(a.state?.runningAtMs)
       const bRunning = runningNow.has(b.id) || Boolean(b.state?.runningAtMs)
@@ -700,10 +703,113 @@ function TeamsSection({ onNavigate }: { onNavigate: (s: NavSection) => void }) {
 
 // ── Right panel ───────────────────────────────────────────────────────────────
 
+// ── Right panel: Scripts (background jobs the model launched via script_start) ──
+
+const rightSectionLabel: React.CSSProperties = { fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text-secondary)' }
+
+function ScriptsSection() {
+  const status = useConnectionStore(s => s.status)
+  const [jobs, setJobs] = useState<ScriptJob[]>([])
+
+  // Poll the host for tracked script jobs. listJobs() returns [] when the plugin is too
+  // old for jobs.list, and gateway.ts caches the unknown method so this stays cheap.
+  useEffect(() => {
+    if (status !== 'connected') { setJobs([]); return }
+    let alive = true
+    const poll = async () => { const list = await listJobs(); if (alive) setJobs(list) }
+    poll()
+    const id = setInterval(poll, 3000)
+    return () => { alive = false; clearInterval(id) }
+  }, [status])
+
+  const running = jobs.filter(j => j.running)
+  if (running.length === 0) return null
+
+  return (
+    <div style={{ marginBottom: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+        <Terminal size={11} style={{ color: 'var(--text-secondary)' }} />
+        <span style={rightSectionLabel}>Scripts</span>
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        {running.slice(0, 5).map(job => (
+          <div key={job.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 0' }}>
+            <Loader2 size={11} className="animate-spin" style={{ color: 'var(--warning)', flexShrink: 0 }} />
+            <span style={{ fontSize: 11, color: 'var(--text-primary)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'monospace' }} title={job.command}>
+              {job.command}
+            </span>
+            <span style={{ fontSize: 10, color: 'var(--text-secondary)', flexShrink: 0, opacity: 0.8, fontVariantNumeric: 'tabular-nums' }}>
+              {job.percent != null ? `${job.percent}% · ` : ''}{fmtElapsed(Math.round(job.elapsedMs / 1000))}
+            </span>
+            <button
+              onClick={() => { void stopJob(job.id) }}
+              title="Stop the script"
+              style={{ display: 'flex', alignItems: 'center', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--danger)', padding: 2, flexShrink: 0 }}
+            >
+              <Square size={10} />
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// ── Right panel: Reminders (one-shot self-pings the model scheduled) ────────────
+
+function RemindersSection() {
+  const jobs = useCronsStore(s => s.jobs)
+  const cancel = useCronsStore(s => s.remove)
+  const [now, setNow] = useState(() => Date.now())
+
+  const reminders = [...reminderBySession(jobs).values()]
+    .sort((a, b) => (a.fireAtMs ?? Infinity) - (b.fireAtMs ?? Infinity))
+
+  // Tick the countdown only while there's something to count down.
+  useEffect(() => {
+    if (reminders.length === 0) return
+    const id = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(id)
+  }, [reminders.length])
+
+  if (reminders.length === 0) return null
+
+  return (
+    <div style={{ marginBottom: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+        <Bell size={11} style={{ color: 'var(--text-secondary)' }} />
+        <span style={rightSectionLabel}>Reminders</span>
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        {reminders.slice(0, 5).map(r => (
+          <div key={r.jobId} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 0' }}>
+            <Bell size={11} style={{ color: 'var(--accent)', flexShrink: 0 }} />
+            <span style={{ fontSize: 11, color: 'var(--text-primary)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.prompt}>
+              {r.prompt || 'Reminder'}
+            </span>
+            <span style={{ fontSize: 10, color: 'var(--text-secondary)', flexShrink: 0, opacity: 0.8, fontVariantNumeric: 'tabular-nums' }}>
+              {r.fireAtMs ? `in ${fmtCountdown(r.fireAtMs, now)}` : ''}
+            </span>
+            <button
+              onClick={() => { void cancel(r.jobId) }}
+              title="Cancel this reminder"
+              style={{ display: 'flex', alignItems: 'center', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)', padding: 2, flexShrink: 0 }}
+            >
+              <X size={11} />
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function RightPanel({ onNavigate }: { onNavigate: (s: NavSection) => void }) {
   return (
     <div style={{ width: 300, flexShrink: 0, borderLeft: '1px solid var(--border)', overflowY: 'auto', padding: '20px 16px', background: 'var(--bg-surface)', display: 'flex', flexDirection: 'column', gap: 0 }}>
       <ActiveSection onNavigate={onNavigate} />
+      <ScriptsSection />
+      <RemindersSection />
       <TeamsSection onNavigate={onNavigate} />
       <CronsSection onNavigate={onNavigate} />
       <ResourcesSection />
