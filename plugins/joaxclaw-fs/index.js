@@ -600,7 +600,13 @@ function startJob(command, cwd) {
   jobs.set(id, job)
   let child
   try {
-    child = spawn(command, { shell: true, cwd: cwd || undefined, env: process.env })
+    // Run via the user's LOGIN shell (`$SHELL -lc`, default bash) instead of the default
+    // `sh -c`, so their shell profile is sourced and PATH modifications (nvm/asdf/volta/
+    // homebrew node, etc.) apply. Otherwise a systemd-launched gateway's minimal PATH leaks
+    // in and tools like `node` resolve to a stale/missing /usr/bin/node. Subprocesses
+    // inherit this env. A missing shell surfaces as a normal job error via child 'error'.
+    const shell = process.env.SHELL || 'bash'
+    child = spawn(shell, ['-lc', command], { cwd: cwd || undefined, env: process.env })
   } catch (err) {
     job.running = false; job.done = true; job.error = String(err?.message ?? err); job.finishedAt = Date.now()
     return job
