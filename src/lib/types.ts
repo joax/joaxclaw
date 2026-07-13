@@ -150,6 +150,14 @@ export const THINKING_LEVELS: { value: ThinkingLevel; label: string }[] = [
   { value: 'max',      label: 'Max' },
 ]
 
+// What the user tells agents about themselves (Settings → You / first-run welcome).
+// Injected as context on the first turn of a chat, and the name can stand in for the
+// "JoaxClaw" sender label the model would otherwise see.
+export interface UserProfile {
+  name: string
+  about: string
+}
+
 export interface Conversation {
   id: string
   sessionKey: string
@@ -162,6 +170,9 @@ export interface Conversation {
   // True while chat.history is being fetched for this conversation (esp. slow on a
   // remote gateway). Drives the loading state so tapping a chat gives instant feedback.
   loadingHistory?: boolean
+  // Per-chat override for sharing the user profile as context: undefined follows the
+  // global `shareProfile` setting; true/false forces it for this conversation.
+  shareProfileOverride?: boolean
   // Per-chat overrides, independent of the agent's configured model.
   modelOverride?: string       // 'provider/model' — empty/undefined = agent default
   thinkingLevel?: ThinkingLevel // undefined / 'adaptive' = no override

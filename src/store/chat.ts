@@ -5,6 +5,8 @@ import { gatewayClient } from '../lib/gateway'
 import { agentIdFromSessionKey as agentIdFromKey } from '../lib/sessionName'
 import { useExtensionsStore } from './extensions'
 import { useConnectionStore } from './connection'
+import { useSettingsStore } from './settings'
+import { buildProfilePreamble } from '../lib/userProfile'
 
 const AUDIO_EXT = /\.(mp3|ogg|wav|m4a|aac|opus|webm|flac)(\?[^\s]*)?$/i
 const AUDIO_MIME = /^audio\//i
@@ -387,6 +389,7 @@ interface ChatState {
   selectConversation: (id: string) => void
   setModelOverride: (convId: string, model: string | null) => Promise<void>
   setThinkingLevel: (convId: string, level: ThinkingLevel) => void
+  setShareProfileOverride: (convId: string, value: boolean | undefined) => void
   sendMessage: (convId: string, text: string, attachments?: MediaAttachment[]) => Promise<void>
   abortStream: (convId: string) => Promise<void>
   compact: (convId: string) => Promise<void>
@@ -633,6 +636,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set({ activeConvId: id })
   },
 
+  setShareProfileOverride(convId, value) {
+    set(s => ({
+      conversations: s.conversations.map(c => c.id === convId ? { ...c, shareProfileOverride: value } : c)
+    }))
+  },
+
   // Per-chat model override. Empty/null = fall back to the agent's default model.
   // Applied at sessions.create for new chats; patched live for existing sessions.
   async setModelOverride(convId, model) {
@@ -766,6 +775,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   async sendMessage(convId, text, attachments) {
+    // Prepend the user's profile as context on the FIRST turn of a chat (Settings → You),
+    // so the model knows who it's talking to. It's added to the SENT text only — the user's
+    // own bubble (userMsg.content) stays clean — and once per chat. Per-chat override wins
+    // over the global setting.
+    const convBefore = get().conversations.find(c => c.id === convId)
+    const isFirstTurn = (convBefore?.messages.length ?? 0) === 0
+    const settings = useSettingsStore.getState()
+    const effectiveShare = convBefore?.shareProfileOverride ?? settings.shareProfile
+    const preamble = isFirstTurn && effectiveShare ? buildProfilePreamble(settings.userProfile) : null
+    const sentText = preamble ? `${preamble}\n\n${text}` : text
+
     // Close any stuck streaming message from a previous run that never received final/error/aborted
     const stuckStream = activeStreams.get(convId)
     if (stuckStream) {
@@ -914,7 +934,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         // deduped as the (failed) original send.
         gatewayClient.request('chat.send', {
           sessionKey: key,
-          message: text,
+          message: sentText,
           ...(conv.thinkingLevel ? { thinking: conv.thinkingLevel } : {}),
           ...(attachments?.length ? {
             attachments: attachments.map(a => ({
