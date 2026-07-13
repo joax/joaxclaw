@@ -1,6 +1,8 @@
 import { useState, useRef, useEffect } from 'react'
-import { Send, Square, RotateCcw, Paperclip, X, Image, Mic, MicOff, AudioWaveform } from 'lucide-react'
+import { Send, Square, RotateCcw, Paperclip, X, Image, Mic, MicOff, AudioWaveform, UserRound } from 'lucide-react'
 import { useChatStore } from '../../store/chat'
+import { useSettingsStore } from '../../store/settings'
+import { profileIsEmpty } from '../../lib/userProfile'
 import { useStreamStatus } from './useStreamStatus'
 import { useDraftsStore } from '../../store/drafts'
 import type { PendingAttachment } from '../../store/drafts'
@@ -69,7 +71,8 @@ export function MessageInput({ convId }: Props) {
   const [recordingMs, setRecordingMs] = useState(0)
   // `:shortcode` emoji autocomplete popup (null = closed).
   const [emojiMenu, setEmojiMenu] = useState<{ start: number; query: string; items: EmojiHit[]; active: number } | null>(null)
-  const { sendMessage, abortStream, compact, conversations } = useChatStore()
+  const { sendMessage, abortStream, compact, conversations, setShareProfileOverride } = useChatStore()
+  const { userProfile, shareProfile } = useSettingsStore()
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   // Caret position to restore after a programmatic text edit (emoji insertion),
   // since the controlled textarea would otherwise reset the caret to the end.
@@ -80,6 +83,11 @@ export function MessageInput({ convId }: Props) {
   const recTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const conv = conversations.find(c => c.id === convId)
+  // Profile is injected on the first turn only, so the per-chat share control is only
+  // meaningful (and shown) on a brand-new chat with a filled-in profile.
+  const isNewChat = (conv?.messages.length ?? 0) === 0
+  const effectiveShare = conv?.shareProfileOverride ?? shareProfile
+  const showProfileChip = isNewChat && !profileIsEmpty(userProfile)
   const isStreaming = conv?.messages.some(m => m.streaming) ?? false
   const streamingMsg = conv?.messages.findLast(m => m.streaming)
 
@@ -292,6 +300,27 @@ export function MessageInput({ convId }: Props) {
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
+      {showProfileChip && (
+        <div className="flex items-center gap-2 mb-2 px-1">
+          <button
+            onClick={() => setShareProfileOverride(convId, !effectiveShare)}
+            title={effectiveShare
+              ? 'Your profile (Settings → You) will be shared as context with this chat — click to keep it private here'
+              : 'Your profile won’t be shared with this chat — click to share it'}
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, padding: '3px 9px',
+              borderRadius: 999, cursor: 'pointer',
+              border: `1px solid ${effectiveShare ? 'color-mix(in srgb, var(--accent) 35%, var(--border))' : 'var(--border)'}`,
+              background: effectiveShare ? 'color-mix(in srgb, var(--accent) 12%, transparent)' : 'transparent',
+              color: effectiveShare ? 'var(--accent)' : 'var(--text-secondary)',
+            }}
+          >
+            <UserRound size={11} />
+            {effectiveShare ? 'Sharing your profile' : 'Profile not shared'}
+          </button>
+        </div>
+      )}
+
       {isStalled && (
         <div className="flex items-center gap-2 mb-2 px-1">
           <span className="text-xs" style={{ color: 'var(--danger)', opacity: 0.8 }}>
