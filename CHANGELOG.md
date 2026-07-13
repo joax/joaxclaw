@@ -5,6 +5,29 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.19.0] - 2026-07-13
+
+### Added
+
+- **Structured questions from agents.** Models can now ask you a question as tappable buttons instead of a wall of text — a choice between options, or a simple Yes / No — and your pick is sent straight back. Delivered via an injected `ask-user` skill and rendered as an interactive card in the chat.
+- **Host CPU / RAM / GPU on a remote gateway.** The dashboard and System Monitor now show the **gateway host's** resources (not your client machine's) when you're connected remotely — via the `joaxclaw-fs` plugin's `host.metrics` — with a **host** badge so it's clear whose numbers you're seeing. GPU is multi-vendor (NVIDIA / AMD / Apple Silicon).
+- **Tracked background scripts.** When an agent runs something long — a build, install, deploy, training run, or server — it launches it as a tracked job instead of blocking, and you get a **live progress card** in the chat: status, elapsed time, streaming output, a % bar when the script prints one, and a Stop button. Jobs run on the gateway host, so progress survives an app reconnect. When a script finishes, the session is **automatically woken with the result** so the agent can act on it — no polling.
+- **Running scripts & reminders on the dashboard.** The right panel now surfaces the scripts your models are running (with Stop) and pending self-reminders (with a live countdown and cancel).
+- **"About You" profile.** Tell your agents who they're talking to. A new **Settings → You** panel — and a first-run welcome — lets you set your name and a short description; it's shared as context at the start of new chats, and your name replaces the "JoaxClaw" label the model used to see. A per-chat toggle keeps any single conversation private.
+
+### Fixed
+
+- **"reply session initialization conflicted" recovers better.** Mid-conversation on a remote gateway, a stuck server-side reply context is now aborted before retrying; and reminders / script wake-ups are no longer delivered to ephemeral sub-agent sessions, which was a source of the conflict.
+- **Saving a model provider no longer errors.** Editing a provider's models (e.g. Google) previously tripped the gateway's array-shrink guard; the save now names the exact array paths (including nested ones) so it goes through.
+- **Deleting a chat removes it for good.** It now also deletes the underlying gateway session, so it no longer reappears as a "recent" row — and idle sessions are deletable too.
+- **Opening a chat gives instant feedback.** Tapping a not-yet-loaded chat switches to it immediately with a loading spinner instead of hanging on a slow remote history fetch.
+- **Background scripts pick up your PATH.** Long scripts run via your login shell, so tools like `node` (nvm / asdf / Homebrew) resolve correctly instead of a stale `/usr/bin/node`.
+- **Quieter host logs.** The app no longer re-sends (and the gateway no longer re-logs) RPCs an older gateway doesn't implement, such as `plugins.list`.
+
+> Note: the remote host metrics and script tracking require the **`joaxclaw-fs` plugin ≥ 0.11.2** on the gateway (`openclaw plugins install --force openclaw-joaxclaw-fs` + restart).
+
+---
+
 ## [0.18.0] - 2026-07-09
 
 ### Added
