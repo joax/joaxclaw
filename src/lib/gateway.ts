@@ -1,4 +1,6 @@
 import type { GwFrame, GwResFrame } from './types'
+import { useSettingsStore } from '../store/settings'
+import { chatIdentityName } from './userProfile'
 
 type Listener = (frame: GwEventFrame) => void
 interface GwEventFrame { type: 'event'; event: string; payload?: unknown; seq?: number }
@@ -158,7 +160,10 @@ export class GatewayClient {
       maxProtocol: 4,
       client: {
         id: 'gateway-client',
-        displayName: 'JoaxClaw',
+        // The label the model attributes messages to. Uses the user's profile name when
+        // they've opted in (Settings → You), else the default "JoaxClaw". Read at connect
+        // time — changing the name takes effect on the next (re)connect.
+        displayName: chatIdentityName(useSettingsStore.getState().userProfile, useSettingsStore.getState().useNameAsIdentity),
         version: '0.1.0',
         platform: 'linux',
         mode: 'backend'

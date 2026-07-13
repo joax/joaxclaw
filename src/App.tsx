@@ -20,6 +20,7 @@ import { ReconnectOverlay } from './components/layout/ReconnectOverlay'
 import { UpdateBanner } from './components/layout/UpdateBanner'
 import { PluginUpdateBanner } from './components/layout/PluginUpdateBanner'
 import { GatewayUpdateBanner } from './components/layout/GatewayUpdateBanner'
+import { WelcomeModal } from './components/layout/WelcomeModal'
 import { useUpdaterStore } from './store/updater'
 import { useConnectionStore, restoreConnectionsFromBackup } from './store/connection'
 import { useMetricsStore } from './store/metrics'
@@ -36,7 +37,7 @@ export default function App() {
   const [section, setSection] = useState<NavSection>('dashboard')
   const { status, connection, reconnecting } = useConnectionStore()
   const { start: startMetrics, stop: stopMetrics } = useMetricsStore()
-  const { monitorVisible } = useSettingsStore()
+  const { monitorVisible, welcomeSeen } = useSettingsStore()
   const { plugins, skills, load: loadExtensions } = useExtensionsStore()
   const obsidianEnabled =
     plugins.some(p => /obsidian/i.test(p.id) && p.enabled) ||
@@ -179,6 +180,9 @@ export default function App() {
         </main>
       </div>
       <StatusBar />
+      {/* First-run welcome — once the user is connected and in the app, invite them to
+          introduce themselves (Settings → You covers it afterward). */}
+      {status === 'connected' && !welcomeSeen && <WelcomeModal />}
     </div>
   )
 }

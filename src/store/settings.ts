@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import type { ThemeSettings, ThemeBgSlot, ThemeBackground } from '../lib/types'
+import type { ThemeSettings, ThemeBgSlot, ThemeBackground, UserProfile } from '../lib/types'
 import { DEFAULT_THEME, PRESET_THEMES } from '../lib/presetThemes'
 import { parseThemeManifest, serializeTheme, THEME_BG_SLOTS } from '../lib/themeFormat'
 import { applyTheme } from '../lib/theme'
@@ -59,6 +59,20 @@ interface SettingsState {
   // A version the user chose to "Skip" — suppresses the banner until a newer one.
   skippedUpdateVersion: string
 
+  // ── User profile ("About You") ──────────────────────────────────────────────
+  userProfile: UserProfile
+  // Auto-include the profile as context on the first turn of a new chat.
+  shareProfile: boolean
+  // Use the profile name as the chat identity the model sees (vs. "JoaxClaw").
+  useNameAsIdentity: boolean
+  // First-run welcome shown-and-dismissed flag.
+  welcomeSeen: boolean
+
+  setUserProfile: (patch: Partial<UserProfile>) => void
+  setShareProfile: (on: boolean) => void
+  setUseNameAsIdentity: (on: boolean) => void
+  dismissWelcome: () => void
+
   setAutoUpdateCheck: (on: boolean) => void
   setSkippedUpdateVersion: (version: string) => void
   setChatMode: (mode: 'basic' | 'advanced') => void
@@ -93,6 +107,16 @@ export const useSettingsStore = create<SettingsState>()(
       uiZoom: 0,
       autoUpdateCheck: true,
       skippedUpdateVersion: '',
+
+      userProfile: { name: '', about: '' },
+      shareProfile: true,
+      useNameAsIdentity: true,
+      welcomeSeen: false,
+
+      setUserProfile(patch) { set(s => ({ userProfile: { ...s.userProfile, ...patch } })) },
+      setShareProfile(on) { set({ shareProfile: on }) },
+      setUseNameAsIdentity(on) { set({ useNameAsIdentity: on }) },
+      dismissWelcome() { set({ welcomeSeen: true }) },
 
       setAutoUpdateCheck(on) { set({ autoUpdateCheck: on }) },
       setSkippedUpdateVersion(version) { set({ skippedUpdateVersion: version }) },

@@ -14,6 +14,8 @@ export function SettingsView() {
       <div className="p-6 flex flex-col gap-4" style={{ maxWidth: 520 }}>
         <h2 className="text-base font-semibold" style={{ color: 'var(--text-primary)' }}>Settings</h2>
 
+        <ProfileSection />
+
         <Section title="Status Bar">
           <div className="space-y-2">
             {[
@@ -61,6 +63,41 @@ export function SettingsView() {
         <UpdatesSection />
       </div>
     </div>
+  )
+}
+
+function ProfileSection() {
+  const { userProfile, setUserProfile, shareProfile, setShareProfile, useNameAsIdentity, setUseNameAsIdentity } = useSettingsStore()
+
+  return (
+    <Section title="You">
+      <div className="space-y-3">
+        <p className="text-xs" style={{ color: 'var(--text-secondary)', opacity: 0.8, lineHeight: 1.5 }}>
+          Tell your agents who they're talking to. Your name and a short description are shared as context at the start of new chats, so replies are addressed and tailored to you.
+        </p>
+        <TextField
+          label="Name"
+          value={userProfile.name}
+          placeholder="How agents should address you"
+          onChange={v => setUserProfile({ name: v })}
+        />
+        <TextAreaField
+          label="About you"
+          value={userProfile.about}
+          placeholder="Role, expertise, how you like answers (concise vs. detailed), timezone, anything worth knowing…"
+          onChange={v => setUserProfile({ about: v })}
+        />
+        <div className="pt-1 space-y-2" style={{ borderTop: '1px solid var(--border)' }}>
+          <Toggle label="Share my profile with agents" value={shareProfile} onChange={setShareProfile} />
+          <Toggle label="Use my name as my chat identity" value={useNameAsIdentity} onChange={setUseNameAsIdentity} />
+          {useNameAsIdentity && (
+            <p className="text-xs" style={{ color: 'var(--text-secondary)', opacity: 0.65 }}>
+              Replaces the “JoaxClaw” sender label the model sees. Takes effect on the next reconnect.
+            </p>
+          )}
+        </div>
+      </div>
+    </Section>
   )
 }
 
@@ -142,6 +179,34 @@ function UpdatesSection() {
         <Toggle label="Check for updates automatically" value={autoUpdateCheck} onChange={setAutoUpdateCheck} />
       </div>
     </Section>
+  )
+}
+
+const fieldInputStyle: React.CSSProperties = {
+  width: '100%', background: 'var(--bg-primary)', border: '1px solid var(--border)',
+  borderRadius: 'var(--radius)', padding: '7px 10px', fontSize: 13, color: 'var(--text-primary)', outline: 'none',
+}
+
+export function TextField({ label, value, placeholder, onChange }: {
+  label: string; value: string; placeholder?: string; onChange: (v: string) => void
+}) {
+  return (
+    <div>
+      <label className="text-xs font-medium block mb-1" style={{ color: 'var(--text-secondary)' }}>{label}</label>
+      <input value={value} placeholder={placeholder} onChange={e => onChange(e.target.value)} style={fieldInputStyle} />
+    </div>
+  )
+}
+
+export function TextAreaField({ label, value, placeholder, onChange, rows = 4 }: {
+  label: string; value: string; placeholder?: string; onChange: (v: string) => void; rows?: number
+}) {
+  return (
+    <div>
+      <label className="text-xs font-medium block mb-1" style={{ color: 'var(--text-secondary)' }}>{label}</label>
+      <textarea value={value} placeholder={placeholder} rows={rows} onChange={e => onChange(e.target.value)}
+        style={{ ...fieldInputStyle, resize: 'vertical', lineHeight: 1.5, fontFamily: 'inherit' }} />
+    </div>
   )
 }
 
