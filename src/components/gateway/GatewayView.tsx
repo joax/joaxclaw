@@ -9,6 +9,7 @@ import { formatBytes } from '../../lib/ollama'
 import { gatewayClient } from '../../lib/gateway'
 import { gatewayHost } from '../../lib/ollamaHealth'
 import { ChannelsPanel } from './ChannelsPanel'
+import { ConnectionLogPanel } from './ConnectionLogPanel'
 import { DevicesPanel } from './DevicesPanel'
 import { LocalEnginesCard } from './LocalEnginesCard'
 import { SessionsView } from '../sessions/SessionsView'
@@ -271,7 +272,8 @@ export function GatewayView({ onOpenChat }: { onOpenChat?: () => void } = {}) {
 
         {/* ── Connection ── */}
         {tab === 'connection' && (
-          <SettingsScroll title="Connection">
+          <SettingsScroll title="Connection" maxWidth={960}>
+            <div style={{ maxWidth: 560 }}>
             <Card title="Gateway connection">
               <div className="space-y-3">
                 <div>
@@ -305,6 +307,10 @@ export function GatewayView({ onOpenChat }: { onOpenChat?: () => void } = {}) {
                 )}
                 {statusDot}
               </div>
+            </Card>
+            </div>
+            <Card title="Connection log">
+              <ConnectionLogPanel />
             </Card>
           </SettingsScroll>
         )}
@@ -449,10 +455,10 @@ export function GatewayView({ onOpenChat }: { onOpenChat?: () => void } = {}) {
 }
 
 // Scrollable, width-constrained content wrapper for a settings section.
-function SettingsScroll({ title, children }: { title: string; children: React.ReactNode }) {
+function SettingsScroll({ title, maxWidth = 560, children }: { title: string; maxWidth?: number; children: React.ReactNode }) {
   return (
     <div className="flex-1 overflow-y-auto min-h-0">
-      <div className="p-6 flex flex-col gap-4" style={{ maxWidth: 560 }}>
+      <div className="p-6 flex flex-col gap-4" style={{ maxWidth }}>
         <h2 className="text-base font-semibold" style={{ color: 'var(--text-primary)' }}>{title}</h2>
         {children}
       </div>

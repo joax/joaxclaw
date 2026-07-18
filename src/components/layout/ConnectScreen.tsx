@@ -46,8 +46,8 @@ export function ConnectScreen({ onConnect }: Props) {
 
   // Listen to gateway connection log
   useEffect(() => {
-    gatewayClient.onLog = (entry) => setLog(prev => [...prev.slice(-99), entry])
-    return () => { gatewayClient.onLog = undefined }
+    setLog(gatewayClient.getLog().slice(-100))
+    return gatewayClient.onLogEntry(entry => setLog(prev => [...prev.slice(-99), entry]))
   }, [])
 
   // Auto-fill from config on first load if no saved connections
