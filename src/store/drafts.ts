@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import type { AttachmentKind } from '../lib/attachments'
 
 export interface PendingAttachment {
   id: string
@@ -6,7 +7,8 @@ export interface PendingAttachment {
   mediaType: string
   dataUrl: string
   base64: string
-  type: 'image' | 'video' | 'audio'
+  size: number
+  type: AttachmentKind
 }
 
 interface Draft {

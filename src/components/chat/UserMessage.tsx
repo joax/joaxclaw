@@ -1,7 +1,15 @@
 import type { ChatMessage } from '../../lib/types'
 import { formatTimestamp } from '../../lib/dateUtils'
 import { AudioPlayer } from './AudioPlayer'
+import { AttachmentCard } from './AttachmentCard'
 import { MessageReactions } from './MessageReactions'
+
+// Build a usable src for an attachment: a remote url, or a data: URL from base64.
+function attachmentSrc(a: { url?: string; data?: string; mediaType?: string }): string | undefined {
+  if (a.url) return a.url
+  if (a.data) return `data:${a.mediaType ?? 'application/octet-stream'};base64,${a.data}`
+  return undefined
+}
 
 interface Props { message: ChatMessage }
 
@@ -30,6 +38,8 @@ const MEDIA_ONLY_PLACEHOLDER = '[User sent media without caption]'
 export function UserMessage({ message }: Props) {
   const audioAttachments = message.attachments?.filter(a => a.type === 'audio') ?? []
   const imageAttachments = message.attachments?.filter(a => a.type === 'image') ?? []
+  const videoAttachments = message.attachments?.filter(a => a.type === 'video') ?? []
+  const fileAttachments = message.attachments?.filter(a => a.type === 'file') ?? []
   const isMediaOnly = !message.content || message.content === MEDIA_ONLY_PLACEHOLDER
   const lines = isMediaOnly ? [] : message.content.split('\n')
 
@@ -51,6 +61,25 @@ export function UserMessage({ message }: Props) {
                 alt={a.name ?? 'attachment'}
                 style={{ maxHeight: 200, maxWidth: 300, borderRadius: 'var(--radius)', objectFit: 'cover', border: '1px solid var(--border)' }}
               />
+            ))}
+          </div>
+        )}
+        {videoAttachments.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 mb-1.5 justify-end">
+            {videoAttachments.map((a, i) => (
+              <video
+                key={i}
+                src={attachmentSrc(a)}
+                controls
+                style={{ maxHeight: 240, maxWidth: 320, borderRadius: 'var(--radius)', border: '1px solid var(--border)', background: '#000' }}
+              />
+            ))}
+          </div>
+        )}
+        {fileAttachments.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 mb-1.5 justify-end">
+            {fileAttachments.map((a, i) => (
+              <AttachmentCard key={i} name={a.name} mediaType={a.mediaType} size={a.size} src={attachmentSrc(a)} variant="message" />
             ))}
           </div>
         )}
