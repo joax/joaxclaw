@@ -55,12 +55,27 @@ const wsApi = (): WsApi => (window as unknown as { api: { ws: WsApi } }).api.ws
 // Device-identity signer exposed by the preload (main-process crypto). Optional —
 // absent on older preloads, in which case we fall back to a device-less handshake.
 export interface DeviceConnectBlock { id: string; publicKey: string; signature: string; signedAt: number; nonce: string }
+interface StoredDeviceToken { token: string; scopes: string[]; issuedAtMs?: number }
+// The connect response (`hello-ok`) auth block — carries the granted scopes and the
+// per-role device token(s) the gateway issues to a paired device.
+interface HelloOk {
+  auth?: {
+    scopes?: string[]
+    role?: string
+    deviceToken?: string
+    issuedAtMs?: number
+    deviceTokens?: { deviceToken: string; role: string; scopes?: string[]; issuedAtMs?: number }[]
+  }
+}
 type DeviceAuthApi = {
   buildConnectBlock: (input: {
     nonce: string; role: string; scopes: string[]; token?: string | null
     clientId: string; clientMode: string; platform: string; deviceFamily?: string
   }) => Promise<{ ok: true; block: DeviceConnectBlock } | { ok: false; error: string }>
   identity: () => Promise<{ ok: true; deviceId: string } | { ok: false; error: string }>
+  getDeviceToken: (host: string, role: string) => Promise<{ ok: true; entry: StoredDeviceToken | null } | { ok: false; error: string }>
+  storeDeviceToken: (host: string, role: string, token: string, scopes: string[], issuedAtMs?: number) => Promise<{ ok: boolean; error?: string }>
+  clearDeviceToken: (host: string, role: string) => Promise<{ ok: boolean; error?: string }>
 }
 const deviceAuthApi = (): DeviceAuthApi | undefined =>
   (window as unknown as { api: { deviceAuth?: DeviceAuthApi } }).api.deviceAuth
@@ -89,6 +104,9 @@ export class GatewayClient {
   // True while we're internally reconnecting to renegotiate scopes, so the transient
   // socket drop isn't surfaced to the store as a real disconnect.
   private _negotiating = false
+  // Guards the one-shot clear-and-retry when a cached device token is stale, so a
+  // persistently rejected token can't loop. Reset on each fresh connect().
+  private _deviceTokenRetried = false
   // Methods this gateway answered with "unknown method" — older gateways don't
   // implement every RPC the client knows (e.g. plugins.list). We skip re-sending a
   // doomed request each fetch, which also stops the host logging an INVALID_REQUEST
@@ -127,7 +145,14 @@ export class GatewayClient {
     this._connected = false
     this._scopeTier = 0
     this._negotiating = false
+    this._deviceTokenRetried = false
     this._open()
+  }
+
+  // Stable per-gateway key for scoping cached device tokens. The hostname of the
+  // connection URL — the same gateway reached via a different URL just re-pairs.
+  private _gatewayHost(): string {
+    try { return new URL(this._url).host } catch { return this._url }
   }
 
   private _addLog(dir: ConnLog['dir'], text: string) {
@@ -250,6 +275,21 @@ export class GatewayClient {
       }
     }
 
+    // Resend a cached device token so the gateway authenticates this connection via
+    // "device-token" — the only auth method that preserves operator scopes from a
+    // REMOTE locality (a relayed Tailscale connection from another network). Without
+    // it, operator scopes survive only on the trusted local path, so pairing works at
+    // home but drops the operator role from a foreign network. Absent until the device
+    // is approved and the gateway first hands one back (persisted then).
+    let deviceToken: string | undefined
+    const host = this._gatewayHost()
+    if (da && host) {
+      try {
+        const r = await da.getDeviceToken(host, 'operator')
+        if (r.ok && r.entry?.token) deviceToken = r.entry.token
+      } catch { /* fall back to shared-token auth */ }
+    }
+
     const params = {
       minProtocol: 4,
       maxProtocol: 4,
@@ -264,15 +304,26 @@ export class GatewayClient {
         mode: CLIENT_MODE
       },
       caps: ['tool-events'],
-      auth: { token: this._token },
+      auth: { token: this._token, ...(deviceToken ? { deviceToken } : {}) },
       role: 'operator',
       scopes,
       ...(device ? { device } : {})
     }
 
-    this._addLog('info', `Sending connect request… (scope request: [${scopes.join(', ')}]${device ? `, device ${device.id.slice(0, 8)}…` : ', no device identity'})`)
-    this.request<{ auth?: { scopes?: string[] } }>('connect', params as Record<string, unknown>).then((res) => {
+    this._addLog('info', `Sending connect request… (scope request: [${scopes.join(', ')}]${device ? `, device ${device.id.slice(0, 8)}…` : ', no device identity'}${deviceToken ? ', device-token' : ''})`)
+    this.request<HelloOk>('connect', params as Record<string, unknown>).then((res) => {
       this.grantedScopes = Array.isArray(res?.auth?.scopes) ? res.auth!.scopes! : []
+
+      // Cache any device tokens the gateway issued (one for the connected role, plus
+      // extras for other roles). Resent on the next connect as auth.deviceToken so a
+      // remote/relayed connection keeps its operator scopes.
+      if (da && host) {
+        const a = res?.auth
+        if (a?.deviceToken) void da.storeDeviceToken(host, a.role ?? 'operator', a.deviceToken, a.scopes ?? [], a.issuedAtMs)
+        for (const t of a?.deviceTokens ?? []) {
+          if (t?.deviceToken && t.role) void da.storeDeviceToken(host, t.role, t.deviceToken, t.scopes ?? [], t.issuedAtMs)
+        }
+      }
 
       // Some gateways return an EMPTY grant when we request a scope the token can't
       // hold (instead of granting the entitled subset), which would leave the app
@@ -298,6 +349,16 @@ export class GatewayClient {
       this.onStatusChange?.('connected')
     }).catch((err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err)
+      // A cached device token went stale (gateway rotated/restarted): clear it and
+      // reconnect once, which re-authenticates with the shared token + signature and
+      // gets a fresh device token issued. Guarded so we don't loop.
+      if (/AUTH_DEVICE_TOKEN_MISMATCH|device.token.mismatch/i.test(msg) && da && host && deviceToken && !this._deviceTokenRetried) {
+        this._deviceTokenRetried = true
+        this._addLog('info', 'Cached device token was rejected (stale) — clearing it and retrying to re-pair the token.')
+        void da.clearDeviceToken(host, 'operator')
+        this._renegotiate()
+        return
+      }
       // A new device presents its identity but hasn't been approved yet: the gateway
       // rejects with a pairing/not-paired error. Surface a clear, actionable message
       // (with the deviceId to approve) instead of a bare "auth rejected".

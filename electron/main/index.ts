@@ -9,7 +9,7 @@ import si from 'systeminformation'
 import WebSocket from 'ws'
 import { registerUpdater } from './updater'
 import { registerThemeIpc } from './themes'
-import { buildDeviceConnectBlock, loadOrCreateDeviceIdentity, type DeviceConnectInput } from './deviceIdentity'
+import { buildDeviceConnectBlock, loadOrCreateDeviceIdentity, getDeviceToken, storeDeviceToken, clearDeviceToken, type DeviceConnectInput } from './deviceIdentity'
 
 let mainWindow: BrowserWindow | null = null
 let aboutWindow: BrowserWindow | null = null
@@ -539,6 +539,20 @@ ipcMain.handle('deviceAuth:identity', () => {
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) }
   }
+})
+// Per-gateway device-token cache (keeps operator scopes on remote/relayed
+// connections — see deviceIdentity.ts). Keyed by gateway host + role.
+ipcMain.handle('deviceAuth:getDeviceToken', (_event, host: string, role: string) => {
+  try { return { ok: true, entry: getDeviceToken(host, role) } }
+  catch (e: unknown) { return { ok: false, error: e instanceof Error ? e.message : String(e) } }
+})
+ipcMain.handle('deviceAuth:storeDeviceToken', (_event, host: string, role: string, token: string, scopes: string[], issuedAtMs?: number) => {
+  try { storeDeviceToken(host, role, token, scopes, issuedAtMs); return { ok: true } }
+  catch (e: unknown) { return { ok: false, error: e instanceof Error ? e.message : String(e) } }
+})
+ipcMain.handle('deviceAuth:clearDeviceToken', (_event, host: string, role: string) => {
+  try { clearDeviceToken(host, role); return { ok: true } }
+  catch (e: unknown) { return { ok: false, error: e instanceof Error ? e.message : String(e) } }
 })
 
 ipcMain.handle('ws:connect', (event, url: string, token: string) => {
