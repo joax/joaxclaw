@@ -69,11 +69,12 @@ export interface Session {
 export type MessageRole = 'user' | 'assistant' | 'system'
 
 export interface MediaAttachment {
-  type: 'audio' | 'image' | 'video'
+  type: 'audio' | 'image' | 'video' | 'file'
   url?: string
   data?: string      // base64
   mediaType?: string
   name?: string
+  size?: number      // bytes, for the file-card label
 }
 
 export interface ToolCall {
