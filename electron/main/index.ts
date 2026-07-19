@@ -9,6 +9,7 @@ import si from 'systeminformation'
 import WebSocket from 'ws'
 import { registerUpdater } from './updater'
 import { registerThemeIpc } from './themes'
+import { buildDeviceConnectBlock, loadOrCreateDeviceIdentity, getDeviceToken, storeDeviceToken, clearDeviceToken, type DeviceConnectInput } from './deviceIdentity'
 
 let mainWindow: BrowserWindow | null = null
 let aboutWindow: BrowserWindow | null = null
@@ -520,6 +521,39 @@ function destroySocket(sock: WebSocket | null | undefined) {
   sock.on('error', () => { /* swallow late errors during teardown */ })
   try { sock.terminate() } catch { /* already closed / never connected */ }
 }
+
+// Device identity for the gateway handshake. Crypto lives here in the main process
+// (Node), never in the renderer — the private key never crosses IPC. The renderer
+// hands us the per-challenge inputs and gets back the signed `device` block to embed
+// in its connect params. See electron/main/deviceIdentity.ts.
+ipcMain.handle('deviceAuth:buildConnectBlock', (_event, input: DeviceConnectInput) => {
+  try {
+    return { ok: true, block: buildDeviceConnectBlock(input) }
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) }
+  }
+})
+ipcMain.handle('deviceAuth:identity', () => {
+  try {
+    return { ok: true, deviceId: loadOrCreateDeviceIdentity().deviceId }
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) }
+  }
+})
+// Per-gateway device-token cache (keeps operator scopes on remote/relayed
+// connections — see deviceIdentity.ts). Keyed by gateway host + role.
+ipcMain.handle('deviceAuth:getDeviceToken', (_event, host: string, role: string) => {
+  try { return { ok: true, entry: getDeviceToken(host, role) } }
+  catch (e: unknown) { return { ok: false, error: e instanceof Error ? e.message : String(e) } }
+})
+ipcMain.handle('deviceAuth:storeDeviceToken', (_event, host: string, role: string, token: string, scopes: string[], issuedAtMs?: number) => {
+  try { storeDeviceToken(host, role, token, scopes, issuedAtMs); return { ok: true } }
+  catch (e: unknown) { return { ok: false, error: e instanceof Error ? e.message : String(e) } }
+})
+ipcMain.handle('deviceAuth:clearDeviceToken', (_event, host: string, role: string) => {
+  try { clearDeviceToken(host, role); return { ok: true } }
+  catch (e: unknown) { return { ok: false, error: e instanceof Error ? e.message : String(e) } }
+})
 
 ipcMain.handle('ws:connect', (event, url: string, token: string) => {
   const wc = event.sender

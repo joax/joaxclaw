@@ -30,3 +30,6 @@ joaxclaw.db
 # Editor
 .vscode/settings.json
 .idea/
+
+# TypeScript incremental build caches
+*.tsbuildinfo
