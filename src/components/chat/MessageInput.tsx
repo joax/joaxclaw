@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { Send, Square, RotateCcw, Paperclip, X, Image, Mic, MicOff, AudioWaveform, UserRound } from 'lucide-react'
+import { Send, Square, RotateCcw, Paperclip, X, Mic, MicOff, AudioWaveform, UserRound } from 'lucide-react'
 import { useChatStore } from '../../store/chat'
 import { useSettingsStore } from '../../store/settings'
 import { profileIsEmpty } from '../../lib/userProfile'
@@ -7,13 +7,9 @@ import { useStreamStatus } from './useStreamStatus'
 import { useDraftsStore } from '../../store/drafts'
 import type { PendingAttachment } from '../../store/drafts'
 import type { MediaAttachment } from '../../lib/types'
+import { classifyKind } from '../../lib/attachments'
+import { AttachmentCard } from './AttachmentCard'
 import { searchEmoji, activeEmojiToken, completedEmojiAt, type EmojiHit } from '../../lib/emoji'
-
-function mimeToMediaType(mime: string): 'image' | 'video' | 'audio' {
-  if (mime.startsWith('image/')) return 'image'
-  if (mime.startsWith('video/')) return 'video'
-  return 'audio'
-}
 
 function fileToAttachment(file: File): Promise<PendingAttachment> {
   return new Promise((resolve, reject) => {
@@ -26,7 +22,8 @@ function fileToAttachment(file: File): Promise<PendingAttachment> {
         mediaType: file.type || 'application/octet-stream',
         dataUrl,
         base64: dataUrl.split(',')[1],
-        type: mimeToMediaType(file.type),
+        size: file.size,
+        type: classifyKind(file.type, file.name),
       })
     }
     reader.onerror = reject
@@ -186,7 +183,7 @@ export function MessageInput({ convId }: Props) {
     }
 
     const atts: MediaAttachment[] = pendingAttachments.map(a => ({
-      type: a.type, data: a.base64, mediaType: a.mediaType, name: a.name,
+      type: a.type, data: a.base64, mediaType: a.mediaType, name: a.name, size: a.size,
     }))
     storeClear(convId)
     if (textareaRef.current) textareaRef.current.style.height = 'auto'
@@ -260,9 +257,7 @@ export function MessageInput({ convId }: Props) {
   }
 
   const handlePaste = async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
-    const fileItems = Array.from(e.clipboardData.items).filter(
-      item => item.kind === 'file' && (item.type.startsWith('image/') || item.type.startsWith('video/') || item.type.startsWith('audio/'))
-    )
+    const fileItems = Array.from(e.clipboardData.items).filter(item => item.kind === 'file')
     if (fileItems.length === 0) return
     e.preventDefault()
     const files = fileItems.map(i => i.getAsFile()).filter(Boolean) as File[]
@@ -282,9 +277,7 @@ export function MessageInput({ convId }: Props) {
   const handleDragLeave = () => setIsDragOver(false)
   const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault(); setIsDragOver(false)
-    const files = Array.from(e.dataTransfer.files).filter(f =>
-      f.type.startsWith('image/') || f.type.startsWith('video/') || f.type.startsWith('audio/')
-    )
+    const files = Array.from(e.dataTransfer.files)
     if (files.length === 0) return
     const newAtts = await Promise.all(files.map(fileToAttachment))
     setPendingAttachments(prev => [...prev, ...newAtts])
@@ -359,7 +352,7 @@ export function MessageInput({ convId }: Props) {
         </div>
       )}
 
-      <input ref={fileInputRef} type="file" accept="image/*,video/*,audio/*" multiple style={{ display: 'none' }} onChange={handleFileChange} />
+      <input ref={fileInputRef} type="file" multiple style={{ display: 'none' }} onChange={handleFileChange} />
 
       {/* Attachment previews */}
       {pendingAttachments.length > 0 && (
@@ -368,6 +361,8 @@ export function MessageInput({ convId }: Props) {
             <div key={att.id} style={{ position: 'relative', display: 'inline-block' }}>
               {att.type === 'image' ? (
                 <img src={att.dataUrl} alt={att.name} style={{ height: 72, maxWidth: 120, borderRadius: 8, objectFit: 'cover', border: '1px solid var(--border)' }} />
+              ) : att.type === 'video' ? (
+                <video src={att.dataUrl} muted style={{ height: 72, maxWidth: 120, borderRadius: 8, objectFit: 'cover', border: '1px solid var(--border)', background: '#000' }} />
               ) : att.type === 'audio' ? (
                 <div style={{ height: 56, minWidth: 120, maxWidth: 180, borderRadius: 8, background: 'color-mix(in srgb, var(--accent) 10%, var(--bg-elevated))', border: '1px solid color-mix(in srgb, var(--accent) 25%, var(--border))', display: 'flex', alignItems: 'center', gap: 8, padding: '0 10px' }}>
                   <AudioWaveform size={18} style={{ color: 'var(--accent)', flexShrink: 0 }} />
@@ -376,10 +371,7 @@ export function MessageInput({ convId }: Props) {
                   </span>
                 </div>
               ) : (
-                <div style={{ height: 72, width: 72, borderRadius: 8, background: 'var(--bg-elevated)', border: '1px solid var(--border)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
-                  <Image size={20} style={{ color: 'var(--text-secondary)' }} />
-                  <span style={{ fontSize: 9, color: 'var(--text-secondary)', textAlign: 'center', padding: '0 4px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 64 }}>{att.name}</span>
-                </div>
+                <AttachmentCard name={att.name} mediaType={att.mediaType} size={att.size} variant="input" />
               )}
               <button onClick={() => removeAttachment(att.id)} style={{ position: 'absolute', top: -6, right: -6, width: 18, height: 18, borderRadius: '50%', background: 'var(--danger)', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff' }}>
                 <X size={10} />
