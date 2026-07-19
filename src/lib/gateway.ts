@@ -11,6 +11,36 @@ export interface ConnLog {
   ts: number
 }
 
+// Operator scopes we ask the gateway for at connect time. The gateway grants a
+// subset based on the token's authorization; anything requested here but absent
+// from the granted set means RPCs needing it will be rejected (surfaced in the
+// Connection log panel as "withheld").
+export const REQUESTED_OPERATOR_SCOPES = [
+  'operator.admin', 'operator.read', 'operator.write',
+  'operator.approvals', 'operator.pairing', 'operator.talk.secrets'
+] as const
+
+// The scopes without which the app is fundamentally broken (nearly every RPC needs
+// read; most management needs write). A token missing these — typically one minted
+// by an older gateway before a scope was split out — connects but then fails every
+// call with "missing scope: …". Admin/approvals/pairing/talk are optional (the UI
+// degrades gracefully), so their absence must NOT trigger the warning banner.
+export const CRITICAL_OPERATOR_SCOPES = ['operator.read', 'operator.write'] as const
+
+// Progressively narrower scope requests for handshake negotiation. 2026.7.x
+// gateways grant an EMPTY scope set when a connection asks for ANY scope its token
+// isn't entitled to (rather than granting the entitled subset) — so demanding
+// operator.admin on a read-only token loses even operator.read. We ask for
+// everything first and, if operator.read doesn't come back, retry with a smaller
+// request until the token's real entitlement is granted. Every tier includes
+// operator.read (the floor the app needs to be usable at all).
+const SCOPE_NEGOTIATION_TIERS: string[][] = [
+  [...REQUESTED_OPERATOR_SCOPES],                              // full (admin + everything)
+  ['operator.read', 'operator.write', 'operator.approvals'],  // operator without admin/pairing/talk
+  ['operator.read', 'operator.write'],                        // read + write
+  ['operator.read'],                                          // read-only token
+]
+
 // Access the Electron IPC WebSocket proxy exposed via the preload script
 type WsApi = {
   connect: (url: string, token: string) => Promise<{ ok: boolean }>
@@ -21,6 +51,34 @@ type WsApi = {
   onLog: (cb: (dir: string, text: string) => void) => () => void
 }
 const wsApi = (): WsApi => (window as unknown as { api: { ws: WsApi } }).api.ws
+
+// Device-identity signer exposed by the preload (main-process crypto). Optional —
+// absent on older preloads, in which case we fall back to a device-less handshake.
+export interface DeviceConnectBlock { id: string; publicKey: string; signature: string; signedAt: number; nonce: string }
+interface StoredDeviceToken { token: string; scopes: string[]; issuedAtMs?: number }
+// The connect response (`hello-ok`) auth block — carries the granted scopes and the
+// per-role device token(s) the gateway issues to a paired device.
+interface HelloOk {
+  auth?: {
+    scopes?: string[]
+    role?: string
+    deviceToken?: string
+    issuedAtMs?: number
+    deviceTokens?: { deviceToken: string; role: string; scopes?: string[]; issuedAtMs?: number }[]
+  }
+}
+type DeviceAuthApi = {
+  buildConnectBlock: (input: {
+    nonce: string; role: string; scopes: string[]; token?: string | null
+    clientId: string; clientMode: string; platform: string; deviceFamily?: string
+  }) => Promise<{ ok: true; block: DeviceConnectBlock } | { ok: false; error: string }>
+  identity: () => Promise<{ ok: true; deviceId: string } | { ok: false; error: string }>
+  getDeviceToken: (host: string, role: string) => Promise<{ ok: true; entry: StoredDeviceToken | null } | { ok: false; error: string }>
+  storeDeviceToken: (host: string, role: string, token: string, scopes: string[], issuedAtMs?: number) => Promise<{ ok: boolean; error?: string }>
+  clearDeviceToken: (host: string, role: string) => Promise<{ ok: boolean; error?: string }>
+}
+const deviceAuthApi = (): DeviceAuthApi | undefined =>
+  (window as unknown as { api: { deviceAuth?: DeviceAuthApi } }).api.deviceAuth
 
 let _reqCounter = 0
 function nextId(): string { return `req_${++_reqCounter}` }
@@ -39,6 +97,16 @@ export class GatewayClient {
   private _token = ''
   private _handshakeDone = false
   private _connected = false
+  // Index into SCOPE_NEGOTIATION_TIERS for the current handshake attempt. Reset on
+  // each fresh connect(); advanced when the gateway returns a grant without
+  // operator.read (see _respondToChallenge).
+  private _scopeTier = 0
+  // True while we're internally reconnecting to renegotiate scopes, so the transient
+  // socket drop isn't surfaced to the store as a real disconnect.
+  private _negotiating = false
+  // Guards the one-shot clear-and-retry when a cached device token is stale, so a
+  // persistently rejected token can't loop. Reset on each fresh connect().
+  private _deviceTokenRetried = false
   // Methods this gateway answered with "unknown method" — older gateways don't
   // implement every RPC the client knows (e.g. plugins.list). We skip re-sending a
   // doomed request each fetch, which also stops the host logging an INVALID_REQUEST
@@ -55,9 +123,19 @@ export class GatewayClient {
   // `auth.scopes`). Empty until the handshake completes. Used to gate admin-only UI
   // (e.g. device management) client-side; the gateway still enforces authorization.
   grantedScopes: string[] = []
-  onLog?: (entry: ConnLog) => void
+  // Multiple views observe the connection log (the connect screen and the
+  // Gateway → Connection log panel), so this is a subscriber set rather than a
+  // single callback — otherwise the last mounter clobbers the others.
+  private logListeners = new Set<(entry: ConnLog) => void>()
   onStatusChange?: (status: 'connecting' | 'connected' | 'disconnected' | 'error', detail?: string) => void
   onHeartbeat?: () => void
+
+  // Subscribe to live log entries; returns an unsubscribe. Existing entries are
+  // available via getLog() — seed from there on mount, then stream new ones here.
+  onLogEntry(listener: (entry: ConnLog) => void): () => void {
+    this.logListeners.add(listener)
+    return () => { this.logListeners.delete(listener) }
+  }
 
   connect(url: string, token: string): void {
     this._url = url
@@ -65,14 +143,23 @@ export class GatewayClient {
     this.log.length = 0
     this._handshakeDone = false
     this._connected = false
+    this._scopeTier = 0
+    this._negotiating = false
+    this._deviceTokenRetried = false
     this._open()
+  }
+
+  // Stable per-gateway key for scoping cached device tokens. The hostname of the
+  // connection URL — the same gateway reached via a different URL just re-pairs.
+  private _gatewayHost(): string {
+    try { return new URL(this._url).host } catch { return this._url }
   }
 
   private _addLog(dir: ConnLog['dir'], text: string) {
     const entry: ConnLog = { dir, text, ts: Date.now() }
     this.log.push(entry)
     if (this.log.length > 100) this.log.shift()
-    this.onLog?.(entry)
+    this.logListeners.forEach(fn => fn(entry))
   }
 
   private _teardownListeners() {
@@ -94,6 +181,9 @@ export class GatewayClient {
     })
 
     this._unsubStatus = ws.onStatus((status, detail) => {
+      // During an internal scope renegotiation we tear down and reopen the socket;
+      // don't surface that transient drop as a real disconnect/error to the store.
+      if (this._negotiating && (status === 'disconnected' || status === 'error')) return
       if (status === 'disconnected') {
         this._connected = false
         this._handshakeDone = false
@@ -132,10 +222,13 @@ export class GatewayClient {
       }
 
       if (type === 'event' && event === 'connect.challenge') {
+        // A fresh challenge means the (re)opened socket is up — past any transient
+        // drop from a scope renegotiation, so resume surfacing status normally.
+        this._negotiating = false
         const payload = (frame.payload ?? {}) as Record<string, unknown>
         const nonce = payload.nonce as string
         this._addLog('info', `Challenge received — nonce=${nonce?.slice(0, 8)}…`)
-        this._respondToChallenge(nonce)
+        void this._respondToChallenge(nonce)
         return
       }
 
@@ -154,40 +247,143 @@ export class GatewayClient {
     ws.connect(this._url, this._token)
   }
 
-  private _respondToChallenge(nonce: string): void {
+  private async _respondToChallenge(nonce: string): Promise<void> {
+    const scopes = [...SCOPE_NEGOTIATION_TIERS[this._scopeTier]]
+    const CLIENT_ID = 'gateway-client'
+    const CLIENT_MODE = 'backend'
+    const PLATFORM = 'linux'
+
+    // Sign the challenge with our device identity (main-process crypto). OpenClaw
+    // 2026.7.x rejects a remote device-less operator connection with
+    // DEVICE_IDENTITY_REQUIRED, so the connect params must carry a signed `device`
+    // block. Every signed field below must equal what we send in params (client.id,
+    // client.mode, role, scopes, auth.token, client.platform) or the gateway's
+    // signature check fails. Best-effort: an older preload without deviceAuth falls
+    // back to a device-less handshake (works only on loopback).
+    let device: DeviceConnectBlock | undefined
+    const da = deviceAuthApi()
+    if (da) {
+      try {
+        const res = await da.buildConnectBlock({
+          nonce, role: 'operator', scopes, token: this._token,
+          clientId: CLIENT_ID, clientMode: CLIENT_MODE, platform: PLATFORM
+        })
+        if (res.ok) device = res.block
+        else this._addLog('info', `Device identity error: ${res.error}`)
+      } catch (e: unknown) {
+        this._addLog('info', `Device identity unavailable: ${e instanceof Error ? e.message : String(e)}`)
+      }
+    }
+
+    // Resend a cached device token so the gateway authenticates this connection via
+    // "device-token" — the only auth method that preserves operator scopes from a
+    // REMOTE locality (a relayed Tailscale connection from another network). Without
+    // it, operator scopes survive only on the trusted local path, so pairing works at
+    // home but drops the operator role from a foreign network. Absent until the device
+    // is approved and the gateway first hands one back (persisted then).
+    let deviceToken: string | undefined
+    const host = this._gatewayHost()
+    if (da && host) {
+      try {
+        const r = await da.getDeviceToken(host, 'operator')
+        if (r.ok && r.entry?.token) deviceToken = r.entry.token
+      } catch { /* fall back to shared-token auth */ }
+    }
+
     const params = {
       minProtocol: 4,
       maxProtocol: 4,
       client: {
-        id: 'gateway-client',
+        id: CLIENT_ID,
         // The label the model attributes messages to. Uses the user's profile name when
         // they've opted in (Settings → You), else the default "JoaxClaw". Read at connect
         // time — changing the name takes effect on the next (re)connect.
         displayName: chatIdentityName(useSettingsStore.getState().userProfile, useSettingsStore.getState().useNameAsIdentity),
         version: '0.1.0',
-        platform: 'linux',
-        mode: 'backend'
+        platform: PLATFORM,
+        mode: CLIENT_MODE
       },
       caps: ['tool-events'],
-      auth: { token: this._token },
+      auth: { token: this._token, ...(deviceToken ? { deviceToken } : {}) },
       role: 'operator',
-      scopes: ['operator.admin', 'operator.read', 'operator.write', 'operator.approvals', 'operator.pairing', 'operator.talk.secrets']
+      scopes,
+      ...(device ? { device } : {})
     }
 
-    this._addLog('info', 'Sending connect request…')
-    this.request<{ auth?: { scopes?: string[] } }>('connect', params as Record<string, unknown>).then((res) => {
+    this._addLog('info', `Sending connect request… (scope request: [${scopes.join(', ')}]${device ? `, device ${device.id.slice(0, 8)}…` : ', no device identity'}${deviceToken ? ', device-token' : ''})`)
+    this.request<HelloOk>('connect', params as Record<string, unknown>).then((res) => {
+      this.grantedScopes = Array.isArray(res?.auth?.scopes) ? res.auth!.scopes! : []
+
+      // Cache any device tokens the gateway issued (one for the connected role, plus
+      // extras for other roles). Resent on the next connect as auth.deviceToken so a
+      // remote/relayed connection keeps its operator scopes.
+      if (da && host) {
+        const a = res?.auth
+        if (a?.deviceToken) void da.storeDeviceToken(host, a.role ?? 'operator', a.deviceToken, a.scopes ?? [], a.issuedAtMs)
+        for (const t of a?.deviceTokens ?? []) {
+          if (t?.deviceToken && t.role) void da.storeDeviceToken(host, t.role, t.deviceToken, t.scopes ?? [], t.issuedAtMs)
+        }
+      }
+
+      // Some gateways return an EMPTY grant when we request a scope the token can't
+      // hold (instead of granting the entitled subset), which would leave the app
+      // with no operator.read and every RPC rejected. Retry with a narrower request
+      // until read comes back or we run out of tiers.
+      if (!this.grantedScopes.includes('operator.read') && this._scopeTier < SCOPE_NEGOTIATION_TIERS.length - 1) {
+        this._scopeTier++
+        this._addLog('info', `Gateway granted [${this.grantedScopes.join(', ') || 'none'}] — retrying with a narrower scope request: [${SCOPE_NEGOTIATION_TIERS[this._scopeTier].join(', ')}]…`)
+        this._renegotiate()
+        return
+      }
+
       this._handshakeDone = true
       this._connected = true
       this.unsupportedMethods.clear()  // fresh connection — re-probe method support
-      this.grantedScopes = Array.isArray(res?.auth?.scopes) ? res.auth!.scopes! : []
-      this._addLog('info', 'Handshake complete ✓')
+      // Report what the token was ultimately granted vs. the full ideal set, so the
+      // scope chips / warning banner reflect reality (this is the source of truth).
+      const missing = REQUESTED_OPERATOR_SCOPES.filter(s => !this.grantedScopes.includes(s))
+      this._addLog('info', `Handshake complete ✓ — granted scopes: [${this.grantedScopes.join(', ') || 'none'}]`)
+      if (missing.length) {
+        this._addLog('info', `Not granted by this token: [${missing.join(', ')}] — features needing them are unavailable.`)
+      }
       this.onStatusChange?.('connected')
     }).catch((err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err)
-      this._addLog('info', `Auth rejected: ${msg}`)
-      this.onStatusChange?.('error', `Auth rejected by gateway: ${msg}`)
+      // A cached device token went stale (gateway rotated/restarted): clear it and
+      // reconnect once, which re-authenticates with the shared token + signature and
+      // gets a fresh device token issued. Guarded so we don't loop.
+      if (/AUTH_DEVICE_TOKEN_MISMATCH|device.token.mismatch/i.test(msg) && da && host && deviceToken && !this._deviceTokenRetried) {
+        this._deviceTokenRetried = true
+        this._addLog('info', 'Cached device token was rejected (stale) — clearing it and retrying to re-pair the token.')
+        void da.clearDeviceToken(host, 'operator')
+        this._renegotiate()
+        return
+      }
+      // A new device presents its identity but hasn't been approved yet: the gateway
+      // rejects with a pairing/not-paired error. Surface a clear, actionable message
+      // (with the deviceId to approve) instead of a bare "auth rejected".
+      const pairing = /not[_ ]?paired|pair|approv|device.*identity/i.test(msg)
+      if (pairing && device) {
+        const hint = `This device isn't approved on the gateway yet. On the gateway host run:  openclaw devices approve  (device ${device.id.slice(0, 12)}…), then reconnect.`
+        this._addLog('info', hint)
+        this.onStatusChange?.('error', hint)
+      } else {
+        this._addLog('info', `Auth rejected: ${msg}`)
+        this.onStatusChange?.('error', `Auth rejected by gateway: ${msg}`)
+      }
       wsApi().disconnect()
     })
+  }
+
+  // Reopen the socket to re-run the handshake with the (already advanced) scope tier.
+  // A fresh challenge re-enters _respondToChallenge, which reads _scopeTier. The
+  // transient drop is masked from the store via _negotiating.
+  private _renegotiate(): void {
+    this._negotiating = true
+    this._handshakeDone = false
+    this._connected = false
+    this.pending.clear()
+    this._open()
   }
 
   disconnect(): void {

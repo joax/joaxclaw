@@ -5,7 +5,7 @@ import { TitleBar } from './components/layout/TitleBar'
 import { ChatView } from './components/chat/ChatView'
 import { TalkView } from './components/talk/TalkView'
 import { AgentsView } from './components/agents/AgentsView'
-import { GatewayView } from './components/gateway/GatewayView'
+import { GatewayView, focusGatewayTab } from './components/gateway/GatewayView'
 import { SettingsView } from './components/settings/SettingsView'
 import { ThemesView } from './components/theme/ThemesView'
 import { ThemeBackground } from './components/theme/ThemeBackground'
@@ -20,6 +20,7 @@ import { ReconnectOverlay } from './components/layout/ReconnectOverlay'
 import { UpdateBanner } from './components/layout/UpdateBanner'
 import { PluginUpdateBanner } from './components/layout/PluginUpdateBanner'
 import { GatewayUpdateBanner } from './components/layout/GatewayUpdateBanner'
+import { ScopeWarningBanner } from './components/layout/ScopeWarningBanner'
 import { WelcomeModal } from './components/layout/WelcomeModal'
 import { useUpdaterStore } from './store/updater'
 import { useConnectionStore, restoreConnectionsFromBackup } from './store/connection'
@@ -145,6 +146,7 @@ export default function App() {
     <div className="flex flex-col h-screen select-none">
       <TitleBar />
       <UpdateBanner />
+      <ScopeWarningBanner onFix={() => { focusGatewayTab('connection'); setSection('gateway') }} />
       <GatewayUpdateBanner onOpenChat={() => setSection('chat')} />
       <PluginUpdateBanner onOpenChat={() => setSection('chat')} />
       <div className="flex flex-1 min-h-0">

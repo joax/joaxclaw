@@ -185,6 +185,26 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.on('ws:log', listener)
       return () => ipcRenderer.removeListener('ws:log', listener)
     }
+  },
+
+  // Device identity for the gateway handshake — signs the connect challenge in the
+  // main process (the private key never enters the renderer).
+  deviceAuth: {
+    buildConnectBlock: (input: {
+      nonce: string; role: string; scopes: string[]; token?: string | null
+      clientId: string; clientMode: string; platform: string; deviceFamily?: string
+    }) => ipcRenderer.invoke('deviceAuth:buildConnectBlock', input) as Promise<
+      { ok: true; block: { id: string; publicKey: string; signature: string; signedAt: number; nonce: string } } | { ok: false; error: string }
+    >,
+    identity: () => ipcRenderer.invoke('deviceAuth:identity') as Promise<{ ok: true; deviceId: string } | { ok: false; error: string }>,
+    // Per-gateway device-token cache — preserves operator scopes on remote connections.
+    getDeviceToken: (host: string, role: string) => ipcRenderer.invoke('deviceAuth:getDeviceToken', host, role) as Promise<
+      { ok: true; entry: { token: string; scopes: string[]; issuedAtMs?: number } | null } | { ok: false; error: string }
+    >,
+    storeDeviceToken: (host: string, role: string, token: string, scopes: string[], issuedAtMs?: number) =>
+      ipcRenderer.invoke('deviceAuth:storeDeviceToken', host, role, token, scopes, issuedAtMs) as Promise<{ ok: boolean; error?: string }>,
+    clearDeviceToken: (host: string, role: string) =>
+      ipcRenderer.invoke('deviceAuth:clearDeviceToken', host, role) as Promise<{ ok: boolean; error?: string }>
   }
 })
 
