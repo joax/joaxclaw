@@ -69,6 +69,50 @@ export function loadOrCreateDeviceIdentity(): DeviceIdentity {
   return identity
 }
 
+// ── Device tokens ────────────────────────────────────────────────────────────
+// After a device is approved, the gateway returns a per-role device token in
+// `hello-ok.auth.deviceToken`. Resending it as `auth.deviceToken` makes the gateway
+// authenticate the connection with method "device-token" — the ONLY method that
+// preserves operator scopes from a REMOTE locality (a relayed Tailscale connection
+// from another network). Without it, operator scopes survive only on the trusted
+// local path (same LAN / direct), which is why pairing works at home but drops
+// operator role from a foreign network. Tokens are scoped per gateway host + role.
+interface StoredDeviceToken { token: string; scopes: string[]; issuedAtMs?: number }
+type DeviceTokenStore = Record<string, Record<string, StoredDeviceToken>>  // host -> role -> token
+
+function tokensPath(): string {
+  return path.join(homedir(), '.joaxclaw', 'identity', 'device-tokens.json')
+}
+
+function readTokenStore(): DeviceTokenStore {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(tokensPath(), 'utf8'))
+    return parsed && typeof parsed === 'object' ? parsed as DeviceTokenStore : {}
+  } catch { return {} }
+}
+
+function writeTokenStore(store: DeviceTokenStore): void {
+  const p = tokensPath()
+  fs.mkdirSync(path.dirname(p), { recursive: true })
+  fs.writeFileSync(p, JSON.stringify(store, null, 2), { mode: 0o600 })
+  try { fs.chmodSync(p, 0o600) } catch { /* best-effort perms */ }
+}
+
+export function getDeviceToken(host: string, role: string): StoredDeviceToken | null {
+  return readTokenStore()[host]?.[role] ?? null
+}
+
+export function storeDeviceToken(host: string, role: string, token: string, scopes: string[], issuedAtMs?: number): void {
+  const store = readTokenStore()
+  store[host] = { ...(store[host] ?? {}), [role]: { token, scopes, issuedAtMs } }
+  writeTokenStore(store)
+}
+
+export function clearDeviceToken(host: string, role: string): void {
+  const store = readTokenStore()
+  if (store[host]?.[role]) { delete store[host][role]; writeTokenStore(store) }
+}
+
 // OpenClaw lowercases + trims platform/deviceFamily before signing them.
 function normalizeMeta(value?: string): string {
   if (typeof value !== 'string') return ''
