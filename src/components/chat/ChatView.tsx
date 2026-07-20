@@ -15,7 +15,7 @@ import { useLogoUrl } from '../../lib/logo'
 import { ModelSelect, ThinkingSelect, DisplayMenu } from './ChatHeaderControls'
 import { formatRelativeDate } from '../../lib/dateUtils'
 import type { Session } from '../../lib/types'
-import { agentIdFromSessionKey as sessionAgentId, isAutoKeyTitle } from '../../lib/sessionName'
+import { agentIdFromSessionKey as sessionAgentId, isAutoKeyTitle, isCronSessionKey } from '../../lib/sessionName'
 
 // A single row in the unified chat list — an opened conversation or a running-but-
 // unopened gateway session, normalized to one shape.
@@ -137,6 +137,9 @@ export function ChatView({ solo }: { solo?: string } = {}) {
     !conversationSessionKeys.has(s.key) &&
     !poppedOut.has(s.key) &&
     !isHeartbeatSession(s) &&
+    // Finished cron runs are background jobs, not chats — they'd otherwise clutter the
+    // list as plain rows labelled with the agent (e.g. "main"). They live in Crons.
+    !isCronSessionKey(s.key) &&
     (s.updatedAt || s.startedAt)
   )
 
@@ -245,7 +248,11 @@ export function ChatView({ solo }: { solo?: string } = {}) {
   // job name (a bare cron run otherwise shows up as the raw agent, e.g. "main").
   const activeCandidates = [...convItems.filter(i => i.running), ...sessionItems].map(i => {
     const job = i.sessionKey ? cronJobForSession(cronJobs, cronSessions, i.sessionKey) : undefined
-    return job ? { ...i, cron: true, name: job.name } : i
+    if (job) return { ...i, cron: true, name: job.name }
+    // Fallback: a running cron session with no live job mapping is still a cron run —
+    // group it under Scheduled rather than letting it show as a plain agent chat.
+    if (i.sessionKey && isCronSessionKey(i.sessionKey)) return { ...i, cron: true }
+    return i
   })
   const cronItems = activeCandidates.filter(i => i.cron).sort((a, b) => b.ts - a.ts)
   const activeItems = activeCandidates.filter(i => !i.cron).sort((a, b) => b.ts - a.ts)
