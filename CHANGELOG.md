@@ -5,6 +5,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.20.0] - 2026-07-20
+
+### Added
+
+- **PDFs and documents in chat.** You can now attach **any file** to a message — PDFs, Word/Excel/CSV, PowerPoint, code, archives — not just images and audio. Documents render as tidy **file cards** (a format-specific icon + filename + size, click to open or download), images and videos get thumbnails, and the file picker, paste, and drag-and-drop all accept every type. Previously a PDF was mis-classified as audio and rendered as a broken player.
+- **Connection diagnostics (Gateway → Connection).** A new **Connection log** panel shows the live handshake and — front and center — the exact **operator scopes the gateway granted**, as green/red chips. Filter the raw frames (hide heartbeat noise, or show issues only) and copy the whole thing in one click, so a permission problem is obvious at a glance instead of buried in JSON. An app-wide banner also warns when your token is missing critical scopes and points to the fix.
+
+### Fixed
+
+- **Remote connections work again after upgrading OpenClaw to 2026.7.x.** The upgraded gateway rejects a *device-less* operator connection from a remote origin, so the app would connect but lose every operator scope ("missing scope: operator.read") — everything failed. JoaxClaw now presents a **signed device identity** in the handshake (Ed25519, stored securely, paired once and approved on the host with `openclaw devices approve`), restoring full operator access over Tailscale/LAN.
+- **Operator role now survives on other networks.** A paired device kept its operator role only on the home network; from a café over Tailscale the role silently dropped. The app now **caches the gateway's device tokens and resends them** — the one auth path that preserves operator scopes on a remote/relayed connection — and re-pairs automatically if a token goes stale.
+- **The connect handshake negotiates scopes instead of failing.** If a token can't hold every scope the app asks for, it now retries with a progressively narrower request rather than being left with none.
+
+> Note: device pairing is a one-time step — the first connection registers the device, then you approve it once on the gateway host (`openclaw devices list` + `openclaw devices approve`). Subsequent reconnects just work.
+
+---
+
 ## [0.19.0] - 2026-07-13
 
 ### Added
