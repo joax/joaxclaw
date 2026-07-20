@@ -8,7 +8,7 @@ import { sendViaAgent } from '../../lib/agentPrompt'
 import { MEMORY_PROVIDERS, memoryProvider } from '../../lib/memory/providers'
 import { isEnvRef } from '../../lib/memory/secrets'
 import type { MemoryAccess, MemoryConnection, MemoryLocation } from '../../lib/memory/types'
-import { ForceGraph } from '../obsidian/ForceGraph'
+import { Graph } from '../adaptive/Graph'
 import { Btn } from '../ui/Btn'
 import { Input } from '../ui/Input'
 import { Server, Wrench, BookOpen } from 'lucide-react'
@@ -243,7 +243,7 @@ function GraphPane({ graph, info }: { graph: ReturnType<typeof useMemoryStore.ge
   }, [])
   return (
     <div ref={ref} className="relative flex-1 min-h-0">
-      {graph && size.w > 0 && <ForceGraph data={graph} width={size.w} height={size.h} />}
+      {graph && size.w > 0 && <Graph data={graph} width={size.w} height={size.h} />}
       {graph && (
         <div className="absolute left-4 bottom-3 flex gap-2">
           <Stat label="notes" value={graph.nodes.length} />

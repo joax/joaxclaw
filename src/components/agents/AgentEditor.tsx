@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { X, Plus, Trash2, FileText, Pencil, Loader2, AlertCircle, Check, Save } from 'lucide-react'
-import Editor from '@monaco-editor/react'
+import { CodeEditor } from '../adaptive/CodeEditor'
 import type { Agent, AgentFile } from '../../lib/types'
 import { useAgentsStore } from '../../store/agents'
 import { Btn } from '../ui/Btn'
@@ -421,20 +421,14 @@ function FileEditorModal({ filename, content, loading, error, saving, saved, isD
           </div>
         )}
         {!loading && !error && (
-          <Editor
-            height="100%"
+          <CodeEditor
             language="markdown"
             value={content}
-            onChange={v => onChange(v ?? '')}
-            theme="vs-dark"
+            onChange={onChange}
             options={{
-              minimap: { enabled: false },
               fontSize: 14,
               lineHeight: 1.65,
-              wordWrap: 'on',
-              scrollBeyondLastLine: false,
               padding: { top: 16, bottom: 16 },
-              renderWhitespace: 'boundary',
               smoothScrolling: true,
               cursorBlinking: 'smooth',
               lineNumbers: 'on',

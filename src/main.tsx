@@ -7,6 +7,11 @@ import './index.css'
 import { DEFAULT_THEME } from './lib/presetThemes'
 import { applyTheme } from './lib/theme'
 import { useSettingsStore } from './store/settings'
+import { installMobileBridge } from './lib/mobileBridge'
+
+// On a non-Electron runtime (Capacitor webview / browser dev) install a no-op
+// `window.api` so the renderer boots without the preload bridge. Inert on desktop.
+installMobileBridge()
 
 // Apply the active theme before first render. The settings store has already
 // rehydrated from localStorage by the time this runs (it's imported transitively via

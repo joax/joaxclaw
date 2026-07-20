@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { RotateCcw, Square, CheckCircle2, XCircle, AlertCircle, RefreshCw, Eye, EyeOff, Server, Plug, Cpu, MessageSquare, MonitorSmartphone, ArrowUpCircle, ClipboardList, Puzzle, Boxes } from 'lucide-react'
-import Editor from '@monaco-editor/react'
+import { CodeEditor } from '../adaptive/CodeEditor'
 import { useConnectionStore, useIsRemoteGateway } from '../../store/connection'
 import { useMetricsStore } from '../../store/metrics'
 import { Btn } from '../ui/Btn'
@@ -365,16 +365,12 @@ export function GatewayView({ onOpenChat }: { onOpenChat?: () => void } = {}) {
             )}
 
             <div className="flex-1 overflow-hidden" style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius)', minHeight: 0 }}>
-              <Editor
-                height="100%"
-                defaultLanguage="json"
+              <CodeEditor
+                language="json"
                 value={configText}
-                onChange={v => { setConfigText(v ?? ''); setConfigDirty(true) }}
-                theme="vs-dark"
+                onChange={v => { setConfigText(v); setConfigDirty(true) }}
                 options={{
-                  minimap: { enabled: false }, fontSize: 13, lineHeight: 1.6,
-                  scrollBeyondLastLine: false, wordWrap: 'on', formatOnPaste: true,
-                  renderWhitespace: 'boundary', padding: { top: 12 },
+                  fontSize: 13, lineHeight: 1.6, formatOnPaste: true, padding: { top: 12 },
                 }}
               />
             </div>
