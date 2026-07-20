@@ -4,6 +4,14 @@
 //   "<agentId>@<uuid>"                legacy
 //   "scope:…:name"
 
+// True when a session key is a scheduled cron run (e.g. "agent:main:cron:<uuid>").
+// These are background job runs, not chats — they belong in the Crons tab, and when
+// live they surface under the chat list's "Scheduled" group, so a finished one should
+// never show as a plain chat row.
+export function isCronSessionKey(key: string): boolean {
+  return /:cron:/.test(key)
+}
+
 // Recover the agent id from a session key (the segment a human would recognise).
 export function agentIdFromSessionKey(key: string): string {
   const parts = key.split(':')
