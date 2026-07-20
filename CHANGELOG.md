@@ -5,6 +5,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.20.1] - 2026-07-20
+
+### Fixed
+
+- **Cron runs no longer clutter the chat list.** Finished scheduled (cron) sessions were appearing in the chat sidebar as plain conversations labelled with the agent (e.g. "main"). They're now kept out of the chat list — cron runs belong in the **Crons** tab, and a currently-running one still surfaces under the **Scheduled** group.
+
+---
+
 ## [0.20.0] - 2026-07-20
 
 ### Added
