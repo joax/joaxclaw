@@ -48,9 +48,9 @@ export function MobileNav({ section, onNavigate, disabledSections }: Props) {
           />
           <div
             className="animate-fade-in"
-            style={{ position: 'fixed', top: 0, left: 0, bottom: 0, zIndex: 61, display: 'flex', boxShadow: '2px 0 16px rgba(0,0,0,0.4)' }}
+            style={{ position: 'fixed', top: 0, left: 0, bottom: 0, zIndex: 61, width: 264, background: 'var(--bg-surface)', borderRight: '1px solid var(--border)', boxShadow: '2px 0 16px rgba(0,0,0,0.4)' }}
           >
-            <NavRail section={section} onNavigate={go} disabledSections={disabledSections} />
+            <NavRail section={section} onNavigate={go} disabledSections={disabledSections} variant="list" />
             <button
               onClick={() => setOpen(false)}
               aria-label="Close navigation"
