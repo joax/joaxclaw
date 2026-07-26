@@ -14,6 +14,7 @@ import { useLogoUrl } from '../../lib/logo'
 import { useCronsStore } from '../../store/crons'
 import { useMetricsStore } from '../../store/metrics'
 import { listJobs, stopJob, type ScriptJob } from '../../lib/scriptJobs'
+import { useIsNarrow } from '../../lib/useIsNarrow'
 import { reminderBySession, fmtCountdown, isReminderJob } from '../../lib/reminders'
 import { formatRelativeDate } from '../../lib/dateUtils'
 import type { NavSection } from '../../App'
@@ -804,9 +805,15 @@ function RemindersSection() {
   )
 }
 
-function RightPanel({ onNavigate }: { onNavigate: (s: NavSection) => void }) {
+function RightPanel({ narrow, onNavigate }: { narrow?: boolean; onNavigate: (s: NavSection) => void }) {
   return (
-    <div style={{ width: 300, flexShrink: 0, borderLeft: '1px solid var(--border)', overflowY: 'auto', padding: '20px 16px', background: 'var(--bg-surface)', display: 'flex', flexDirection: 'column', gap: 0 }}>
+    <div style={{
+      width: narrow ? '100%' : 300, flexShrink: 0,
+      borderLeft: narrow ? 'none' : '1px solid var(--border)',
+      borderTop: narrow ? '1px solid var(--border)' : 'none',
+      overflowY: narrow ? 'visible' : 'auto',
+      padding: '20px 16px', background: 'var(--bg-surface)', display: 'flex', flexDirection: 'column', gap: 0,
+    }}>
       <ActiveSection onNavigate={onNavigate} />
       <ScriptsSection />
       <RemindersSection />
@@ -819,14 +826,16 @@ function RightPanel({ onNavigate }: { onNavigate: (s: NavSection) => void }) {
 
 // ── Left panel ────────────────────────────────────────────────────────────────
 
-function LeftPanel({ onSendMessage, onOpenConversation, onNavigate }: {
+function LeftPanel({ narrow, onSendMessage, onOpenConversation, onNavigate }: {
+  narrow?: boolean
   onSendMessage: (agentId: string, text: string) => void
   onOpenConversation: (convId: string) => void
   onNavigate: (s: NavSection) => void
 }) {
   const logoUrl = useLogoUrl()
   return (
-    <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '40px 32px 32px' }}>
+    // Desktop: own scroll area. Mobile: auto height so the parent column scrolls it all.
+    <div style={{ flex: narrow ? 'none' : 1, overflowY: narrow ? 'visible' : 'auto', display: 'flex', flexDirection: 'column', alignItems: 'center', padding: narrow ? '20px 16px 24px' : '40px 32px 32px' }}>
       <div style={{ width: '100%', maxWidth: 600 }}>
         {/* Brand header */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 6 }}>
@@ -860,6 +869,7 @@ export function DashboardView({ onNavigate }: Props) {
   const { fetch: fetchCrons }           = useCronsStore()
   const { load: loadProcesses }         = useProcessesStore()
   const { load: loadTeams }             = useTeamsStore()
+  const narrow = useIsNarrow()
 
   useEffect(() => {
     fetchAgents()
@@ -886,13 +896,15 @@ export function DashboardView({ onNavigate }: Props) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
       <HealthStrip onNavigate={onNavigate} />
-      <div style={{ display: 'flex', flex: 1, minHeight: 0, overflow: 'hidden' }}>
+      {/* Side-by-side on desktop; stacked into one scrolling column on mobile. */}
+      <div style={{ display: 'flex', flexDirection: narrow ? 'column' : 'row', flex: 1, minHeight: 0, overflowY: narrow ? 'auto' : 'hidden', overflowX: 'hidden' }}>
         <LeftPanel
+          narrow={narrow}
           onSendMessage={handleSendMessage}
           onOpenConversation={handleOpenConversation}
           onNavigate={onNavigate}
         />
-        <RightPanel onNavigate={onNavigate} />
+        <RightPanel narrow={narrow} onNavigate={onNavigate} />
       </div>
     </div>
   )
