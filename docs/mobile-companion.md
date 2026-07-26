@@ -177,8 +177,11 @@ Two requirements, both reproducible in a browser:
   - [x] App shell: side NavRail → hamburger drawer on narrow (`useIsNarrow` + `MobileNav`);
         desktop unchanged (breakpoint-gated). Verified by build/typecheck/dev-transform;
         needs a visual check in a browser at mobile width.
-  - [ ] Chat sidebar (240px) → drawer; conversation full-width
+  - [x] Chat: mobile master-detail — list full-width when nothing's selected, conversation
+        full-width with a back button when one is (desktop keeps side-by-side). Pop-out
+        (`solo`) unaffected.
   - [ ] Dashboard right panel (300px) → stack/hide on narrow
+  - [ ] Audit remaining fixed-width panes (Settings 520, other views' sidebars)
 - [ ] Pairing/approval UX for a new browser device
 - [ ] Decide wrapper (pure PWA vs Capacitor) → manifest + service worker, or native shell
 - [ ] Notifications

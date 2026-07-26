@@ -1,5 +1,6 @@
 import { useState, useEffect, type ReactNode, type MouseEvent as ReactMouseEvent } from 'react'
-import { Plus, Search, Trash2, MessageSquare, Radio, Heart, ExternalLink, ArrowLeftToLine, ChevronDown, Pencil, Clock } from 'lucide-react'
+import { Plus, Search, Trash2, MessageSquare, Radio, Heart, ExternalLink, ArrowLeftToLine, ArrowLeft, ChevronDown, Pencil, Clock } from 'lucide-react'
+import { useIsNarrow } from '../../lib/useIsNarrow'
 import { ModelIcon } from '../ui/ModelIcon'
 import { useChatStore } from '../../store/chat'
 import { useAgentsStore } from '../../store/agents'
@@ -190,6 +191,12 @@ export function ChatView({ solo }: { solo?: string } = {}) {
   })
 
   const activeConv = conversations.find(c => c.id === activeConvId)
+  // Mobile master-detail: show the chat LIST full-width when nothing is selected, and
+  // the CONVERSATION full-width (with a back button) when one is — instead of the
+  // desktop side-by-side sidebar + conversation. `solo` (pop-out) has no list either way.
+  const narrow = useIsNarrow()
+  const showList = !solo && (!narrow || !activeConv)
+  const showChatArea = solo || !narrow || !!activeConv
 
   // ── Unified chat list ──────────────────────────────────────────────────────
   // One model instead of two zones: opened conversations + running-but-unopened
@@ -304,14 +311,15 @@ export function ChatView({ solo }: { solo?: string } = {}) {
 
   return (
     <div className="flex flex-1 min-h-0">
-      {/* Sidebar — hidden in a popped-out (solo) window */}
-      {!solo && (
+      {/* Sidebar — the chat list. Hidden in a pop-out; full-width on mobile when no chat
+          is open (it becomes the primary view), a fixed rail on desktop. */}
+      {showList && (
       <div
         className="flex flex-col shrink-0"
         style={{
-          width: 240,
+          width: narrow ? '100%' : 240,
           background: 'var(--bg-surface)',
-          borderRight: '1px solid var(--border)'
+          borderRight: narrow ? 'none' : '1px solid var(--border)'
         }}
       >
         <div className="flex items-center gap-2 px-3 pt-3 pb-2">
@@ -438,7 +446,8 @@ export function ChatView({ solo }: { solo?: string } = {}) {
       </div>
       )}
 
-      {/* Chat area */}
+      {/* Chat area — full-width on mobile once a chat is open (back button returns to list) */}
+      {showChatArea && (
       <div className="flex flex-1 flex-col min-w-0 min-h-0 relative">
         <ThemeBackground slot="chat" />
         <div className="relative z-[1] flex flex-1 flex-col min-w-0 min-h-0">
@@ -449,6 +458,16 @@ export function ChatView({ solo }: { solo?: string } = {}) {
               className="flex items-center gap-3 px-4 py-2 shrink-0 text-sm"
               style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-surface)' }}
             >
+              {/* Mobile: return to the chat list */}
+              {narrow && !solo && (
+                <button
+                  onClick={() => selectConversation('')}
+                  aria-label="Back to chats"
+                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 30, height: 30, marginLeft: -6, borderRadius: 'var(--radius)', border: 'none', background: 'transparent', color: 'var(--text-primary)', cursor: 'pointer', flexShrink: 0 }}
+                >
+                  <ArrowLeft size={18} />
+                </button>
+              )}
               <span>🤖</span>
               <span className="font-medium" style={{ color: 'var(--text-primary)' }}>
                 {convDisplayName(activeConv)}
@@ -525,6 +544,7 @@ export function ChatView({ solo }: { solo?: string } = {}) {
         )}
         </div>
       </div>
+      )}
     </div>
   )
 }
