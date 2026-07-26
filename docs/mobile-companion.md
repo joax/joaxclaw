@@ -173,7 +173,12 @@ Two requirements, both reproducible in a browser:
   - `src/lib/mobile/browserApi.ts` — `window.api` shim: real WebSocket `ws` + `deviceAuth`
     (WebCrypto identity + localStorage device-token cache) + desktop namespaces degraded to
     safe no-ops. Installed from `main.tsx`, **no-op under Electron** (guarded).
-- [ ] Responsive layout (desktop 3-pane → mobile drawer / single-column)
+- [~] Responsive layout (desktop 3-pane → mobile drawer / single-column) — **in progress**
+  - [x] App shell: side NavRail → hamburger drawer on narrow (`useIsNarrow` + `MobileNav`);
+        desktop unchanged (breakpoint-gated). Verified by build/typecheck/dev-transform;
+        needs a visual check in a browser at mobile width.
+  - [ ] Chat sidebar (240px) → drawer; conversation full-width
+  - [ ] Dashboard right panel (300px) → stack/hide on narrow
 - [ ] Pairing/approval UX for a new browser device
 - [ ] Decide wrapper (pure PWA vs Capacitor) → manifest + service worker, or native shell
 - [ ] Notifications
