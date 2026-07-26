@@ -197,8 +197,10 @@ gateway — no `allowedOrigins` change — or any mount point).
   - [x] Chat: mobile master-detail — list full-width when nothing's selected, conversation
         full-width with a back button when one is (desktop keeps side-by-side). Pop-out
         (`solo`) unaffected.
-  - [ ] Dashboard right panel (300px) → stack/hide on narrow
-  - [ ] Audit remaining fixed-width panes (Settings 520, other views' sidebars)
+  - [x] Dashboard right panel (300px) → stacks below the main column on narrow (one
+        scrolling column); desktop keeps side-by-side.
+  - [x] Browser build hides the Electron title bar / window controls (`isElectron()`).
+  - [ ] Audit remaining fixed-width panes (Settings 520, Agents/Models/Teams/etc. sidebars)
 - [ ] Pairing/approval UX for a new browser device
 - [ ] Decide wrapper (pure PWA vs Capacitor) → manifest + service worker, or native shell
 - [ ] Notifications
