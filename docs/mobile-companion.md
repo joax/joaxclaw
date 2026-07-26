@@ -197,6 +197,10 @@ gateway — no `allowedOrigins` change — or any mount point).
   - [x] Chat: mobile master-detail — list full-width when nothing's selected, conversation
         full-width with a back button when one is (desktop keeps side-by-side). Pop-out
         (`solo`) unaffected.
+  - [x] Chat list redesigned for mobile (`MobileChatList`): purpose-built rows (avatar +
+        bold name + last-message preview + time + running pulse), a persistent ⋯ menu for
+        Rename/Delete (touch has no hover), and a ＋ FAB for new chat. Reuses the same
+        ChatItem model + Active/Scheduled/date grouping.
   - [x] Dashboard right panel (300px) → stacks below the main column on narrow (one
         scrolling column); desktop keeps side-by-side.
   - [x] Browser build hides the Electron title bar / window controls (`isElectron()`).
