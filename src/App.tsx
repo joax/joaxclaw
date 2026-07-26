@@ -22,6 +22,8 @@ import { PluginUpdateBanner } from './components/layout/PluginUpdateBanner'
 import { GatewayUpdateBanner } from './components/layout/GatewayUpdateBanner'
 import { ScopeWarningBanner } from './components/layout/ScopeWarningBanner'
 import { WelcomeModal } from './components/layout/WelcomeModal'
+import { MobileNav } from './components/layout/MobileNav'
+import { useIsNarrow } from './lib/useIsNarrow'
 import { useUpdaterStore } from './store/updater'
 import { useConnectionStore, restoreConnectionsFromBackup } from './store/connection'
 import { useMetricsStore } from './store/metrics'
@@ -36,6 +38,7 @@ export type NavSection = 'dashboard' | 'chat' | 'talk' | 'agents' | 'processes' 
 
 export default function App() {
   const [section, setSection] = useState<NavSection>('dashboard')
+  const narrow = useIsNarrow()
   const { status, connection, reconnecting } = useConnectionStore()
   const { start: startMetrics, stop: stopMetrics } = useMetricsStore()
   const { monitorVisible, welcomeSeen } = useSettingsStore()
@@ -150,10 +153,14 @@ export default function App() {
       <GatewayUpdateBanner onOpenChat={() => setSection('chat')} />
       <PluginUpdateBanner onOpenChat={() => setSection('chat')} />
       <div className="flex flex-1 min-h-0">
-        <NavRail section={section} onNavigate={setSection} disabledSections={disabledSections} />
+        {/* Persistent side rail on desktop; a hamburger drawer on narrow (mobile) screens. */}
+        {!narrow && <NavRail section={section} onNavigate={setSection} disabledSections={disabledSections} />}
         <main className="flex-1 min-w-0 flex flex-col relative" style={{ background: 'var(--bg-primary)' }}>
           <ThemeBackground slot="app" />
           <div className="relative z-[1] flex-1 min-w-0 min-h-0 flex flex-col">
+          {narrow && !showConnect && !reconnecting && (
+            <MobileNav section={section} onNavigate={setSection} disabledSections={disabledSections} />
+          )}
           {reconnecting ? (
             <ReconnectOverlay />
           ) : showConnect ? (
