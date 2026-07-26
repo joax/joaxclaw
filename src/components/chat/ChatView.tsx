@@ -10,6 +10,7 @@ import { cronJobForSession } from '../../lib/reminders'
 import { useModelsStore } from '../../store/models'
 import { useSettingsStore } from '../../store/settings'
 import { MessageThread } from './MessageThread'
+import { MobileChatList } from './MobileChatList'
 import { ThemeBackground } from '../theme/ThemeBackground'
 import { MessageInput } from './MessageInput'
 import { useLogoUrl } from '../../lib/logo'
@@ -20,7 +21,7 @@ import { agentIdFromSessionKey as sessionAgentId, isAutoKeyTitle, isCronSessionK
 
 // A single row in the unified chat list — an opened conversation or a running-but-
 // unopened gateway session, normalized to one shape.
-interface ChatItem {
+export interface ChatItem {
   key: string
   sessionKey?: string
   emoji: string
@@ -311,15 +312,36 @@ export function ChatView({ solo }: { solo?: string } = {}) {
 
   return (
     <div className="flex flex-1 min-h-0">
-      {/* Sidebar — the chat list. Hidden in a pop-out; full-width on mobile when no chat
-          is open (it becomes the primary view), a fixed rail on desktop. */}
-      {showList && (
+      {/* Chat list. Hidden in a pop-out. On mobile it's a purpose-built full-screen list
+          (MobileChatList); on desktop it's the fixed sidebar. */}
+      {showList && (narrow ? (
+        <MobileChatList
+          search={search}
+          setSearch={setSearch}
+          onNewChat={startNewChat}
+          emptyHint={search ? 'No chats found' : 'Tap the ＋ button to start a chat'}
+          groups={[
+            { label: 'Active', tone: 'success', items: activeItems },
+            { label: 'Scheduled', tone: 'muted', items: cronItems },
+            ...dateGroups.map(g => ({ label: g.label, tone: 'muted' as const, items: g.items })),
+          ]}
+          footer={(hiddenRestCount > 0 || showAllRecent) ? (
+            <button
+              onClick={() => setShowAllRecent(v => !v)}
+              className="w-full text-xs px-2 py-2 rounded"
+              style={{ background: 'var(--bg-elevated)', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', textAlign: 'left' }}
+            >
+              {showAllRecent ? 'Show less' : `Show ${hiddenRestCount} older…`}
+            </button>
+          ) : undefined}
+        />
+      ) : (
       <div
         className="flex flex-col shrink-0"
         style={{
-          width: narrow ? '100%' : 240,
+          width: 240,
           background: 'var(--bg-surface)',
-          borderRight: narrow ? 'none' : '1px solid var(--border)'
+          borderRight: '1px solid var(--border)'
         }}
       >
         <div className="flex items-center gap-2 px-3 pt-3 pb-2">
@@ -444,7 +466,7 @@ export function ChatView({ solo }: { solo?: string } = {}) {
           )}
         </div>
       </div>
-      )}
+      ))}
 
       {/* Chat area — full-width on mobile once a chat is open (back button returns to list) */}
       {showChatArea && (
