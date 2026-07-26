@@ -200,6 +200,9 @@ gateway — no `allowedOrigins` change — or any mount point).
   - [x] Dashboard right panel (300px) → stacks below the main column on narrow (one
         scrolling column); desktop keeps side-by-side.
   - [x] Browser build hides the Electron title bar / window controls (`isElectron()`).
+  - [x] Mobile touch targets: global `@media (max-width:767px)` in index.css bumps
+        buttons/inputs/selects to ≥40px min-height and form fields to 16px (readability +
+        no iOS focus-zoom). First pass; tune per-surface as feedback comes in.
   - [ ] Audit remaining fixed-width panes (Settings 520, Agents/Models/Teams/etc. sidebars)
 - [ ] Pairing/approval UX for a new browser device
 - [ ] Decide wrapper (pure PWA vs Capacitor) → manifest + service worker, or native shell
