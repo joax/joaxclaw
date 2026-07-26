@@ -35,9 +35,23 @@ function wsConnect(url: string): { ok: boolean; error?: string } {
     emitStatus('error', msg)
     return { ok: false, error: msg }
   }
+  sock.onopen = () => emitLog('info', 'WebSocket open — waiting for the gateway challenge…')
   sock.onmessage = ev => { const raw = typeof ev.data === 'string' ? ev.data : ''; if (raw) messageCbs.forEach(cb => cb(raw)) }
-  sock.onerror = () => emitStatus('error', 'websocket error')
-  sock.onclose = ev => emitStatus('disconnected', ev.reason || undefined)
+  sock.onerror = () => {
+    // Browsers don't expose WS error detail (security). The close event that follows
+    // carries the code, which distinguishes causes (see onclose).
+    emitLog('info', `WebSocket error connecting to ${url} — check the gateway is reachable and the URL (ws:// vs wss://) is correct.`)
+    emitStatus('error', 'websocket error')
+  }
+  sock.onclose = ev => {
+    // 1006 = abnormal (never opened): unreachable host / connection refused / TLS / blocked.
+    // 1008 or 4xxx with a reason = the gateway rejected it (e.g. origin not allowed).
+    const hint = ev.code === 1006
+      ? ' (no connection — gateway not reachable at this URL, refused, or a ws/wss or TLS mismatch)'
+      : ev.reason ? ` — ${ev.reason}` : ''
+    emitLog('info', `WebSocket closed [code ${ev.code}]${hint}`)
+    emitStatus('disconnected', ev.reason || undefined)
+  }
   return { ok: true }
 }
 
