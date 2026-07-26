@@ -130,6 +130,23 @@ Two requirements, both reproducible in a browser:
 2. **Allowed origin** — serve the PWA same-origin from the gateway, or add its origin to
    `gateway.controlUi.allowedOrigins`.
 
+## Running it in a browser (dev/test target)
+
+`npm run dev` only launches Electron (which enforces a desktop `minWidth`, so you can't
+shrink it to the mobile breakpoint). To develop/test the responsive layout and the PWA
+path, run the **web target** — the same renderer served in a plain browser, where
+`window.api` is absent so the browser shim (`src/lib/mobile/`) takes over:
+
+```bash
+npm run dev:web      # http://localhost:5173 — open in a browser; use device-emulation
+                     # or narrow the window to cross the 768px breakpoint
+npm run build:web    # static bundle → out/web (the future PWA)
+npm run preview:web  # serve the built bundle
+```
+
+Config: `vite.config.web.ts` (`base: './'` so it can be served same-origin from the
+gateway — no `allowedOrigins` change — or any mount point).
+
 ## Paths (once Phase 0 answers)
 
 | | Pure PWA | Capacitor wrap | React Native |
