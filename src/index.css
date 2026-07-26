@@ -235,3 +235,24 @@ code {
 .reaction-add[data-open='true'] {
   opacity: 1;
 }
+
+/* ── Mobile: comfortable finger tap targets ─────────────────────────────────────
+   The app is styled mostly with inline pixel values, so interactive elements are
+   enlarged here (globally, phone-width only) rather than component-by-component.
+   `min-height` grows buttons that set inline `height` (they don't set `min-height`,
+   so this wins), and 16px on form fields both reads better and prevents iOS
+   zoom-on-focus. Scoped to <768px, so the desktop layout is untouched. First pass —
+   tune per-surface as needed. */
+@media (max-width: 767px) {
+  html, body, #root { font-size: 15px; }
+
+  button, [role="button"], select {
+    min-height: 40px;
+  }
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+  textarea,
+  select {
+    min-height: 40px;
+    font-size: 16px !important;
+  }
+}
