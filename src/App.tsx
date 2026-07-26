@@ -24,6 +24,7 @@ import { ScopeWarningBanner } from './components/layout/ScopeWarningBanner'
 import { WelcomeModal } from './components/layout/WelcomeModal'
 import { MobileNav } from './components/layout/MobileNav'
 import { useIsNarrow } from './lib/useIsNarrow'
+import { isElectron } from './lib/platform'
 import { useUpdaterStore } from './store/updater'
 import { useConnectionStore, restoreConnectionsFromBackup } from './store/connection'
 import { useMetricsStore } from './store/metrics'
@@ -147,7 +148,8 @@ export default function App() {
 
   return (
     <div className="flex flex-col h-screen select-none">
-      <TitleBar />
+      {/* Custom title bar is Electron window chrome — omit it in the browser/PWA build. */}
+      {isElectron() && <TitleBar />}
       <UpdateBanner />
       <ScopeWarningBanner onFix={() => { focusGatewayTab('connection'); setSection('gateway') }} />
       <GatewayUpdateBanner onOpenChat={() => setSection('chat')} />
