@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { RefreshCw, Play, Trash2, ChevronDown, Clock, CheckCircle2, XCircle, SkipForward, Loader2, ToggleLeft, ToggleRight, AlertCircle, Pencil, MessageSquare } from 'lucide-react'
+import { RefreshCw, Play, Trash2, ChevronDown, Clock, CheckCircle2, XCircle, SkipForward, Loader2, ToggleLeft, ToggleRight, AlertCircle, Pencil, MessageSquare, ArrowLeft } from 'lucide-react'
+import { useIsNarrow } from '../../lib/useIsNarrow'
 import { ModelIcon } from '../ui/ModelIcon'
 import { useCronsStore } from '../../store/crons'
 import { useChatStore } from '../../store/chat'
@@ -375,7 +376,7 @@ function RunEntryRow({ entry, onViewConversation }: { entry: CronRunEntry; onVie
 
 // ── Job detail panel ──────────────────────────────────────────────────────────
 
-function JobDetail({ job, onOpenChat }: { job: CronJob; onOpenChat?: () => void }) {
+function JobDetail({ job, onOpenChat, onBack }: { job: CronJob; onOpenChat?: () => void; onBack?: () => void }) {
   const { fetchRuns, toggle, runNow, remove, runs, runsHasMore, loadingRuns, runningNow } = useCronsStore()
   const { loadSessionMessages } = useChatStore()
   const [confirmDelete, setConfirmDelete] = useState(false)
@@ -404,6 +405,15 @@ function JobDetail({ job, onOpenChat }: { job: CronJob; onOpenChat?: () => void 
         style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-surface)' }}
       >
         <div className="flex items-start gap-3">
+          {onBack && (
+            <button
+              onClick={onBack}
+              aria-label="Back to cron jobs"
+              style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 32, height: 32, marginLeft: -6, borderRadius: 'var(--radius)', border: 'none', background: 'transparent', color: 'var(--text-primary)', cursor: 'pointer', flexShrink: 0 }}
+            >
+              <ArrowLeft size={18} />
+            </button>
+          )}
           <div className="flex-1 min-w-0">
             <h2 className="text-base font-semibold truncate" style={{ color: 'var(--text-primary)' }}>
               {job.name}
@@ -572,26 +582,31 @@ export function CronsView({ onOpenChat }: { onOpenChat?: () => void }) {
   const { jobs, loadingJobs, error, fetch } = useCronsStore()
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [search, setSearch] = useState('')
+  const narrow = useIsNarrow()
 
   useEffect(() => { fetch() }, [])
 
-  // Auto-select first job when list loads
+  // Auto-select the first job on desktop (side-by-side). On mobile, land on the LIST
+  // first — a master-detail view — so we don't jump straight into a job's detail.
   useEffect(() => {
-    if (!selectedId && jobs.length > 0) setSelectedId(jobs[0].id)
-  }, [jobs.length])
+    if (!narrow && !selectedId && jobs.length > 0) setSelectedId(jobs[0].id)
+  }, [jobs.length, narrow])
 
   const filtered = jobs.filter(j =>
     !search || j.name.toLowerCase().includes(search.toLowerCase()) || j.agentId?.includes(search)
   )
 
   const selectedJob = jobs.find(j => j.id === selectedId)
+  const showList = !narrow || !selectedJob
+  const showDetail = !narrow || !!selectedJob
 
   return (
     <div className="flex flex-1 min-h-0">
-      {/* Sidebar */}
+      {/* Sidebar (job list) — full-width on mobile when no job is open */}
+      {showList && (
       <div
         className="flex flex-col shrink-0"
-        style={{ width: 300, background: 'var(--bg-surface)', borderRight: '1px solid var(--border)' }}
+        style={{ width: narrow ? '100%' : 300, background: 'var(--bg-surface)', borderRight: narrow ? 'none' : '1px solid var(--border)' }}
       >
         {/* Sidebar header */}
         <div
@@ -657,11 +672,13 @@ export function CronsView({ onOpenChat }: { onOpenChat?: () => void }) {
         {/* Local LLM engine isolation help */}
         <LocalEnginesPanel jobs={jobs} />
       </div>
+      )}
 
-      {/* Detail panel */}
+      {/* Detail panel — full-width on mobile once a job is open (back returns to the list) */}
+      {showDetail && (
       <div className="flex flex-1 flex-col min-w-0 min-h-0" style={{ background: 'var(--bg-primary)' }}>
         {selectedJob ? (
-          <JobDetail key={selectedJob.id} job={selectedJob} onOpenChat={onOpenChat} />
+          <JobDetail key={selectedJob.id} job={selectedJob} onOpenChat={onOpenChat} onBack={narrow ? () => setSelectedId(null) : undefined} />
         ) : (
           <div className="flex flex-1 flex-col items-center justify-center gap-3">
             <Clock size={40} style={{ color: 'var(--text-secondary)', opacity: 0.3 }} />
@@ -671,6 +688,7 @@ export function CronsView({ onOpenChat }: { onOpenChat?: () => void }) {
           </div>
         )}
       </div>
+      )}
     </div>
   )
 }

@@ -207,7 +207,10 @@ gateway — no `allowedOrigins` change — or any mount point).
   - [x] Mobile touch targets: global `@media (max-width:767px)` in index.css bumps
         buttons/inputs/selects to ≥40px min-height and form fields to 16px (readability +
         no iOS focus-zoom). First pass; tune per-surface as feedback comes in.
-  - [ ] Audit remaining fixed-width panes (Settings 520, Agents/Models/Teams/etc. sidebars)
+  - [x] Crons: master-detail on narrow (job list ↔ job detail with ← back; no auto-select
+        into detail on mobile). Same pattern as chat.
+  - [ ] Audit remaining fixed-width panes: Agents, Teams, Sessions, Models, Extensions,
+        Gateway, Settings (520)
 - [ ] Pairing/approval UX for a new browser device
 - [ ] Decide wrapper (pure PWA vs Capacitor) → manifest + service worker, or native shell
 - [ ] Notifications
