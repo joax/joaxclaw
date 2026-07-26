@@ -105,12 +105,30 @@ wall the stale "connect from main to avoid Origin" comment implied:
 **⇒ The "no Origin → full scopes" comment in `electron/main/index.ts` is stale.** The
 gate is device identity + origin allowlist, both reproducible in a browser.
 
-### The one remaining confirmation
-Prove a **signed** handshake from an **allowed** origin returns scopes. Cheapest proof
-already exists: OpenClaw's shipping browser Control UI does exactly this. A definitive
-in-repo test = implement the WebCrypto device-identity handshake and connect from an
-allow-listed origin — which is the first task of Phase 1 anyway, so it doubles as the
-go/no-go check.
+## Phase 1 go/no-go — CONFIRMED ✅ (measured 2026-07-14)
+
+`scripts/probe-signed-scopes.mjs` replays the desktop app's exact `v3` Ed25519 signed
+handshake (reusing the approved device identity + stored operator device token),
+connecting with and without an `Origin` header. Result against the real gateway:
+
+```text
+device-token: present
+A. signed, NO Origin                          → operator.admin, approvals, pairing, read, talk.secrets, write
+B. signed, Origin https://<gateway-host>      → operator.admin, approvals, pairing, read, talk.secrets, write
+```
+
+**A signed, Origin-bearing (browser/PWA) connection receives the FULL operator scope
+set.** This directly disproves the protocol doc's "browser-origin cannot get full
+scopes regardless of device identity" — with a device identity + an allowed origin, a
+browser gets everything. **Go: a PWA is viable.**
+
+Two requirements, both reproducible in a browser:
+1. **Device identity** — an Ed25519 keypair signing the `connect.challenge` `v3` payload
+   (browser: **WebCrypto**, non-extractable key in IndexedDB). First connect needs
+   approval; the gateway then returns a per-role **device token** to resend on later
+   connects (the only method that preserves operator scopes from a *remote* locality).
+2. **Allowed origin** — serve the PWA same-origin from the gateway, or add its origin to
+   `gateway.controlUi.allowedOrigins`.
 
 ## Paths (once Phase 0 answers)
 
@@ -146,6 +164,8 @@ go/no-go check.
 - [x] **Run the probe against a real gateway** → Origin is an allowlist gate; scopes
       come from device identity, not Origin. The "no Origin" comment is stale.
 - [x] **Verdict: PWA is viable** (needs `allowedOrigins` + a WebCrypto device handshake)
-- [ ] Confirm a *signed* browser handshake from an allowed origin returns scopes
-      (doubles as the first Phase 1 task / go-no-go)
-- [ ] Scope Phase 1 (Capacitor vs pure PWA — both now on the table)
+- [x] Confirm a *signed* browser handshake from an allowed origin returns scopes →
+      **CONFIRMED**: Origin-bearing signed connection gets the full operator scope set
+- [ ] Scope Phase 1 build (Capacitor vs pure PWA — both viable):
+      WebCrypto device-identity handshake → `window.api` browser shim → responsive layout
+      → device-pairing auth → notifications
