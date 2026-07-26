@@ -80,6 +80,38 @@ Interpreting the result:
 | Both EMPTY | **device-less** is the gate, not Origin | **PWA likely viable** — implement device identity via WebCrypto |
 | No-Origin has scopes, Origin empty | Origin *is* a gate for device-less | Re-test with a **signed** browser handshake; if still empty → **Capacitor** |
 
+## Phase 0 result (measured 2026-07-14, against a `.ts.net` gateway)
+
+```text
+A. NO Origin  (device-less) → granted: (EMPTY — scopes cleared)
+B. WITH Origin http://localhost:5173 → error: origin not allowed
+   (CONTROL_UI_ORIGIN_NOT_ALLOWED — allow it in gateway.controlUi.allowedOrigins)
+```
+
+**Verdict: a PWA is viable.** Two *independent, surmountable* gates — not the hard
+wall the stale "connect from main to avoid Origin" comment implied:
+
+1. **Origin allowlist (config).** The browser origin was rejected before scopes were
+   even considered. Fix: add the PWA's origin to `gateway.controlUi.allowedOrigins`,
+   or serve the PWA **same-origin** from the gateway (loopback / RFC1918 / `.local` /
+   `.ts.net` auto-accept).
+2. **Scopes come from device identity, not Origin.** The no-Origin connection *also*
+   returned empty — because the probe is **device-less**. The real Electron app also
+   sends no Origin yet gets full scopes **because it signs the device challenge**. So
+   the scope gate is device identity, which a browser can satisfy via **WebCrypto**
+   (a non-extractable keypair signing the `connect.challenge` nonce) — exactly what
+   OpenClaw's own browser Control UI does.
+
+**⇒ The "no Origin → full scopes" comment in `electron/main/index.ts` is stale.** The
+gate is device identity + origin allowlist, both reproducible in a browser.
+
+### The one remaining confirmation
+Prove a **signed** handshake from an **allowed** origin returns scopes. Cheapest proof
+already exists: OpenClaw's shipping browser Control UI does exactly this. A definitive
+in-repo test = implement the WebCrypto device-identity handshake and connect from an
+allow-listed origin — which is the first task of Phase 1 anyway, so it doubles as the
+go/no-go check.
+
 ## Paths (once Phase 0 answers)
 
 | | Pure PWA | Capacitor wrap | React Native |
@@ -111,6 +143,9 @@ Interpreting the result:
 - [x] Research OpenClaw docs — **found a direct contradiction**, plus evidence that
       the real gate is *device-less*, not origin
 - [x] Build the empirical probe
-- [ ] **Run the probe against a real gateway** ← next
-- [ ] If needed: test a *signed* (device-identity) browser handshake
-- [ ] Pick the path and scope Phase 1
+- [x] **Run the probe against a real gateway** → Origin is an allowlist gate; scopes
+      come from device identity, not Origin. The "no Origin" comment is stale.
+- [x] **Verdict: PWA is viable** (needs `allowedOrigins` + a WebCrypto device handshake)
+- [ ] Confirm a *signed* browser handshake from an allowed origin returns scopes
+      (doubles as the first Phase 1 task / go-no-go)
+- [ ] Scope Phase 1 (Capacitor vs pure PWA — both now on the table)

@@ -100,25 +100,34 @@ console.log(`gateway: ${url}`)
 for (const r of [noOrigin, withOrigin]) console.log(`\n• ${r.label}\n    granted: ${describe(r)}`)
 
 // ── Verdict ────────────────────────────────────────────────────────────────────
+// This probe is device-LESS (it does not sign the challenge). The real app signs a
+// device identity, which is what actually grants scopes — so an EMPTY result here is
+// expected and means "device-less is the gate", NOT "Origin killed the scopes".
 const a = Array.isArray(noOrigin.granted) ? noOrigin.granted : null
 const b = Array.isArray(withOrigin.granted) ? withOrigin.granted : null
+const originBlocked = !!withOrigin.error && /origin not allowed|CONTROL_UI_ORIGIN_NOT_ALLOWED/i.test(withOrigin.error)
 console.log('\n--- verdict ---')
-if (!a && !b) {
-  console.log('Inconclusive: neither handshake completed. Check the URL/token (and that the host is reachable).')
+if (originBlocked && a && !a.length) {
+  console.log('Two INDEPENDENT gates, both surmountable in a browser:')
+  console.log('  1) Origin allowlist: the browser origin was rejected up front —')
+  console.log('     add it to gateway.controlUi.allowedOrigins (or serve the PWA same-origin;')
+  console.log('     loopback / RFC1918 / .local / .ts.net auto-accept).')
+  console.log('  2) Scopes: the no-Origin connection ALSO got empty scopes — because it is')
+  console.log('     DEVICE-LESS. So Origin is not the scope gate; device identity is.')
+  console.log('→ A PWA that is origin-allowed AND signs the device challenge (WebCrypto) should get')
+  console.log('  scopes — exactly what OpenClaw\'s own browser Control UI does. PWA looks viable;')
+  console.log('  the definitive test is a signed handshake from an allowed origin.')
+} else if (!a && !b) {
+  console.log('Inconclusive: neither handshake completed. Check the URL/token and reachability.')
 } else if (a && b && a.length && b.length) {
-  console.log('Origin does NOT block scopes — a browser/PWA can hold operator scopes.')
-  console.log('→ A pure PWA is viable (still add this origin to gateway.controlUi.allowedOrigins).')
-} else if (a?.length && b && !b.length) {
-  console.log('Origin DOES clear scopes on a device-less connection.')
-  console.log('→ Next: test whether a DEVICE-IDENTITY (signed) browser handshake preserves them —')
-  console.log('  OpenClaw docs say scope-clearing targets device-LESS sessions, and the official')
-  console.log('  Control UI is a browser SPA with browser-generated device IDs. If signing restores')
-  console.log('  scopes, a PWA works via WebCrypto device identity; if not, prefer Capacitor.')
+  console.log('Origin does NOT block scopes — a browser/PWA can hold operator scopes. PWA viable.')
 } else if (a && !a.length && b && !b.length) {
-  console.log('BOTH are empty → device-LESS is the gate, not Origin.')
-  console.log('→ Strong signal a PWA can work: implement the device-identity handshake (WebCrypto)')
-  console.log('  and add the origin to gateway.controlUi.allowedOrigins.')
+  console.log('BOTH empty → device-LESS is the gate, not Origin. Implement the device-identity')
+  console.log('handshake (WebCrypto) and add the origin to allowedOrigins. PWA looks viable.')
+} else if (a?.length && b && !b.length) {
+  console.log('Origin cleared scopes even WITH a device — test a signed browser handshake; if still')
+  console.log('empty, prefer Capacitor (native socket).')
 } else {
-  console.log('Mixed/partial result — see the two rows above and compare against the docs.')
+  console.log('Mixed/partial result — compare the two rows above against docs/mobile-companion.md.')
 }
 console.log()
