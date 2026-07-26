@@ -166,6 +166,14 @@ Two requirements, both reproducible in a browser:
 - [x] **Verdict: PWA is viable** (needs `allowedOrigins` + a WebCrypto device handshake)
 - [x] Confirm a *signed* browser handshake from an allowed origin returns scopes →
       **CONFIRMED**: Origin-bearing signed connection gets the full operator scope set
-- [ ] Scope Phase 1 build (Capacitor vs pure PWA — both viable):
-      WebCrypto device-identity handshake → `window.api` browser shim → responsive layout
-      → device-pairing auth → notifications
+- [x] **Shared core (wrapper-agnostic) — built:**
+  - `src/lib/mobile/deviceIdentityWeb.ts` — WebCrypto Ed25519 `v3` handshake, non-extractable
+    key in IndexedDB. **Unit-tested for byte-compatibility** (`deviceIdentityWeb.test.ts`:
+    WebCrypto signs → `node:crypto` verifies, i.e. the gateway will accept it).
+  - `src/lib/mobile/browserApi.ts` — `window.api` shim: real WebSocket `ws` + `deviceAuth`
+    (WebCrypto identity + localStorage device-token cache) + desktop namespaces degraded to
+    safe no-ops. Installed from `main.tsx`, **no-op under Electron** (guarded).
+- [ ] Responsive layout (desktop 3-pane → mobile drawer / single-column)
+- [ ] Pairing/approval UX for a new browser device
+- [ ] Decide wrapper (pure PWA vs Capacitor) → manifest + service worker, or native shell
+- [ ] Notifications

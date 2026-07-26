@@ -7,6 +7,13 @@ import './index.css'
 import { DEFAULT_THEME } from './lib/presetThemes'
 import { applyTheme } from './lib/theme'
 import { useSettingsStore } from './store/settings'
+import { installBrowserApi } from './lib/mobile/browserApi'
+
+// In a plain browser (PWA / mobile companion) there's no Electron preload, so provide
+// a `window.api` shim: a real WebSocket for the gateway + a WebCrypto device identity,
+// with desktop-only surfaces degraded to no-ops. No-op under Electron. Must run before
+// anything touches window.api.
+installBrowserApi()
 
 // Apply the active theme before first render. The settings store has already
 // rehydrated from localStorage by the time this runs (it's imported transitively via
