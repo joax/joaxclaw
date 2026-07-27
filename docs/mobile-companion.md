@@ -214,10 +214,16 @@ gateway — no `allowedOrigins` change — or any mount point).
         process CollaborationPanel.
   - [x] Centered modals constrained to the viewport (maxWidth 92vw + maxHeight/scroll):
         new-agent, new-process, add-skill/add-plugin, reconnect overlay.
-  - [ ] List+detail views still need master-detail (like Crons): Memory, Gateway (sub-tabs),
-        Models, Themes. Complex detail panes need a design pass, not just master-detail:
-        Agents (graph), Processes (graph editor), Teams (builder). Settings uses maxWidth
-        so it's already usable. Talk (voice) needs its own check.
+  - [x] Complex views got a real mobile design pass (purpose-built, not just stacking):
+        - **Teams** — `MobileTeamDetail`: read-and-run (task box + Run/Stop, member flow,
+          routes), master-detail list ↔ detail; builder editing stays on desktop.
+        - **Processes** — `MobileProcessDetail`: agent flow + controller picker + Run/Stop
+          with live status, step list; graph editing stays on desktop.
+        - **Agents** — system overview's wide SVG grid becomes stacked `Block` sections
+          (channels / entry agents / sub-agents / tools / vaults); tap → full-screen editor.
+  - [ ] Remaining list+detail views still need master-detail (like Crons): Memory,
+        Gateway (sub-tabs), Models, Themes. Settings uses maxWidth so it's already
+        usable. Talk (voice) needs its own check.
 - [ ] Pairing/approval UX for a new browser device
 - [ ] Decide wrapper (pure PWA vs Capacitor) → manifest + service worker, or native shell
 - [ ] Notifications
