@@ -443,7 +443,6 @@ function MobileProcessDetail({ def, onBack }: { def: ProcessDef; onBack: () => v
   }
 
   const isRunning = run?.status === 'running'
-  const controllerAgent = agents.find(a => a.id === controllerAgentId)
 
   const STATUS_META: Record<string, { color: string; label: string }> = {
     running: { color: 'var(--accent)',  label: 'Running' },
