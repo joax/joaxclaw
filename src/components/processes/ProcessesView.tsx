@@ -394,7 +394,7 @@ function NewProcessModal({ onDone }: { onDone: () => void }) {
   return (
     <>
       <div className="fixed inset-0 z-40" style={{ background: 'rgba(0,0,0,0.4)' }} onClick={onDone} />
-      <div className="fixed z-50 top-1/2 left-1/2" style={{ transform: 'translate(-50%,-50%)', width: 360, background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: 20 }}>
+      <div className="fixed z-50 top-1/2 left-1/2" style={{ transform: 'translate(-50%,-50%)', width: 360, maxWidth: '92vw', maxHeight: '90vh', overflowY: 'auto', background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: 20 }}>
         <h3 className="text-sm font-semibold mb-3" style={{ color: 'var(--text-primary)' }}>New Process</h3>
         <input
           autoFocus value={name} onChange={e => setName(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleCreate()}

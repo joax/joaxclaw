@@ -17,7 +17,7 @@ export function ReconnectOverlay() {
       <div
         className="flex flex-col items-center text-center px-8 py-9"
         style={{
-          width: 460, background: 'var(--bg-surface)', border: '1px solid var(--border)',
+          width: 460, maxWidth: '92vw', background: 'var(--bg-surface)', border: '1px solid var(--border)',
           borderRadius: 'var(--radius)', boxShadow: '0 12px 40px rgba(0,0,0,0.35)',
         }}
       >
