@@ -14,9 +14,12 @@ import react from '@vitejs/plugin-react'
 //
 // `base: './'` keeps asset paths relative so the bundle can be served same-origin from
 // the gateway (no gateway.controlUi.allowedOrigins change needed) or any mount point.
-export default defineConfig({
+export default defineConfig(({ command }) => ({
   root: '.',
-  base: './',
+  // Relative base only for the BUILD (so the bundle serves from any path / same-origin
+  // on the gateway). The dev server needs an absolute base — a relative base breaks
+  // asset URLs there (imported PNGs like the logo 404).
+  base: command === 'build' ? './' : '/',
   resolve: {
     alias: { '@renderer': resolve('src'), '@': resolve('src') },
   },
@@ -24,4 +27,4 @@ export default defineConfig({
   css: { postcss: resolve('postcss.config.js') },
   server: { port: 5173, strictPort: false },
   build: { outDir: 'out/web', emptyOutDir: true },
-})
+}))
