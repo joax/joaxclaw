@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react'
 import { X, Check, AlertCircle, ChevronDown } from 'lucide-react'
 import type { CronJob, CronSchedule, CronPayload, CronDelivery } from '../../lib/types'
 import { useCronsStore } from '../../store/crons'
+import { useIsNarrow } from '../../lib/useIsNarrow'
+import { editorDrawerStyle } from '../../lib/mobilePanel'
 import { useTeamsStore } from '../../store/teams'
 import { compileProcessToJob, buildLaunchPrompt, launchPromptProcessId } from '../../lib/processCompiler'
 import { Btn } from '../ui/Btn'
@@ -148,6 +150,7 @@ interface Props { job: CronJob; onClose: () => void }
 
 export function CronEditor({ job, onClose }: Props) {
   const { update } = useCronsStore()
+  const narrow = useIsNarrow()
   const [tab, setTab] = useState<Tab>('general')
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
@@ -291,7 +294,7 @@ export function CronEditor({ job, onClose }: Props) {
       <div className="fixed inset-0 z-40" style={{ background: 'rgba(0,0,0,0.5)' }} onClick={onClose} />
       <div
         className="fixed right-0 bottom-0 z-50 flex flex-col"
-        style={{ top: 36, width: 500, background: 'var(--bg-surface)', borderLeft: '1px solid var(--border)' }}
+        style={editorDrawerStyle(narrow, 500)}
       >
         {/* Header */}
         <div

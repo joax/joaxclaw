@@ -1,6 +1,8 @@
 import { useEffect, useState, useRef, useCallback } from 'react'
 import { Bot, MessageSquare, Wrench, Loader2, BookOpen, FolderOpen, X } from 'lucide-react'
 import { useAgentsStore } from '../../store/agents'
+import { useIsNarrow } from '../../lib/useIsNarrow'
+import { editorDrawerStyle } from '../../lib/mobilePanel'
 import { useObsidianVaults } from '../../store/memory'
 import { useSessionsStore } from '../../store/sessions'
 import { useCronsStore } from '../../store/crons'
@@ -294,6 +296,7 @@ const CHANNEL_COLORS: Record<string, string> = {
 }
 
 function ChannelCard({ channel, boundAgent, onClick }: { channel: ChannelInfo; boundAgent?: Agent; onClick?: () => void }) {
+  const narrow = useIsNarrow()
   const color = CHANNEL_COLORS[channel.id] ?? 'var(--accent)'
   const model = boundAgent?.model?.primary ?? boundAgent?.agentRuntime?.id ?? ''
   const slash = model.indexOf('/')
@@ -453,7 +456,7 @@ function ChannelPanel({ channel, boundAgent, onClose }: {
   return (
     <>
       <div className="fixed inset-0 z-40" style={{ background: 'rgba(0,0,0,0.25)' }} onClick={onClose} />
-      <div className="fixed right-0 bottom-0 z-50 flex flex-col" style={{ top: 36, width: 340, background: 'var(--bg-surface)', borderLeft: '1px solid var(--border)' }}>
+      <div className="fixed right-0 bottom-0 z-50 flex flex-col" style={editorDrawerStyle(narrow, 340)}>
         <div className="flex items-center justify-between px-5 py-4 shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
           <div className="flex items-center gap-2">
             <MessageSquare size={16} style={{ color }} />

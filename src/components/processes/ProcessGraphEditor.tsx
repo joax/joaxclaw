@@ -2,6 +2,8 @@ import { useState, useRef, useCallback, useEffect } from 'react'
 import { Plus, Trash2, X, Save, ZoomIn, ZoomOut, Maximize2, LayoutGrid, Bot, Database, FolderOpen, Brain, Radio, ChevronDown, AlertCircle, Shuffle, UserCheck } from 'lucide-react'
 import type { ProcessDef, GraphNode, GraphEdge, Deliverable, ProcessGraph, PortSide } from '../../lib/processParser'
 import { useAgentsStore } from '../../store/agents'
+import { useIsNarrow } from '../../lib/useIsNarrow'
+import { editorDrawerStyle } from '../../lib/mobilePanel'
 import { useObsidianVaults, type ObsidianVaultRef } from '../../store/memory'
 import { ModelIcon } from '../ui/ModelIcon'
 
@@ -426,6 +428,7 @@ function CollaborationPanel({ node, nodes, edges, agents, vaults, onChange, onCl
   onChange: (patch: Partial<GraphNode>) => void
   onClose: () => void
 }) {
+  const narrow = useIsNarrow()
   const [agentSearch, setAgentSearch] = useState('')
   const [showAgentList, setShowAgentList] = useState(false)
   const gwAgent = node.agentId ? agents.find(a => a.id === node.agentId) : undefined
@@ -467,7 +470,7 @@ function CollaborationPanel({ node, nodes, edges, agents, vaults, onChange, onCl
   const titleLabel = { start: 'Start', end: 'End', agent: 'Agent Step', handoff: 'Handoff', review: 'Review Gate' }[node.type]
 
   return (
-    <div className="fixed right-0 bottom-0 z-40 flex flex-col" style={{ top: 36, width: 300, background: 'var(--bg-surface)', borderLeft: '1px solid var(--border)' }}>
+    <div className="fixed right-0 bottom-0 z-40 flex flex-col" style={editorDrawerStyle(narrow, 300)}>
       <div className="flex items-center justify-between px-4 py-3 shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
         <span className="font-semibold text-sm" style={{ color: titleColor }}>{titleLabel}</span>
         <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)', display: 'flex' }}><X size={16} /></button>

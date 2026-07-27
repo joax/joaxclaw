@@ -2,6 +2,8 @@ import { useMemo, useState, useRef, useEffect, useCallback } from 'react'
 import type { Agent } from '../../lib/types'
 import { MessageSquare, Settings2, X, Trash2, Check, Loader2, Maximize2 } from 'lucide-react'
 import { useAgentsStore } from '../../store/agents'
+import { useIsNarrow } from '../../lib/useIsNarrow'
+import { editorDrawerStyle } from '../../lib/mobilePanel'
 import { Btn } from '../ui/Btn'
 
 interface Props {
@@ -107,6 +109,7 @@ interface EdgeEditorProps {
 
 function EdgeEditor({ fromAgent, toAgent, onClose, onDisconnect }: EdgeEditorProps) {
   const { readRelationship, writeRelationship } = useAgentsStore()
+  const narrow = useIsNarrow()
   const [instructions, setInstructions] = useState('')
   const [original,     setOriginal]     = useState('')
   const [loading,  setLoading]  = useState(true)
@@ -162,7 +165,7 @@ function EdgeEditor({ fromAgent, toAgent, onClose, onDisconnect }: EdgeEditorPro
       <div className="fixed inset-0 z-40" style={{ background: 'rgba(0,0,0,0.35)' }} onClick={onClose} />
       <div
         className="fixed right-0 bottom-0 z-50 flex flex-col"
-        style={{ top: 36, width: 400, background: 'var(--bg-surface)', borderLeft: '1px solid var(--border)' }}
+        style={editorDrawerStyle(narrow, 400)}
       >
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
