@@ -3,6 +3,8 @@ import { X, Plus, Trash2, FileText, Pencil, Loader2, AlertCircle, Check, Save } 
 import Editor from '@monaco-editor/react'
 import type { Agent, AgentFile } from '../../lib/types'
 import { useAgentsStore } from '../../store/agents'
+import { useIsNarrow } from '../../lib/useIsNarrow'
+import { editorDrawerStyle } from '../../lib/mobilePanel'
 import { Btn } from '../ui/Btn'
 import { Input } from '../ui/Input'
 import { ModelPicker } from '../ui/ModelPicker'
@@ -13,6 +15,7 @@ type Tab = 'model' | 'subagents' | 'files'
 
 export function AgentEditor({ agent, onClose }: Props) {
   const { agents, update, listFiles, readFile, writeFile, deleteFile } = useAgentsStore()
+  const narrow = useIsNarrow()
   const [tab, setTab] = useState<Tab>('model')
 
   // Model tab state
@@ -143,7 +146,7 @@ export function AgentEditor({ agent, onClose }: Props) {
       <div className="fixed inset-0 z-40" style={{ background: 'rgba(0,0,0,0.5)' }} onClick={onClose} />
       <div
         className="fixed right-0 bottom-0 z-50 flex flex-col"
-        style={{ top: 36, width: 480, background: 'var(--bg-surface)', borderLeft: '1px solid var(--border)' }}
+        style={editorDrawerStyle(narrow, 480)}
       >
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
