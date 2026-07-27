@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react'
-import { Bot, RefreshCw, GitFork, Network, Plus, X, AlertCircle } from 'lucide-react'
+import { Bot, RefreshCw, GitFork, Network, Plus, X, AlertCircle, MessageSquare, FolderOpen, ChevronRight } from 'lucide-react'
 import { useAgentsStore, normalizeAgentId } from '../../store/agents'
 import { useChatStore } from '../../store/chat'
 import type { Agent } from '../../lib/types'
 import { Btn } from '../ui/Btn'
 import { Input } from '../ui/Input'
+import { ModelIcon } from '../ui/ModelIcon'
 import { ModelPicker } from '../ui/ModelPicker'
+import { useIsNarrow } from '../../lib/useIsNarrow'
 import { AgentEditor } from './AgentEditor'
 import { AgentGraph } from './AgentGraph'
 import { AgentSystemView } from './AgentSystemView'
@@ -19,6 +21,7 @@ function agentDisplayName(agent: Agent): string {
 export function AgentsView({ onOpenChat }: Props) {
   const { agents, defaultId, loading, error, fetch, update, remove } = useAgentsStore()
   const { newConversation } = useChatStore()
+  const narrow = useIsNarrow()
   const [editingAgent, setEditingAgent] = useState<Agent | null>(null)
   const [creating, setCreating] = useState(false)
   const [viewMode, setViewMode] = useState<'graph' | 'overview'>('graph')
@@ -47,7 +50,7 @@ export function AgentsView({ onOpenChat }: Props) {
   const hasRelationships = agents.some(a => (a.allowedSubAgents ?? []).length > 0)
 
   return (
-    <div className="flex flex-1 flex-col min-h-0 p-6">
+    <div className="flex flex-1 flex-col min-h-0" style={{ padding: narrow ? 16 : 24 }}>
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-lg font-semibold" style={{ color: 'var(--text-primary)' }}>Agents</h1>
@@ -56,7 +59,7 @@ export function AgentsView({ onOpenChat }: Props) {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {agents.length > 0 && (
+          {agents.length > 0 && !narrow && (
             <div
               className="flex items-center rounded overflow-hidden"
               style={{ border: '1px solid var(--border)', background: 'var(--bg-surface)' }}
@@ -112,7 +115,18 @@ export function AgentsView({ onOpenChat }: Props) {
         </div>
       )}
 
-      {agents.length > 0 && viewMode === 'graph' && (
+      {/* Mobile: the pan/zoom graph and the wide overview grid can't be dragged in a
+          phone viewport, so replace both with a scrollable agent list. */}
+      {agents.length > 0 && narrow && (
+        <MobileAgentsList
+          agents={agents}
+          defaultId={defaultId}
+          onEdit={setEditingAgent}
+          onChat={handleChat}
+        />
+      )}
+
+      {agents.length > 0 && !narrow && viewMode === 'graph' && (
         <div className="flex flex-1 flex-col min-h-0">
           <AgentGraph
             agents={agents}
@@ -131,7 +145,7 @@ export function AgentsView({ onOpenChat }: Props) {
         </div>
       )}
 
-      {viewMode === 'overview' && <AgentSystemView />}
+      {!narrow && viewMode === 'overview' && <AgentSystemView />}
 
       {editingAgent && (
         <AgentEditor agent={editingAgent} onClose={() => setEditingAgent(null)} />
@@ -147,6 +161,91 @@ export function AgentsView({ onOpenChat }: Props) {
           }}
         />
       )}
+    </div>
+  )
+}
+
+// ── Mobile agent list ─────────────────────────────────────────────────────────
+// Replaces the draggable graph on phones: a plain scrollable list. Each card taps
+// through to the full-screen editor; a Chat button starts a conversation. Sub-agent
+// relationships (the graph's edges) are shown inline as "Delegates to" chips.
+function MobileAgentsList({ agents, defaultId, onEdit, onChat }: {
+  agents: Agent[]
+  defaultId: string | null | undefined
+  onEdit: (a: Agent) => void
+  onChat: (a: Agent) => void
+}) {
+  const byId = new Map(agents.map(a => [a.id, a]))
+  return (
+    <div className="flex-1 overflow-y-auto" style={{ display: 'flex', flexDirection: 'column', gap: 10, WebkitOverflowScrolling: 'touch' }}>
+      {agents.map(a => {
+        const name  = agentDisplayName(a)
+        const model = a.model?.primary ?? a.agentRuntime?.id ?? ''
+        const subs  = a.allowedSubAgents ?? []
+        const isDefault = a.id === defaultId
+        return (
+          <div
+            key={a.id}
+            onClick={() => onEdit(a)}
+            style={{
+              display: 'flex', flexDirection: 'column', gap: 8, padding: 14,
+              borderRadius: 'var(--radius)', background: 'var(--bg-surface)',
+              border: '1px solid var(--border)', cursor: 'pointer',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+              <span style={{ fontSize: 26, lineHeight: 1, flexShrink: 0 }}>{a.identity?.emoji ?? '🤖'}</span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span className="truncate" style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-primary)' }}>{name}</span>
+                  {isDefault && (
+                    <span style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', padding: '1px 5px', borderRadius: 4, color: 'var(--accent)', background: 'color-mix(in srgb, var(--accent) 14%, transparent)', flexShrink: 0 }}>Default</span>
+                  )}
+                </div>
+                {model && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 2 }}>
+                    <ModelIcon model={model} size={11} />
+                    <span className="truncate" style={{ fontSize: 12, fontFamily: 'monospace', color: 'var(--text-secondary)' }}>{model}</span>
+                  </div>
+                )}
+                {a.workspace && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 3 }}>
+                    <FolderOpen size={11} style={{ color: 'var(--text-secondary)', opacity: 0.6, flexShrink: 0 }} />
+                    <span className="truncate" style={{ fontSize: 11, fontFamily: 'monospace', color: 'var(--text-secondary)', opacity: 0.75 }}>{a.workspace}</span>
+                  </div>
+                )}
+              </div>
+              <ChevronRight size={18} style={{ color: 'var(--text-secondary)', opacity: 0.4, flexShrink: 0, marginTop: 2 }} />
+            </div>
+
+            {subs.length > 0 && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 5, paddingTop: 2 }}>
+                <span style={{ fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-secondary)', opacity: 0.7 }}>Delegates to</span>
+                {subs.map(id => (
+                  <span key={id} style={{ fontSize: 11, padding: '2px 7px', borderRadius: 5, border: '1px solid var(--border)', background: 'var(--bg-elevated)', color: 'var(--text-secondary)' }}>
+                    {byId.get(id)?.identity?.emoji ?? ''} {byId.get(id) ? agentDisplayName(byId.get(id)!) : id}
+                  </span>
+                ))}
+              </div>
+            )}
+
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button
+                onClick={e => { e.stopPropagation(); onChat(a) }}
+                style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, minHeight: 40, flex: 1, borderRadius: 'var(--radius)', border: '1px solid var(--border)', background: 'var(--bg-elevated)', color: 'var(--text-primary)', fontSize: 13, fontWeight: 500, cursor: 'pointer' }}
+              >
+                <MessageSquare size={15} /> Chat
+              </button>
+              <button
+                onClick={e => { e.stopPropagation(); onEdit(a) }}
+                style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, minHeight: 40, flex: 1, borderRadius: 'var(--radius)', border: 'none', background: 'var(--accent)', color: 'var(--accent-fg, #fff)', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}
+              >
+                Configure
+              </button>
+            </div>
+          </div>
+        )
+      })}
     </div>
   )
 }
