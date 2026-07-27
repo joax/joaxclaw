@@ -296,7 +296,6 @@ const CHANNEL_COLORS: Record<string, string> = {
 }
 
 function ChannelCard({ channel, boundAgent, onClick }: { channel: ChannelInfo; boundAgent?: Agent; onClick?: () => void }) {
-  const narrow = useIsNarrow()
   const color = CHANNEL_COLORS[channel.id] ?? 'var(--accent)'
   const model = boundAgent?.model?.primary ?? boundAgent?.agentRuntime?.id ?? ''
   const slash = model.indexOf('/')
@@ -562,6 +561,7 @@ async function probeBackgroundTasks(): Promise<string[]> {
 }
 
 export function AgentSystemView() {
+  const narrow = useIsNarrow()
   const { agents, fetch: fetchAgents } = useAgentsStore()
   const vaults = useObsidianVaults()
   const sessions = useSessionsStore(s => s.sessions)
@@ -618,6 +618,93 @@ export function AgentSystemView() {
 
   // Agents found via gateway background task probes (tasks.list / sessions.list+includeAll)
   for (const aid of backgroundAgentIds) activeAgentIds.add(aid)
+
+  // ── Mobile: the wide SVG-connected grid can't fit a phone, so present the same
+  // system as stacked sections. Tapping an agent/channel opens the full-screen editor.
+  if (narrow) {
+    const channels = data?.channels ?? []
+    return (
+      <>
+      <div style={{ flex: 1, overflow: 'auto', padding: 14, display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <Block title="Channels" icon={<MessageSquare size={12} />}>
+          {channels.length === 0
+            ? <Empty text="No channels configured" />
+            : (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                  {channels.map(ch => (
+                    <ChannelCard key={ch.id} channel={ch}
+                      boundAgent={agents.find(a => ch.boundAgentIds.includes(a.id))}
+                      onClick={() => setSelectedChannel(ch)} />
+                  ))}
+                </div>
+              )
+          }
+        </Block>
+
+        <Block title="Entry Agents" icon={<Bot size={12} />} accent>
+          {entryAgents.length === 0
+            ? <Empty text="No entry agents configured" />
+            : entryAgents.map(a => <AgentRow key={a.id} agent={a} running={activeAgentIds.has(a.id)} onClick={() => setSelectedAgent(a)} />)
+          }
+        </Block>
+
+        <Block title="Sub-Agents" icon={<Bot size={12} />}>
+          {subAgents.length === 0
+            ? <Empty text={agents.length === 0 ? 'No agents configured' : 'No sub-agent relationships configured'} />
+            : subAgents.map(a => <AgentRow key={a.id} agent={a} running={activeAgentIds.has(a.id)} onClick={() => setSelectedAgent(a)} />)
+          }
+        </Block>
+
+        <Block title="Tools & Skills" icon={<Wrench size={12} />}>
+          {!data || (data.tools.length === 0 && data.skills.length === 0)
+            ? <Empty text="No tools enabled" />
+            : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  {data.tools.length > 0 && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      <span style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)' }}>Plugins</span>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>{data.tools.map(t => <Tag key={t} label={t} mono />)}</div>
+                    </div>
+                  )}
+                  {data.skills.length > 0 && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      <span style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)' }}>Skills</span>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>{data.skills.map(s => <Tag key={s} label={s} mono />)}</div>
+                    </div>
+                  )}
+                </div>
+              )
+          }
+        </Block>
+
+        <Block title="Obsidian Vaults" icon={<BookOpen size={12} />}>
+          {vaults.length === 0
+            ? <Empty text="No vaults configured" />
+            : vaults.map(v => (
+                <div key={v.url} style={{ display: 'flex', flexDirection: 'column', gap: 3, padding: '7px 9px', borderRadius: 6, background: '#8b5cf611', border: '1px solid #8b5cf633' }}>
+                  <span style={{ fontSize: 12, fontWeight: 600, color: '#a78bfa' }}>{v.name}</span>
+                  <span style={{ fontSize: 10, fontFamily: 'monospace', color: 'var(--text-secondary)', opacity: 0.7 }}>
+                    {v.mode === 'local' ? 'local' : 'remote'} · {v.url}
+                  </span>
+                </div>
+              ))
+          }
+        </Block>
+      </div>
+
+      {selectedAgent && (
+        <AgentEditor agent={selectedAgent} onClose={() => setSelectedAgent(null)} />
+      )}
+      {selectedChannel && !selectedAgent && (
+        <ChannelPanel
+          channel={selectedChannel}
+          boundAgent={agents.find(a => selectedChannel.boundAgentIds.includes(a.id))}
+          onClose={() => setSelectedChannel(null)}
+        />
+      )}
+      </>
+    )
+  }
 
   return (
     <>
