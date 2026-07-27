@@ -192,7 +192,7 @@ function CreateAgentModal({ onClose, onCreated }: { onClose: () => void; onCreat
       <div
         className="fixed left-1/2 top-1/2 z-50 flex flex-col"
         style={{
-          transform: 'translate(-50%, -50%)', width: 440,
+          transform: 'translate(-50%, -50%)', width: 440, maxWidth: '92vw', maxHeight: '90vh', overflowY: 'auto',
           background: 'var(--bg-surface)', border: '1px solid var(--border)',
           borderRadius: 'var(--radius)', boxShadow: '0 12px 40px rgba(0,0,0,0.4)',
         }}
