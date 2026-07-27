@@ -209,8 +209,15 @@ gateway — no `allowedOrigins` change — or any mount point).
         no iOS focus-zoom). First pass; tune per-surface as feedback comes in.
   - [x] Crons: master-detail on narrow (job list ↔ job detail with ← back; no auto-select
         into detail on mobile). Same pattern as chat.
-  - [ ] Audit remaining fixed-width panes: Agents, Teams, Sessions, Models, Extensions,
-        Gateway, Settings (520)
+  - [x] Editor drawers → full-screen sheet on mobile (`editorDrawerStyle` in
+        `lib/mobilePanel`): CronEditor, AgentEditor, agent EdgeEditor, channel panel,
+        process CollaborationPanel.
+  - [x] Centered modals constrained to the viewport (maxWidth 92vw + maxHeight/scroll):
+        new-agent, new-process, add-skill/add-plugin, reconnect overlay.
+  - [ ] List+detail views still need master-detail (like Crons): Memory, Gateway (sub-tabs),
+        Models, Themes. Complex detail panes need a design pass, not just master-detail:
+        Agents (graph), Processes (graph editor), Teams (builder). Settings uses maxWidth
+        so it's already usable. Talk (voice) needs its own check.
 - [ ] Pairing/approval UX for a new browser device
 - [ ] Decide wrapper (pure PWA vs Capacitor) → manifest + service worker, or native shell
 - [ ] Notifications
