@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { Play, Plus, RefreshCw, GitBranch, Users, ArrowRight, FileText, Loader2, CheckCircle2, XCircle, Clock, X, Trash2, ChevronDown } from 'lucide-react'
+import { Play, Plus, RefreshCw, GitBranch, Users, ArrowRight, ArrowLeft, FileText, Loader2, CheckCircle2, XCircle, Clock, X, Trash2, ChevronDown, Square } from 'lucide-react'
+import { useIsNarrow } from '../../lib/useIsNarrow'
 import { useProcessesStore, processesDir, type ProcessRun } from '../../store/processes'
 import { useAgentsStore } from '../../store/agents'
 import { useConnectionStore } from '../../store/connection'
@@ -415,10 +416,142 @@ function NewProcessModal({ onDone }: { onDone: () => void }) {
 
 // ── Main view ─────────────────────────────────────────────────────────────────
 
+// ── Mobile detail (read + run) ────────────────────────────────────────────────
+// A phone-friendly view of a process: name, the agent flow, a controller picker
+// and Run/Stop. Editing the graph stays on desktop (canvas needs a pointer).
+function MobileProcessDetail({ def, onBack }: { def: ProcessDef; onBack: () => void }) {
+  const { runs, startRun, stopRun, save } = useProcessesStore()
+  const { agents } = useAgentsStore()
+  const run = runs[def.id]
+  const [controllerAgentId, setControllerAgentId] = useState(def.controllerAgentId ?? '')
+  const [isStarting, setIsStarting] = useState(false)
+
+  useEffect(() => {
+    if (def.controllerAgentId && !controllerAgentId) setControllerAgentId(def.controllerAgentId)
+  }, [def.controllerAgentId])
+
+  const handleControllerChange = async (agentId: string) => {
+    setControllerAgentId(agentId)
+    await save(def.path, serializeProcess({ ...def, controllerAgentId: agentId }))
+  }
+
+  const handleRun = async () => {
+    if (!controllerAgentId) return
+    setIsStarting(true)
+    await startRun(def.id, def, controllerAgentId)
+    setIsStarting(false)
+  }
+
+  const isRunning = run?.status === 'running'
+  const controllerAgent = agents.find(a => a.id === controllerAgentId)
+
+  const STATUS_META: Record<string, { color: string; label: string }> = {
+    running: { color: 'var(--accent)',  label: 'Running' },
+    done:    { color: 'var(--success, #16a34a)', label: 'Completed' },
+    error:   { color: 'var(--danger)',  label: 'Failed' },
+    idle:    { color: 'var(--text-secondary)', label: 'Idle' },
+  }
+  const sm = run ? (STATUS_META[run.status] ?? STATUS_META.idle) : null
+
+  return (
+    <div className="flex flex-col h-full min-h-0" style={{ background: 'var(--bg-primary)' }}>
+      {/* Header */}
+      <div className="flex items-center gap-2 px-3 shrink-0" style={{ minHeight: 52, borderBottom: '1px solid var(--border)', background: 'var(--bg-surface)' }}>
+        <button onClick={onBack} aria-label="Back" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 40, height: 40, borderRadius: 'var(--radius)', border: 'none', background: 'none', color: 'var(--text-primary)', cursor: 'pointer', flexShrink: 0 }}>
+          <ArrowLeft size={22} />
+        </button>
+        <div className="flex-1 min-w-0">
+          <h2 className="text-base font-semibold truncate" style={{ color: 'var(--text-primary)' }}>{def.name}</h2>
+          {def.description && <p className="text-xs truncate" style={{ color: 'var(--text-secondary)' }}>{def.description}</p>}
+        </div>
+        {sm && (
+          <span className="text-xs px-2 py-1 rounded shrink-0 flex items-center gap-1" style={{ color: sm.color, background: `color-mix(in srgb, ${sm.color} 12%, transparent)` }}>
+            {isRunning && <Loader2 size={11} className="animate-spin" />}{sm.label}
+          </span>
+        )}
+      </div>
+
+      <div className="flex-1 overflow-y-auto px-4 py-4" style={{ WebkitOverflowScrolling: 'touch' }}>
+        {/* Run controls */}
+        <div className="mb-5">
+          <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>Controller (Team Lead)</label>
+          <ControllerPicker value={controllerAgentId} onChange={handleControllerChange} />
+          <button
+            onClick={isRunning ? () => stopRun(def.id) : handleRun}
+            disabled={!isRunning && (!controllerAgentId || isStarting)}
+            style={{
+              marginTop: 12, width: '100%', minHeight: 48, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+              borderRadius: 'var(--radius)', border: 'none', cursor: (!isRunning && !controllerAgentId) ? 'not-allowed' : 'pointer',
+              fontSize: 15, fontWeight: 600,
+              background: isRunning ? 'color-mix(in srgb, var(--danger) 14%, transparent)' : 'var(--accent)',
+              color: isRunning ? 'var(--danger)' : 'var(--accent-fg, #fff)',
+              opacity: (!isRunning && (!controllerAgentId || isStarting)) ? 0.5 : 1,
+            }}
+          >
+            {isStarting ? <Loader2 size={17} className="animate-spin" /> : isRunning ? <Square size={16} /> : <Play size={17} />}
+            {isStarting ? 'Starting…' : isRunning ? 'Stop' : 'Run process'}
+          </button>
+          {!controllerAgentId && <p className="text-xs mt-1.5" style={{ color: 'var(--text-secondary)', opacity: 0.7 }}>Pick a controller agent to run this process.</p>}
+        </div>
+
+        {/* Live status */}
+        {run && (run.status === 'running' || run.status === 'error') && (
+          <div className="mb-5 px-3 py-2.5 rounded" style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)' }}>
+            {run.currentAgent && (
+              <div className="text-xs" style={{ color: 'var(--text-primary)' }}>
+                Active: <span className="font-mono">{agents.find(a => a.id === run.currentAgent)?.identity?.name ?? run.currentAgent}</span>
+              </div>
+            )}
+            {typeof run.stepsDone === 'number' && (
+              <div className="text-xs mt-0.5" style={{ color: 'var(--text-secondary)' }}>{run.stepsDone} step{run.stepsDone === 1 ? '' : 's'} completed</div>
+            )}
+            {run.error && <div className="text-xs mt-1" style={{ color: 'var(--danger)' }}>{run.error}</div>}
+            {run.log?.length > 0 && (
+              <div className="text-xs mt-1 truncate" style={{ color: 'var(--text-secondary)', opacity: 0.7 }}>{run.log[run.log.length - 1].text}</div>
+            )}
+          </div>
+        )}
+
+        {/* Flow */}
+        <div className="mb-2 flex items-center gap-1.5 text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
+          <GitBranch size={13} /> Flow · {def.agents.length} agent{def.agents.length === 1 ? '' : 's'}
+        </div>
+        <div className="mb-5">
+          <WorkflowGraph def={def} currentAgent={isRunning ? run?.currentAgent : undefined} />
+        </div>
+
+        {/* Steps list */}
+        <div className="mb-2 text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>Steps</div>
+        <div className="flex flex-col gap-2">
+          {def.agents.map((a, i) => {
+            const active = isRunning && run?.currentAgent === a.id
+            return (
+              <div key={a.id} className="flex items-start gap-3 px-3 py-2.5 rounded" style={{ background: active ? 'color-mix(in srgb, var(--accent) 10%, var(--bg-surface))' : 'var(--bg-surface)', border: `1px solid ${active ? 'var(--accent)' : 'var(--border)'}` }}>
+                <span className="flex items-center justify-center shrink-0 text-xs font-semibold" style={{ width: 24, height: 24, borderRadius: '50%', background: 'var(--bg-elevated)', color: 'var(--text-secondary)' }}>{i + 1}</span>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-medium truncate" style={{ color: 'var(--text-primary)' }}>{a.role ?? a.id}</div>
+                  <div className="text-xs font-mono truncate" style={{ color: 'var(--text-secondary)', opacity: 0.7 }}>{a.id}</div>
+                  {a.instructions && <div className="text-xs mt-1 line-clamp-2" style={{ color: 'var(--text-secondary)' }}>{a.instructions}</div>}
+                </div>
+                {a.model && <ModelIcon model={a.model} size={13} style={{ flexShrink: 0, marginTop: 3 }} />}
+              </div>
+            )
+          })}
+        </div>
+
+        <p className="text-xs mt-5" style={{ color: 'var(--text-secondary)', opacity: 0.6 }}>
+          Editing the process graph is available on desktop.
+        </p>
+      </div>
+    </div>
+  )
+}
+
 export function ProcessesView({ onOpenChat }: { onOpenChat?: () => void } = {}) {
   const { processes, runs, loading, error, needsPlugin, load, delete: deleteProcess } = useProcessesStore()
   const { fetch: fetchAgents } = useAgentsStore()
   const status = useConnectionStore(s => s.status)
+  const narrow = useIsNarrow()
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [search,     setSearch    ] = useState('')
   const [showNew,    setShowNew   ] = useState(false)
@@ -434,8 +567,8 @@ export function ProcessesView({ onOpenChat }: { onOpenChat?: () => void } = {}) 
   }, [status])
 
   useEffect(() => {
-    if (!selectedId && processes.length > 0) setSelectedId(processes[0].id)
-  }, [processes.length])
+    if (!narrow && !selectedId && processes.length > 0) setSelectedId(processes[0].id)
+  }, [processes.length, narrow])
 
   const filtered = processes.filter(p =>
     !search ||
@@ -448,12 +581,16 @@ export function ProcessesView({ onOpenChat }: { onOpenChat?: () => void } = {}) 
 
   if (needsPlugin) return <RemotePluginNotice feature="Processes" onRetry={() => load()} onOpenChat={onOpenChat} />
 
+  const showList   = !narrow || !selectedProcess
+  const showDetail = !narrow || !!selectedProcess
+
   return (
     <div className="flex flex-1 min-h-0">
       {showNew && <NewProcessModal onDone={() => { setShowNew(false); load() }} />}
 
       {/* Sidebar */}
-      <div className="flex flex-col shrink-0" style={{ width: 280, borderRight: '1px solid var(--border)', background: 'var(--bg-surface)' }}>
+      {showList && (
+      <div className="flex flex-col shrink-0" style={{ width: narrow ? '100%' : 280, borderRight: narrow ? 'none' : '1px solid var(--border)', background: 'var(--bg-surface)' }}>
         <div className="flex items-center gap-2 px-3 py-3 shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
           <span className="flex-1 text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>Processes</span>
           <span className="text-xs px-1.5 py-0.5 rounded" style={{ background: 'var(--bg-elevated)', color: 'var(--text-secondary)' }}>
@@ -504,11 +641,15 @@ export function ProcessesView({ onOpenChat }: { onOpenChat?: () => void } = {}) 
           ))}
         </div>
       </div>
+      )}
 
       {/* Detail */}
+      {showDetail && (
       <div className="flex flex-1 flex-col min-w-0 min-h-0" style={{ background: 'var(--bg-primary)' }}>
         {selectedProcess ? (
-          <ProcessDetail key={selectedProcess.id} def={selectedProcess} />
+          narrow
+            ? <MobileProcessDetail key={selectedProcess.id} def={selectedProcess} onBack={() => setSelectedId(null)} />
+            : <ProcessDetail key={selectedProcess.id} def={selectedProcess} />
         ) : (
           <div className="flex flex-1 flex-col items-center justify-center gap-3">
             <GitBranch size={40} style={{ color: 'var(--text-secondary)', opacity: 0.2 }} />
@@ -518,6 +659,7 @@ export function ProcessesView({ onOpenChat }: { onOpenChat?: () => void } = {}) 
           </div>
         )}
       </div>
+      )}
     </div>
   )
 }
