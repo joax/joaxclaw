@@ -50,7 +50,7 @@ async function readBinary(filePath: string): Promise<string | null> {
 //
 // LOCAL gateway → the file lives on THIS machine: use Electron fs (file.find + readBinary).
 // REMOTE gateway → the file lives on the gateway HOST, unreachable from local fs. Read it
-// over the WS via the joaxclaw-fs plugin's `fs.readMedia` RPC. (See memory:
+// over the WS via the joaxclaw-fs plugin's `host.readMedia` RPC. (See memory:
 // remote-gateway-localhost-pitfall — local file ops only reach a local gateway.)
 // Returns null on any failure (missing file, too large, or an old plugin without the RPC),
 // which the callers render as the "could not load" chip.
@@ -60,7 +60,7 @@ export async function resolveMediaDataUrl(src: string): Promise<string | null> {
       const params = isRelativePath(src)
         ? { filename: src.split('/').pop() ?? src }
         : { path: src }
-      const res = await gatewayClient.request<{ ok?: boolean; dataUrl?: string }>('fs.readMedia', params)
+      const res = await gatewayClient.request<{ ok?: boolean; dataUrl?: string }>('host.readMedia', params)
       return res?.dataUrl ?? null
     } catch {
       return null  // unknown method (plugin not updated) or read error

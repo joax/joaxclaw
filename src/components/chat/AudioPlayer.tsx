@@ -176,7 +176,7 @@ export function AudioPlayer({ attachment, accentColor }: Props) {
 
   useEffect(() => {
     // A file:// URL points at a file on the gateway HOST. resolveMediaDataUrl reads it
-    // locally (Electron fs) or, on a REMOTE gateway, over the WS via fs.readMedia — so
+    // locally (Electron fs) or, on a REMOTE gateway, over the WS via host.readMedia — so
     // audio renders correctly regardless of where the gateway runs.
     if (attachment.url?.startsWith('file://')) {
       let alive = true
