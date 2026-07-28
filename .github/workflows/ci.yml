@@ -45,4 +45,6 @@ jobs:
         run: npm run build
 
       - name: Build (web target)
-        run: npm run build:web
+        # --if-present so this passes on branches that don't have the web target yet
+        # (build:web landed on the mobile branch; it's absent on main until that merges).
+        run: npm run build:web --if-present
