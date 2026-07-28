@@ -440,7 +440,7 @@ function failed(respond, err) {
   respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, `joaxclaw-fs: ${msg}`))
 }
 
-// ── fs.readMedia : read a media file on the gateway HOST as a base64 data URL ─────
+// ── host.readMedia : read a media file on the gateway HOST as a base64 data URL ─────
 // The app renders workspace images/video/audio (the display-media skill's output) by
 // resolving a path to bytes. Locally that's Electron fs, but on a REMOTE gateway the
 // file lives on the host, unreachable from the client — this reads it over the WS.
@@ -461,11 +461,18 @@ async function findMediaOnHost(filename) {
   if (!safe) return ''
   const home = os.homedir()
   for (const [root, depth] of [[path.join(home, '.openclaw'), '6'], [home, '5']]) {
+    // `find` exits NON-ZERO when it hits an unreadable dir (common under $HOME) even
+    // though it still prints matches to stdout. promisify(execFile) rejects on non-zero
+    // exit, so read stdout on BOTH resolve and reject — otherwise a valid hit is lost
+    // whenever the walk also touched a permission-denied directory.
+    let stdout = ''
     try {
-      const { stdout } = await execFileP('find', [root, '-maxdepth', depth, '-name', safe, '-type', 'f'], { timeout: 5000 })
-      const first = stdout.split('\n').map(s => s.trim()).find(Boolean)
-      if (first) return first
-    } catch { /* find missing or no match — try next root */ }
+      ({ stdout } = await execFileP('find', [root, '-maxdepth', depth, '-name', safe, '-type', 'f'], { timeout: 8000, maxBuffer: 4 * 1024 * 1024 }))
+    } catch (e) {
+      stdout = (e && typeof e.stdout === 'string') ? e.stdout : ''
+    }
+    const first = String(stdout).split('\n').map(s => s.trim()).find(Boolean)
+    if (first) return first
   }
   return ''
 }
@@ -717,7 +724,7 @@ function jobWakeMessage(job) {
 export default definePluginEntry({
   id: 'joaxclaw-fs',
   name: 'JoaxClaw FS',
-  description: 'teams.* / processes.* (backed by <stateDir>), engines.* (host-side local-LLM probing), fs.readMedia (host-side media read for remote gateways), and host.metrics (host CPU/RAM/GPU) gateway methods.',
+  description: 'teams.* / processes.* (backed by <stateDir>), engines.* (host-side local-LLM probing), host.readMedia (host-side media read for remote gateways), and host.metrics (host CPU/RAM/GPU) gateway methods.',
   register(api) {
     // ── teams.* ────────────────────────────────────────────────────────────────
     api.registerGatewayMethod('teams.list', async ({ respond }) => {
@@ -859,8 +866,8 @@ export default definePluginEntry({
       } catch (err) { failed(respond, err) }
     }, { scope: WRITE_SCOPE })
 
-    // ── fs.readMedia : host-side media read (remote-gateway media rendering) ─────
-    api.registerGatewayMethod('fs.readMedia', async ({ params, respond }) => {
+    // ── host.readMedia : host-side media read (remote-gateway media rendering) ─────
+    api.registerGatewayMethod('host.readMedia', async ({ params, respond }) => {
       try {
         const rawPath = typeof params?.path === 'string' ? params.path.trim() : ''
         const filename = typeof params?.filename === 'string' ? params.filename.trim() : ''
@@ -868,17 +875,17 @@ export default definePluginEntry({
         if (rawPath) abs = expandHome(rawPath.replace(/^file:\/\//, ''))
         else if (filename) abs = await findMediaOnHost(filename)
         if (!abs) {
-          return respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, 'fs.readMedia requires path or filename'))
+          return respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, 'host.readMedia requires path or filename'))
         }
         let stat
         try { stat = await fs.stat(abs) } catch {
-          return respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, `fs.readMedia: not found: ${abs}`))
+          return respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, `host.readMedia: not found: ${abs}`))
         }
         if (!stat.isFile()) {
-          return respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, `fs.readMedia: not a file: ${abs}`))
+          return respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, `host.readMedia: not a file: ${abs}`))
         }
         if (stat.size > MEDIA_MAX_BYTES) {
-          return respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, `fs.readMedia: file too large (${stat.size} > ${MEDIA_MAX_BYTES} bytes)`))
+          return respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, `host.readMedia: file too large (${stat.size} > ${MEDIA_MAX_BYTES} bytes)`))
         }
         const ext = (abs.split('.').pop() ?? '').toLowerCase()
         const mediaType = MEDIA_MIME[ext] ?? 'application/octet-stream'
