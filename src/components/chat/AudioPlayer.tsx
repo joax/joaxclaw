@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Play, Pause, Music, Cloud } from 'lucide-react'
 import type { MediaAttachment } from '../../lib/types'
+import { resolveMediaDataUrl } from './WorkspaceMedia'
 
 interface Props {
   attachment: MediaAttachment
@@ -174,13 +175,13 @@ export function AudioPlayer({ attachment, accentColor }: Props) {
   const title = displayName(attachment.name, attachment.url)
 
   useEffect(() => {
+    // A file:// URL points at a file on the gateway HOST. resolveMediaDataUrl reads it
+    // locally (Electron fs) or, on a REMOTE gateway, over the WS via fs.readMedia — so
+    // audio renders correctly regardless of where the gateway runs.
     if (attachment.url?.startsWith('file://')) {
-      const localPath = attachment.url.slice('file://'.length)
-      const api = (window as unknown as { api?: { file?: { readBinary?: (p: string) => Promise<{ ok: boolean; dataUrl?: string }> } } }).api
-      api?.file?.readBinary?.(localPath)?.then(res => {
-        if (res.ok && res.dataUrl) setSrcUrl(res.dataUrl)
-      })
-      return
+      let alive = true
+      resolveMediaDataUrl(attachment.url).then(url => { if (alive && url) setSrcUrl(url) })
+      return () => { alive = false }
     }
     if (attachment.url) { setSrcUrl(attachment.url); return }
     if (attachment.data) {
