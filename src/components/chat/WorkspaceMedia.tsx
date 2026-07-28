@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { ZoomIn, X, Download, FileVideo, FileImage, AlertCircle } from 'lucide-react'
+import { gatewayClient } from '../../lib/gateway'
+import { isRemoteGatewayState } from '../../store/connection'
 
 // ── Path → file:// URL ────────────────────────────────────────────────────────
 
@@ -44,6 +46,37 @@ async function readBinary(filePath: string): Promise<string | null> {
   }
 }
 
+// Resolve a workspace media reference to a base64 data URL.
+//
+// LOCAL gateway → the file lives on THIS machine: use Electron fs (file.find + readBinary).
+// REMOTE gateway → the file lives on the gateway HOST, unreachable from local fs. Read it
+// over the WS via the joaxclaw-fs plugin's `fs.readMedia` RPC. (See memory:
+// remote-gateway-localhost-pitfall — local file ops only reach a local gateway.)
+// Returns null on any failure (missing file, too large, or an old plugin without the RPC),
+// which the callers render as the "could not load" chip.
+export async function resolveMediaDataUrl(src: string): Promise<string | null> {
+  if (isRemoteGatewayState()) {
+    try {
+      const params = isRelativePath(src)
+        ? { filename: src.split('/').pop() ?? src }
+        : { path: src }
+      const res = await gatewayClient.request<{ ok?: boolean; dataUrl?: string }>('fs.readMedia', params)
+      return res?.dataUrl ?? null
+    } catch {
+      return null  // unknown method (plugin not updated) or read error
+    }
+  }
+  // Local: resolve a relative name via file.find, then read bytes locally.
+  let absPath: string | null
+  if (isRelativePath(src)) {
+    absPath = await findFile(src.split('/').pop() ?? src)
+  } else {
+    absPath = src.startsWith('file://') ? src.slice(7) : src.startsWith('~/') ? src.replace('~', getHomedir()) : src
+  }
+  if (!absPath) return null
+  return readBinary(absPath)
+}
+
 // ── Extension sets ────────────────────────────────────────────────────────────
 
 export const IMAGE_EXT = /\.(png|jpe?g|gif|webp|svg|bmp|ico|tiff?|avif)(\?[^\s]*)?$/i
@@ -79,16 +112,7 @@ export function WorkspaceImage({ src, alt }: WorkspaceImageProps) {
     setResolving(true)
 
     async function resolve() {
-      let absPath: string | null = null
-      if (isRelativePath(src)) {
-        const filename = src.split('/').pop() ?? src
-        absPath = await findFile(filename)
-      } else {
-        // absolute local path (starts with / or ~/ or file://)
-        absPath = src.startsWith('file://') ? src.slice(7) : src.startsWith('~/') ? src.replace('~', getHomedir()) : src
-      }
-      if (!absPath) { setError(true); setResolving(false); return }
-      const url = await readBinary(absPath)
+      const url = await resolveMediaDataUrl(src)
       if (url) { setDataUrl(url); setResolving(false) }
       else { setError(true); setResolving(false) }
     }
@@ -253,8 +277,33 @@ interface VideoPlayerProps {
 
 export function VideoPlayer({ src, name }: VideoPlayerProps) {
   const [error, setError] = useState(false)
-  const fileUrl = toFileUrl(src)
+  // On a REMOTE gateway the file lives on the host — resolve it to a data URL over the
+  // WS (bounded by the plugin's size cap). Locally, keep the file:// URL so the browser
+  // can stream/seek large videos without loading the whole file into memory.
+  const remote = isRemoteGatewayState() && needsResolution(src)
+  const [remoteUrl, setRemoteUrl] = useState<string | null>(null)
+  const [resolving, setResolving] = useState(() => remote)
+
+  useEffect(() => {
+    if (!remote) return
+    let alive = true
+    setRemoteUrl(null); setError(false); setResolving(true)
+    resolveMediaDataUrl(src).then(url => {
+      if (!alive) return
+      if (url) setRemoteUrl(url); else setError(true)
+      setResolving(false)
+    })
+    return () => { alive = false }
+  }, [src, remote])
+
+  const fileUrl = remote ? (remoteUrl ?? '') : toFileUrl(src)
   const fileName = name ?? src.split('/').pop() ?? src
+
+  if (resolving) {
+    return (
+      <span className="block my-2" style={{ width: 280, height: 158, borderRadius: 'var(--radius)', border: '1px solid var(--border)', background: 'var(--bg-elevated)', animation: 'pulse 1.5s ease-in-out infinite' }} />
+    )
+  }
 
   if (error) {
     return (

@@ -440,6 +440,36 @@ function failed(respond, err) {
   respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, `joaxclaw-fs: ${msg}`))
 }
 
+// ── fs.readMedia : read a media file on the gateway HOST as a base64 data URL ─────
+// The app renders workspace images/video/audio (the display-media skill's output) by
+// resolving a path to bytes. Locally that's Electron fs, but on a REMOTE gateway the
+// file lives on the host, unreachable from the client — this reads it over the WS.
+// Accepts { path } (absolute or ~, optionally file://) or { filename } (searched under
+// ~/.openclaw then ~). Capped to keep base64-over-WS frames sane.
+const MEDIA_MIME = {
+  png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp',
+  svg: 'image/svg+xml', bmp: 'image/bmp', ico: 'image/x-icon', tif: 'image/tiff', tiff: 'image/tiff', avif: 'image/avif',
+  mp4: 'video/mp4', webm: 'video/webm', mov: 'video/quicktime', m4v: 'video/x-m4v', mkv: 'video/x-matroska',
+  ogv: 'video/ogg', avi: 'video/x-msvideo', '3gp': 'video/3gpp',
+  mp3: 'audio/mpeg', ogg: 'audio/ogg', oga: 'audio/ogg', opus: 'audio/ogg', wav: 'audio/wav',
+  m4a: 'audio/mp4', aac: 'audio/aac', flac: 'audio/flac',
+}
+const MEDIA_MAX_BYTES = 32 * 1024 * 1024  // 32 MB
+
+async function findMediaOnHost(filename) {
+  const safe = String(filename ?? '').replace(/[/'"\\]/g, '').trim()  // basename only, no path chars
+  if (!safe) return ''
+  const home = os.homedir()
+  for (const [root, depth] of [[path.join(home, '.openclaw'), '6'], [home, '5']]) {
+    try {
+      const { stdout } = await execFileP('find', [root, '-maxdepth', depth, '-name', safe, '-type', 'f'], { timeout: 5000 })
+      const first = stdout.split('\n').map(s => s.trim()).find(Boolean)
+      if (first) return first
+    } catch { /* find missing or no match — try next root */ }
+  }
+  return ''
+}
+
 // ── host.metrics : the gateway host's CPU / RAM / GPU ────────────────────────────
 // The desktop app's local metrics (`window.api.metrics.get`) describe the CLIENT
 // machine, so on a REMOTE gateway the dashboard showed the wrong host. This reports
@@ -687,7 +717,7 @@ function jobWakeMessage(job) {
 export default definePluginEntry({
   id: 'joaxclaw-fs',
   name: 'JoaxClaw FS',
-  description: 'teams.* / processes.* (backed by <stateDir>), engines.* (host-side local-LLM probing), and host.metrics (host CPU/RAM/GPU) gateway methods.',
+  description: 'teams.* / processes.* (backed by <stateDir>), engines.* (host-side local-LLM probing), fs.readMedia (host-side media read for remote gateways), and host.metrics (host CPU/RAM/GPU) gateway methods.',
   register(api) {
     // ── teams.* ────────────────────────────────────────────────────────────────
     api.registerGatewayMethod('teams.list', async ({ respond }) => {
@@ -828,6 +858,34 @@ export default definePluginEntry({
         respond(true, { ok: true, id })
       } catch (err) { failed(respond, err) }
     }, { scope: WRITE_SCOPE })
+
+    // ── fs.readMedia : host-side media read (remote-gateway media rendering) ─────
+    api.registerGatewayMethod('fs.readMedia', async ({ params, respond }) => {
+      try {
+        const rawPath = typeof params?.path === 'string' ? params.path.trim() : ''
+        const filename = typeof params?.filename === 'string' ? params.filename.trim() : ''
+        let abs = ''
+        if (rawPath) abs = expandHome(rawPath.replace(/^file:\/\//, ''))
+        else if (filename) abs = await findMediaOnHost(filename)
+        if (!abs) {
+          return respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, 'fs.readMedia requires path or filename'))
+        }
+        let stat
+        try { stat = await fs.stat(abs) } catch {
+          return respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, `fs.readMedia: not found: ${abs}`))
+        }
+        if (!stat.isFile()) {
+          return respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, `fs.readMedia: not a file: ${abs}`))
+        }
+        if (stat.size > MEDIA_MAX_BYTES) {
+          return respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, `fs.readMedia: file too large (${stat.size} > ${MEDIA_MAX_BYTES} bytes)`))
+        }
+        const ext = (abs.split('.').pop() ?? '').toLowerCase()
+        const mediaType = MEDIA_MIME[ext] ?? 'application/octet-stream'
+        const data = await fs.readFile(abs)
+        respond(true, { ok: true, path: abs, mediaType, size: stat.size, dataUrl: `data:${mediaType};base64,${data.toString('base64')}` })
+      } catch (err) { failed(respond, err) }
+    }, { scope: READ_SCOPE })
 
     // ── engines.* ────────────────────────────────────────────────────────────────
     // Probe / read local LLM engines on the gateway host. The desktop app can only
