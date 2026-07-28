@@ -5,6 +5,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.20.2] - 2026-07-28
+
+### Fixed
+
+- **Media from the display-media skill now renders on a remote gateway.** Images, video, and audio referenced by a workspace path (e.g. `file://…/color-99.jpg`) were resolved through local file access, so when connected to a **remote** gateway the app looked on the wrong machine and showed a red "could not load" tile. They're now read from the gateway **host** over the connection, via the `joaxclaw-fs` plugin's new `host.readMedia` method (local gateways are unchanged). **Requires updating the `joaxclaw-fs` plugin on your gateway to ≥ 0.11.4** — via Extensions → update, or the "Install via agent" flow.
+
+---
+
 ## [0.20.1] - 2026-07-20
 
 ### Fixed
