@@ -1,0 +1,50 @@
+name: CI
+
+# Verifies every pull request (and manual runs) so `main` can require these checks
+# before merge. Mirrors the local pre-flight: secret scan, type-check, lint, tests,
+# and both the Electron and web builds. No secrets / publish steps — read-only.
+on:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Secret scan
+        run: npm run audit-secrets
+
+      - name: Type-check
+        run: npm run type-check
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Tests
+        run: npm test
+
+      - name: Build (Electron renderer + main)
+        run: npm run build
+
+      - name: Build (web target)
+        # --if-present so this passes on branches that don't have the web target yet
+        # (build:web landed on the mobile branch; it's absent on main until that merges).
+        run: npm run build:web --if-present
