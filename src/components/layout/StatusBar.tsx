@@ -211,13 +211,26 @@ export function StatusBar() {
       </>
       )}
 
-      {/* Compact heartbeat pushed to the right on mobile. */}
-      {narrow && showHeartbeat && status === 'connected' && (
-        <Heart
-          size={12}
-          className={hbPulse ? 'animate-heartbeat' : ''}
-          style={{ marginLeft: 'auto', color: hbLate ? 'var(--warning)' : 'var(--success)' }}
-        />
+      {/* Mobile: a compact heartbeat + the system-monitor toggle, pushed to the right.
+          The monitor still matters on a phone — on a remote gateway it shows the
+          gateway HOST's CPU/RAM/GPU. */}
+      {narrow && (
+        <div className="flex items-center gap-3" style={{ marginLeft: 'auto' }}>
+          {showHeartbeat && status === 'connected' && (
+            <Heart
+              size={12}
+              className={hbPulse ? 'animate-heartbeat' : ''}
+              style={{ color: hbLate ? 'var(--warning)' : 'var(--success)' }}
+            />
+          )}
+          <button
+            onClick={toggleMonitor}
+            title={monitorVisible ? 'Hide system monitor' : 'System monitor'}
+            style={{ display: 'flex', alignItems: 'center', border: 'none', background: 'none', cursor: 'pointer', padding: 0, color: monitorVisible ? 'var(--accent)' : 'var(--text-secondary)' }}
+          >
+            <Cpu size={13} />
+          </button>
+        </div>
       )}
     </div>
   )
