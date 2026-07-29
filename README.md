@@ -135,6 +135,7 @@ npm run dev          # hot-reload dev build (Electron)
 npm run dev:web      # the same renderer in a browser, for the PWA / mobile layout
 npm run build        # production build
 npm run build:web    # static web bundle → out/web (npm run preview:web to serve it)
+npm run build:site   # joaxclaw.ai landing page → out/site
 npm run package:linux  # build the .deb (npm run package:mac for the .dmg)
 ```
 
