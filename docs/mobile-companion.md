@@ -228,5 +228,10 @@ gateway — no `allowedOrigins` change — or any mount point).
         tests green. Settings uses maxWidth so it's already usable. Talk (voice) needs
         its own check.
 - [ ] Pairing/approval UX for a new browser device
-- [ ] Decide wrapper (pure PWA vs Capacitor) → manifest + service worker, or native shell
+- [x] **Decide wrapper → pure PWA.** Installable: `public/manifest.webmanifest` (standalone,
+      192/512 + maskable icons), `public/sw.js` (dependency-free: network-first shell,
+      cache-first hashed assets — a real fetch handler, so it satisfies install criteria),
+      apple-touch + standalone metas in `index.html`, and SW registration in `main.tsx`
+      gated to the browser build (never Electron). Verified via `build:web` (assets emitted)
+      + desktop build unaffected. No native shell.
 - [ ] Notifications
