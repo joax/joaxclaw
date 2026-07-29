@@ -475,21 +475,54 @@ export function ChatView({ solo }: { solo?: string } = {}) {
         <div className="relative z-[1] flex flex-1 flex-col min-w-0 min-h-0">
         {activeConv ? (
           <>
-            {/* Chat header */}
+            {/* Chat header — two stacked rows on mobile (nav + title + menu, then the
+                model/thinking pills) so the title can't wrap and the controls can't
+                overflow off-screen; a single dense row on desktop. */}
+            {narrow ? (
+              <div className="flex flex-col shrink-0" style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-surface)' }}>
+                <div className="flex items-center gap-2 px-3 text-sm" style={{ minHeight: 48 }}>
+                  {!solo && (
+                    <button
+                      onClick={() => selectConversation('')}
+                      aria-label="Back to chats"
+                      style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 32, height: 32, marginLeft: -4, borderRadius: 'var(--radius)', border: 'none', background: 'transparent', color: 'var(--text-primary)', cursor: 'pointer', flexShrink: 0 }}
+                    >
+                      <ArrowLeft size={20} />
+                    </button>
+                  )}
+                  <span style={{ flexShrink: 0 }}>🤖</span>
+                  <span className="font-medium" style={{ color: 'var(--text-primary)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {convDisplayName(activeConv)}
+                  </span>
+                  {activeConv.sessionKey?.includes(':heartbeat') && (
+                    <Heart size={14} title="Heartbeat session" style={{ color: 'var(--accent)', opacity: 0.8, flexShrink: 0 }} />
+                  )}
+                  <DisplayMenu
+                    mode={chatMode}
+                    setMode={setChatMode}
+                    reasoning={showReasoning} setReasoning={setShowReasoning}
+                    actions={showTools}       setActions={setShowTools}
+                    context={showContext}     setContext={setShowContext}
+                  />
+                </div>
+                {/* Per-chat model + thinking overrides — own row, scrolls if it can't fit. */}
+                <div className="flex items-center gap-1.5 px-3 pb-2" style={{ overflowX: 'auto' }}>
+                  <ModelSelect
+                    value={activeConv.modelOverride}
+                    agentDefault={agents.find(a => a.id === activeConv.agentId)?.model?.primary}
+                    onChange={model => setModelOverride(activeConv.id, model)}
+                  />
+                  <ThinkingSelect
+                    value={activeConv.thinkingLevel}
+                    onChange={level => setThinkingLevel(activeConv.id, level)}
+                  />
+                </div>
+              </div>
+            ) : (
             <div
               className="flex items-center gap-3 px-4 py-2 shrink-0 text-sm"
               style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-surface)' }}
             >
-              {/* Mobile: return to the chat list */}
-              {narrow && !solo && (
-                <button
-                  onClick={() => selectConversation('')}
-                  aria-label="Back to chats"
-                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 30, height: 30, marginLeft: -6, borderRadius: 'var(--radius)', border: 'none', background: 'transparent', color: 'var(--text-primary)', cursor: 'pointer', flexShrink: 0 }}
-                >
-                  <ArrowLeft size={18} />
-                </button>
-              )}
               <span>🤖</span>
               <span className="font-medium" style={{ color: 'var(--text-primary)' }}>
                 {convDisplayName(activeConv)}
@@ -548,6 +581,7 @@ export function ChatView({ solo }: { solo?: string } = {}) {
                 ) : null}
               </div>
             </div>
+            )}
 
             {showContext && activeConv.sessionKey && (
               <ContextBar sessionKey={activeConv.sessionKey} />
