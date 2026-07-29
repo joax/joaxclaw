@@ -81,9 +81,14 @@ export function StatusBar() {
   return (
     <div
       className="flex items-center px-3 shrink-0 text-xs"
+      // On mobile the whole bar is the tap target for the system monitor — a 28px icon
+      // is too small for a finger, so the full-width, taller bar opens the sheet.
+      onClick={narrow ? toggleMonitor : undefined}
+      role={narrow ? 'button' : undefined}
       style={{
-        height: 28,
+        height: narrow ? 34 : 28,
         gap: narrow ? 8 : 16,
+        cursor: narrow ? 'pointer' : 'default',
         background: 'var(--bg-surface)',
         borderTop: '1px solid var(--border)',
         color: 'var(--text-secondary)'
@@ -211,11 +216,11 @@ export function StatusBar() {
       </>
       )}
 
-      {/* Mobile: a compact heartbeat + the system-monitor toggle, pushed to the right.
-          The monitor still matters on a phone — on a remote gateway it shows the
-          gateway HOST's CPU/RAM/GPU. */}
+      {/* Mobile: a compact heartbeat + a chevron affordance, pushed right. The whole
+          bar (above) is the tap target that opens the monitor sheet — on a remote
+          gateway that shows the gateway HOST's CPU/RAM/GPU. */}
       {narrow && (
-        <div className="flex items-center gap-3" style={{ marginLeft: 'auto' }}>
+        <div className="flex items-center gap-2.5" style={{ marginLeft: 'auto' }}>
           {showHeartbeat && status === 'connected' && (
             <Heart
               size={12}
@@ -223,13 +228,10 @@ export function StatusBar() {
               style={{ color: hbLate ? 'var(--warning)' : 'var(--success)' }}
             />
           )}
-          <button
-            onClick={toggleMonitor}
-            title={monitorVisible ? 'Hide system monitor' : 'System monitor'}
-            style={{ display: 'flex', alignItems: 'center', border: 'none', background: 'none', cursor: 'pointer', padding: 0, color: monitorVisible ? 'var(--accent)' : 'var(--text-secondary)' }}
-          >
-            <Cpu size={13} />
-          </button>
+          <span className="flex items-center gap-1" style={{ color: monitorVisible ? 'var(--accent)' : 'var(--text-secondary)' }}>
+            <Cpu size={12} />
+            <ChevronUp size={13} style={{ transform: monitorVisible ? 'rotate(180deg)' : undefined, transition: 'transform 0.2s' }} />
+          </span>
         </div>
       )}
     </div>
