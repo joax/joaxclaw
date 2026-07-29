@@ -6,6 +6,7 @@ import { agentIdFromSessionKey as agentIdFromKey } from '../lib/sessionName'
 import { useExtensionsStore } from './extensions'
 import { useConnectionStore } from './connection'
 import { useSettingsStore } from './settings'
+import { notify, notifyPreview } from '../lib/notifications'
 import { buildProfilePreamble } from '../lib/userProfile'
 
 const AUDIO_EXT = /\.(mp3|ogg|wav|m4a|aac|opus|webm|flac)(\?[^\s]*)?$/i
@@ -347,6 +348,16 @@ function attachChatStream(
       })
       if (yieldedWaitingForSubAgent) return  // keep the stream open for the auto-resume
       finalizeThreads(update)
+      // Local notification when a reply lands while the app is backgrounded (PWA).
+      if (finalText) {
+        const conv = useChatStore.getState().conversations.find(c => c.id === convId)
+        void notify({
+          title: conv?.agentName || conv?.title || 'New reply',
+          body: notifyPreview(finalText),
+          tag: `reply:${convId}`,
+          navigate: { section: 'chat', convId },
+        })
+      }
       activeStreams.delete(convId)
       unsub()
     } else if (p.state === 'error' || p.state === 'incomplete') {

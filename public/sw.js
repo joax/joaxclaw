@@ -25,6 +25,43 @@ self.addEventListener('activate', (event) => {
   )
 })
 
+// Tapping a notification: focus an existing app window (or open one) and tell it
+// where to route. The client re-dispatches this as a `joax:navigate` window event.
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close()
+  const nav = event.notification.data && event.notification.data.navigate
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
+      for (const c of list) {
+        if ('focus' in c) {
+          c.focus()
+          if (nav) c.postMessage({ type: 'joax-navigate', navigate: nav })
+          return
+        }
+      }
+      return self.clients.openWindow('./').then((c) => {
+        if (c && nav) c.postMessage({ type: 'joax-navigate', navigate: nav })
+      })
+    })
+  )
+})
+
+// Tier 2 (true background push) placeholder — inert until the gateway sends Web Push.
+self.addEventListener('push', (event) => {
+  let payload = {}
+  try { payload = event.data ? event.data.json() : {} } catch { /* ignore */ }
+  if (!payload || !payload.title) return
+  event.waitUntil(
+    self.registration.showNotification(payload.title, {
+      body: payload.body,
+      tag: payload.tag,
+      icon: './icons/icon-192.png',
+      badge: './icons/icon-192.png',
+      data: { navigate: payload.navigate },
+    })
+  )
+})
+
 self.addEventListener('fetch', (event) => {
   const req = event.request
   if (req.method !== 'GET') return
