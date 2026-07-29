@@ -42,6 +42,9 @@ Electron, React, and TypeScript.
   [`openclaw-joaxclaw-fs`](https://www.npmjs.com/package/openclaw-joaxclaw-fs)),
   installable from the app in one click.
 - **Obsidian** — vault browser, graph view, and memory panel.
+- **Mobile (PWA)** — the same app, installable on a phone: pairs as its own device, with
+  a phone design pass on every view and background notifications. See
+  [On your phone](#on-your-phone-pwa).
 - **Dashboard & themes** — quick-send, recent conversations, live metrics; dark / light /
   custom themes with full CSS-variable control.
 
@@ -92,12 +95,46 @@ Processes, and engine health work over the connection — the app offers a one-c
 openclaw plugins install --force openclaw-joaxclaw-fs && openclaw plugins enable joaxclaw-fs && openclaw gateway restart
 ```
 
+## On your phone (PWA)
+
+The renderer also builds as a plain web app you can install on a phone — same features,
+same gateway connection, no app store.
+
+```bash
+npm run build:web    # static bundle → out/web
+```
+
+Serve `out/web` from anywhere your phone can reach, then open it and **Add to Home
+Screen**. Two things to get right:
+
+- **A secure context.** Service workers, install, and the WebCrypto device key all
+  require **HTTPS** (or `localhost`) — a plain `http://192.168.…` origin won't do.
+  Tailscale Serve or any TLS-terminating reverse proxy in front of the bundle works.
+- **An allowed origin.** Loopback, RFC1918, `.local`, and `.ts.net` origins are
+  auto-accepted by the gateway; anything else has to be listed in
+  `gateway.controlUi.allowedOrigins`, or the connection is refused before scopes are
+  even considered.
+
+The phone pairs as **its own device** — it generates a non-extractable Ed25519 key and
+signs the connect challenge, so it never needs the desktop's token. On first connect the
+app shows the device id and waits; approve it on the host and it connects on its own:
+
+```bash
+openclaw devices approve --latest
+```
+
+Turn on **Settings → Notifications** to get an OS notification when a reply, reminder, or
+team/process run finishes while the app is backgrounded. Design notes and the scope
+research behind all of this: [docs/mobile-companion.md](docs/mobile-companion.md).
+
 ## Develop
 
 ```bash
 npm install
-npm run dev          # hot-reload dev build
+npm run dev          # hot-reload dev build (Electron)
+npm run dev:web      # the same renderer in a browser, for the PWA / mobile layout
 npm run build        # production build
+npm run build:web    # static web bundle → out/web (npm run preview:web to serve it)
 npm run package:linux  # build the .deb (npm run package:mac for the .dmg)
 ```
 
