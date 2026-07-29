@@ -37,6 +37,9 @@ interface ConnectionState {
   // Operator scopes the gateway granted this connection (from the connect handshake).
   // Drives client-side gating of admin-only UI; the gateway still enforces it.
   grantedScopes: string[]
+  // Set while this (new) device is awaiting one-time approval on the gateway host. The
+  // store retries the handshake on an interval; the connect screen shows a pairing card.
+  pairingPending: { deviceId: string } | null
 
   connect: (conn: GatewayConnection) => void
   disconnect: () => void
@@ -85,6 +88,14 @@ function clearReconnect() {
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
 }
 
+// Device-pairing retry: while a new device waits for approval on the host, re-run the
+// handshake on this interval until the operator approves it (then it connects).
+let pairingTimer: ReturnType<typeof setTimeout> | null = null
+const PAIRING_RETRY_MS = 4000
+function clearPairing() {
+  if (pairingTimer) { clearTimeout(pairingTimer); pairingTimer = null }
+}
+
 // Latency-ping loop, only alive while connected (also a timer, not UI state).
 let pingTimer: ReturnType<typeof setInterval> | null = null
 
@@ -128,19 +139,35 @@ export const useConnectionStore = create<ConnectionState>()(
       reconnecting: false,
       reconnectAttempt: 0,
       grantedScopes: [],
+      pairingPending: null,
 
       connect(conn) {
         intentionalDisconnect = false
         attempt = 0
         clearReconnect()
+        clearPairing()
         stopPingLoop()
-        set({ status: 'connecting', connection: conn, heartbeats: [], lastHeartbeat: null, pings: [], lastRtt: null, reconnecting: false, reconnectAttempt: 0 })
+        set({ status: 'connecting', connection: conn, heartbeats: [], lastHeartbeat: null, pings: [], lastRtt: null, reconnecting: false, reconnectAttempt: 0, pairingPending: null })
+
+        // New device awaiting approval on the host: keep the "waiting for approval" card
+        // up and re-run the handshake every few seconds until the operator approves it.
+        gatewayClient.onPairingPending = (deviceId) => {
+          clearReconnect()
+          set({ status: 'connecting', statusDetail: '', reconnecting: false, pairingPending: { deviceId } })
+          clearPairing()
+          pairingTimer = setTimeout(() => {
+            if (intentionalDisconnect || !get().pairingPending) return
+            const c = get().connection
+            if (c) gatewayClient.connect(c.url, c.token)
+          }, PAIRING_RETRY_MS)
+        }
 
         gatewayClient.onStatusChange = (status, detail) => {
           if (status === 'connected') {
             attempt = 0
             clearReconnect()
-            set({ status: 'connected', statusDetail: '', uptimeStart: Date.now(), reconnecting: false, reconnectAttempt: 0, grantedScopes: [...gatewayClient.grantedScopes] })
+            clearPairing()
+            set({ status: 'connected', statusDetail: '', uptimeStart: Date.now(), reconnecting: false, reconnectAttempt: 0, grantedScopes: [...gatewayClient.grantedScopes], pairingPending: null })
             startPingLoop()
           } else if (status === 'connecting') {
             // Don't clobber the "reconnecting" banner with a plain connecting state.
@@ -149,9 +176,13 @@ export const useConnectionStore = create<ConnectionState>()(
             // Bad token — looping would never succeed, so stop and surface it.
             intentionalDisconnect = true
             clearReconnect()
+            clearPairing()
             stopPingLoop()
-            set({ status: 'error', statusDetail: detail ?? '', uptimeStart: null, uptime: 0, reconnecting: false, reconnectAttempt: 0 })
+            set({ status: 'error', statusDetail: detail ?? '', uptimeStart: null, uptime: 0, reconnecting: false, reconnectAttempt: 0, pairingPending: null })
           } else {
+            // While pairing, the transient socket drop from a failed handshake is expected
+            // — the pairing retry owns reconnection, so don't fall into the normal path.
+            if (get().pairingPending) { stopPingLoop(); return }
             // Unexpected drop or transient error → auto-reconnect (gateway reload).
             stopPingLoop()
             set({ status: 'disconnected', statusDetail: detail ?? '', uptimeStart: null, uptime: 0 })
@@ -179,17 +210,19 @@ export const useConnectionStore = create<ConnectionState>()(
       disconnect() {
         intentionalDisconnect = true
         clearReconnect()
+        clearPairing()
         stopPingLoop()
         gatewayClient.disconnect()
-        set({ status: 'disconnected', connection: null, uptimeStart: null, uptime: 0, pings: [], lastRtt: null, reconnecting: false, reconnectAttempt: 0, grantedScopes: [] })
+        set({ status: 'disconnected', connection: null, uptimeStart: null, uptime: 0, pings: [], lastRtt: null, reconnecting: false, reconnectAttempt: 0, grantedScopes: [], pairingPending: null })
       },
 
       cancelReconnect() {
         intentionalDisconnect = true
         clearReconnect()
+        clearPairing()
         stopPingLoop()
         gatewayClient.disconnect()
-        set({ status: 'disconnected', statusDetail: '', reconnecting: false, reconnectAttempt: 0 })
+        set({ status: 'disconnected', statusDetail: '', reconnecting: false, reconnectAttempt: 0, pairingPending: null })
       },
 
       saveConnection(conn) {

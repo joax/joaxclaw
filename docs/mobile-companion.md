@@ -227,7 +227,13 @@ gateway — no `allowedOrigins` change — or any mount point).
         editor) — all narrow-gated, desktop unchanged; type-check + build:web + 365
         tests green. Settings uses maxWidth so it's already usable. Talk (voice) needs
         its own check.
-- [ ] Pairing/approval UX for a new browser device
+- [x] **Pairing/approval UX for a new browser device.** A new device now hits a
+      recoverable *pairing-pending* state (not a terminal auth error): the connect screen
+      shows an "Approve this device" card (deviceId + `openclaw devices approve --latest`)
+      and the store **retries the handshake every 4s**, so it connects the moment you
+      approve it on the host — no manual reconnect. `gatewayClient.onPairingPending`,
+      `connection.pairingPending` + retry loop, card in `ConnectScreen`. (Verify the full
+      approval loop on a real device.)
 - [x] **Decide wrapper → pure PWA.** Installable: `public/manifest.webmanifest` (standalone,
       192/512 + maskable icons), `public/sw.js` (dependency-free: network-first shell,
       cache-first hashed assets — a real fetch handler, so it satisfies install criteria),
