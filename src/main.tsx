@@ -23,6 +23,13 @@ if (!isElectron() && 'serviceWorker' in navigator) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('./sw.js').catch(() => { /* SW optional; app still runs */ })
   })
+  // A tapped notification posts here from the SW; re-dispatch as a window event the
+  // app listens for to route to the right chat/view.
+  navigator.serviceWorker.addEventListener('message', (e) => {
+    if (e.data?.type === 'joax-navigate' && e.data.navigate) {
+      window.dispatchEvent(new CustomEvent('joax:navigate', { detail: e.data.navigate }))
+    }
+  })
 }
 
 // Apply the active theme before first render. The settings store has already

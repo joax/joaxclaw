@@ -54,6 +54,10 @@ interface SettingsState {
   // Whole-app zoom level (Electron webFrame zoom). 0 = 100%; each ±0.5 step ≈ ±10%.
   uiZoom: number
 
+  // Local notifications (PWA/web build): alert on a finished reply / reminder / run
+  // while the app is backgrounded. Off by default; enabling requests OS permission.
+  notificationsEnabled: boolean
+
   // Auto-updater: check GitHub Releases on launch + periodically when enabled.
   autoUpdateCheck: boolean
   // A version the user chose to "Skip" — suppresses the banner until a newer one.
@@ -73,6 +77,7 @@ interface SettingsState {
   setUseNameAsIdentity: (on: boolean) => void
   dismissWelcome: () => void
 
+  setNotificationsEnabled: (on: boolean) => void
   setAutoUpdateCheck: (on: boolean) => void
   setSkippedUpdateVersion: (version: string) => void
   setChatMode: (mode: 'basic' | 'advanced') => void
@@ -105,6 +110,7 @@ export const useSettingsStore = create<SettingsState>()(
       streamStallTimeout: 60,
       chatMode: 'advanced',
       uiZoom: 0,
+      notificationsEnabled: false,
       autoUpdateCheck: true,
       skippedUpdateVersion: '',
 
@@ -118,6 +124,7 @@ export const useSettingsStore = create<SettingsState>()(
       setUseNameAsIdentity(on) { set({ useNameAsIdentity: on }) },
       dismissWelcome() { set({ welcomeSeen: true }) },
 
+      setNotificationsEnabled(on) { set({ notificationsEnabled: on }) },
       setAutoUpdateCheck(on) { set({ autoUpdateCheck: on }) },
       setSkippedUpdateVersion(version) { set({ skippedUpdateVersion: version }) },
 

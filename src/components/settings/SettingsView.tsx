@@ -3,6 +3,7 @@ import { RefreshCw, Download, ExternalLink, RotateCw, Sparkles, CheckCircle2 } f
 import { useSettingsStore, ZOOM_MIN, ZOOM_MAX, ZOOM_STEP } from '../../store/settings'
 import { useUpdaterStore } from '../../store/updater'
 import { useIsNarrow } from '../../lib/useIsNarrow'
+import { notificationsSupported, notificationPermission, requestNotificationPermission } from '../../lib/notifications'
 import { Btn } from '../ui/Btn'
 
 // Theme editing lives in its own screen now (components/theme/ThemesView). This keeps the
@@ -61,9 +62,42 @@ export function SettingsView() {
           </div>
         </Section>
 
+        <NotificationsSection />
+
         <UpdatesSection />
       </div>
     </div>
+  )
+}
+
+// Local notifications (PWA/web build only — desktop has its own window/tray).
+function NotificationsSection() {
+  const notificationsEnabled = useSettingsStore(s => s.notificationsEnabled)
+  const setNotificationsEnabled = useSettingsStore(s => s.setNotificationsEnabled)
+  const [perm, setPerm] = useState(notificationPermission())
+
+  if (!notificationsSupported()) return null
+
+  const onToggle = async (on: boolean) => {
+    if (!on) { setNotificationsEnabled(false); return }
+    const p = await requestNotificationPermission()
+    setPerm(p)
+    setNotificationsEnabled(p === 'granted')
+  }
+
+  return (
+    <Section title="Notifications">
+      <Toggle
+        label="Notify me when a reply, reminder, or run finishes"
+        value={notificationsEnabled}
+        onChange={onToggle}
+      />
+      <p className="text-xs mt-2" style={{ color: 'var(--text-secondary)', opacity: 0.7 }}>
+        {perm === 'denied'
+          ? 'Notifications are blocked for this site — enable them in your browser/OS settings, then toggle this on.'
+          : 'Alerts fire only while the app is in the background. Add this app to your home screen for the best experience.'}
+      </p>
+    </Section>
   )
 }
 

@@ -24,6 +24,8 @@ import { ScopeWarningBanner } from './components/layout/ScopeWarningBanner'
 import { WelcomeModal } from './components/layout/WelcomeModal'
 import { BottomNav } from './components/layout/BottomNav'
 import { useIsNarrow } from './lib/useIsNarrow'
+import { useNotificationsWatcher } from './lib/useNotificationsWatcher'
+import { useChatStore } from './store/chat'
 import { isElectron } from './lib/platform'
 import { useUpdaterStore } from './store/updater'
 import { useConnectionStore, restoreConnectionsFromBackup } from './store/connection'
@@ -40,6 +42,7 @@ export type NavSection = 'dashboard' | 'chat' | 'talk' | 'agents' | 'processes' 
 export default function App() {
   const [section, setSection] = useState<NavSection>('dashboard')
   const narrow = useIsNarrow()
+  useNotificationsWatcher()
   const { status, connection, reconnecting } = useConnectionStore()
   const { start: startMetrics, stop: stopMetrics } = useMetricsStore()
   const { monitorVisible, welcomeSeen } = useSettingsStore()
@@ -123,6 +126,18 @@ export default function App() {
   useEffect(() => {
     const off = window.api?.app?.onNavigate?.(s => setSection(s as NavSection))
     return () => off?.()
+  }, [])
+
+  // A tapped PWA notification routes here (via the service worker → main.tsx window event).
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const nav = (e as CustomEvent).detail as { section?: NavSection; convId?: string } | undefined
+      if (!nav) return
+      if (nav.convId) useChatStore.getState().selectConversation(nav.convId)
+      if (nav.section) setSection(nav.section)
+    }
+    window.addEventListener('joax:navigate', handler)
+    return () => window.removeEventListener('joax:navigate', handler)
   }, [])
 
   // Install the app-native agent skills (ask-user, script-runner, process-builder,
