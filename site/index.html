@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JoaxClaw — a desktop control UI for your OpenClaw gateway</title>
+<meta name="description" content="Chat with your agents, build multi-agent teams, schedule jobs, and manage models and channels — a native desktop app for an OpenClaw gateway. Free and open source.">
+<meta property="og:title" content="JoaxClaw">
+<meta property="og:description" content="A desktop control UI for your OpenClaw gateway. Free and open source.">
+<meta property="og:type" content="website">
+<meta property="og:image" content="https://joaxclaw.ai/assets/icon.png">
+<link rel="icon" href="assets/icon.png">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header class="nav">
+  <a class="brand" href="/">
+    <picture>
+      <source srcset="assets/logo-on-light.png" media="(prefers-color-scheme: light)">
+      <img src="assets/logo-on-dark.png" alt="" width="28" height="28">
+    </picture>
+    <span>JoaxClaw</span>
+  </a>
+  <nav>
+    <a href="#features">Features</a>
+    <a href="#download">Download</a>
+    <a href="changelog.html">Changelog</a>
+    <a href="#support">Support</a>
+    <a href="https://github.com/joax/joaxclaw">GitHub</a>
+  </nav>
+</header>
+
+<main>
+
+<section class="hero">
+  <picture>
+    <source srcset="assets/logo-on-light.png" media="(prefers-color-scheme: light)">
+    <img class="hero-logo" src="assets/logo-on-dark.png" alt="JoaxClaw" width="96" height="96">
+  </picture>
+  <h1>Your gateway, under control.</h1>
+  <p class="lede">
+    JoaxClaw is a desktop app for an <a href="https://openclaw.dev">OpenClaw</a> gateway —
+    chat with your agents, build multi-agent teams, schedule jobs, and manage models,
+    channels, and plugins. Local or remote, it's your gateway and your machine.
+  </p>
+  <div class="cta">
+    <a class="btn primary" href="{{MAC_URL}}" data-download="mac">
+      Download for macOS <span class="meta">{{MAC_SIZE}}</span>
+    </a>
+    <a class="btn primary" href="{{LINUX_URL}}" data-download="linux">
+      Download for Linux <span class="meta">{{LINUX_SIZE}}</span>
+    </a>
+  </div>
+  <p class="fineprint">
+    <span data-version>{{VERSION}}</span> · Free and open source (MIT) ·
+    <a href="{{RELEASES}}">All releases</a>
+  </p>
+</section>
+
+<section class="shots" aria-label="Screenshots">
+  <figure>
+    <img src="assets/screenshots/dashboard.png" alt="The JoaxClaw dashboard" loading="lazy">
+    <figcaption>Dashboard — quick-send, recent chats, live host metrics</figcaption>
+  </figure>
+  <figure>
+    <img src="assets/screenshots/agents.png" alt="The agent hierarchy view" loading="lazy">
+    <figcaption>Agents — the hierarchy, visually</figcaption>
+  </figure>
+</section>
+
+<section id="features">
+  <h2>What's inside</h2>
+  <div class="grid">
+    <article>
+      <h3>Chat &amp; agents</h3>
+      <p>Streaming responses with reasoning blocks and tool-call visibility. Attach images, documents, and audio. Browse, search, and replay past sessions.</p>
+    </article>
+    <article>
+      <h3>Teams &amp; processes</h3>
+      <p>A visual builder for multi-agent workflows with conditional branching and revision history, plus a live execution monitor.</p>
+    </article>
+    <article>
+      <h3>Channels</h3>
+      <p>Manage the messaging platforms your gateway talks on — scoped agent routing, multi-account, and a per-channel policy editor.</p>
+    </article>
+    <article>
+      <h3>Scheduled jobs</h3>
+      <p>Run an agent turn or an entire team on a cron schedule, unattended, with run history.</p>
+    </article>
+    <article>
+      <h3>Models &amp; local engines</h3>
+      <p>Configure providers, track per-model cost, and detect or health-check Ollama, LM Studio, vLLM, llama.cpp, Jan, and KoboldCpp.</p>
+    </article>
+    <article>
+      <h3>Remote gateways</h3>
+      <p>Everything works against a gateway on another machine, over Tailscale or your LAN, via a companion plugin you install in one click.</p>
+    </article>
+  </div>
+</section>
+
+<section id="download">
+  <h2>Download</h2>
+  <div class="grid two">
+    <article>
+      <h3>macOS</h3>
+      <p><a class="btn" href="{{MAC_URL}}" data-download="mac">JoaxClaw.dmg <span class="meta">{{MAC_SIZE}}</span></a></p>
+      <p>The build is currently <strong>unsigned</strong>, so macOS blocks it on first launch. Open <em>System Settings → Privacy &amp; Security → Open Anyway</em>, or run:</p>
+      <pre><code>sudo xattr -rd com.apple.quarantine /Applications/JoaxClaw.app</code></pre>
+    </article>
+    <article>
+      <h3>Linux</h3>
+      <p><a class="btn" href="{{LINUX_URL}}" data-download="linux">joaxclaw.deb <span class="meta">{{LINUX_SIZE}}</span></a></p>
+      <p>Install it with:</p>
+      <pre><code>sudo dpkg -i joaxclaw_*.deb
+sudo apt-get install -f</code></pre>
+      <p>Then launch <strong>JoaxClaw</strong> from your app menu.</p>
+    </article>
+  </div>
+  <p class="note">
+    You'll also need an <a href="https://openclaw.dev">OpenClaw gateway</a> running locally
+    or on a machine you can reach. Building from source? See the
+    <a href="https://github.com/joax/joaxclaw#develop">repository</a>.
+  </p>
+</section>
+
+<section id="support">
+  <h2>Support the project</h2>
+  <p class="lede narrow">
+    JoaxClaw is free, open source, and built in the open — no accounts, no telemetry, no
+    paid tier. If it's useful to you, sponsorship covers the costs of building and
+    releasing it.
+  </p>
+  <p class="cta">
+    <a class="btn primary" href="https://github.com/sponsors/joax">♥ Sponsor on GitHub</a>
+  </p>
+  <p class="fineprint">
+    Handled entirely by GitHub Sponsors — one-off or monthly, cancel any time.
+    Contributions of code and bug reports are just as welcome:
+    <a href="https://github.com/joax/joaxclaw/issues">open an issue</a>.
+  </p>
+</section>
+
+</main>
+
+<footer>
+  <p>
+    <a href="changelog.html">Changelog</a> ·
+    <a href="privacy.html">Privacy</a> ·
+    <a href="https://github.com/joax/joaxclaw">Source</a> ·
+    <a href="https://github.com/joax/joaxclaw/blob/main/LICENSE">MIT</a>
+  </p>
+  <p class="fineprint">© {{YEAR}} JoaxClaw · Not affiliated with the OpenClaw project.</p>
+</footer>
+
+<script src="download.js" defer></script>
+</body>
+</html>

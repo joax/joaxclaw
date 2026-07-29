@@ -1,0 +1,65 @@
+name: Deploy site
+
+# Publishes joaxclaw.ai (out/site) to GitHub Pages.
+#
+# Runs when the site sources or the changelog change, and again whenever a release is
+# published so the download buttons pick up the new artifacts. (The page also refreshes
+# them client-side, so a missed run is cosmetic, not broken.)
+#
+# Repo setup, once: Settings → Pages → Source = "GitHub Actions", and point the
+# joaxclaw.ai DNS at GitHub Pages. site/CNAME carries the custom domain.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'site/**'
+      - 'scripts/build-site.mjs'
+      - 'scripts/markdown.mjs'
+      - 'CHANGELOG.md'
+      - 'docs/screenshots/**'
+      - '.github/workflows/deploy-site.yml'
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never let two deploys race; let a newer one supersede a queued one.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Build the site
+        run: node scripts/build-site.mjs
+        env:
+          # Lifts the unauthenticated API rate limit for the release lookup.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: out/site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
