@@ -10,6 +10,7 @@ import { cronJobForSession } from '../../lib/reminders'
 import { useModelsStore } from '../../store/models'
 import { useSettingsStore } from '../../store/settings'
 import { MessageThread } from './MessageThread'
+import { ScriptJobDock } from './ScriptJobDock'
 import { MobileChatList } from './MobileChatList'
 import { ThemeBackground } from '../theme/ThemeBackground'
 import { MessageInput } from './MessageInput'
@@ -586,6 +587,9 @@ export function ChatView({ solo }: { solo?: string } = {}) {
             {showContext && activeConv.sessionKey && (
               <ContextBar sessionKey={activeConv.sessionKey} />
             )}
+            {/* Scripts this chat has running — pinned above the thread so progress and
+                output stay reachable however far the user has scrolled. */}
+            <ScriptJobDock key={activeConv.id} messages={activeConv.messages} sessionKey={activeConv.sessionKey} />
             <MessageThread conv={activeConv} showTools={showTools} showReasoning={showReasoning} />
             <MessageInput convId={activeConv.id} />
           </>
