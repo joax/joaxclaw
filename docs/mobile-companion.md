@@ -221,9 +221,12 @@ gateway — no `allowedOrigins` change — or any mount point).
           with live status, step list; graph editing stays on desktop.
         - **Agents** — system overview's wide SVG grid becomes stacked `Block` sections
           (channels / entry agents / sub-agents / tools / vaults); tap → full-screen editor.
-  - [ ] Remaining list+detail views still need master-detail (like Crons): Memory,
-        Gateway (sub-tabs), Models, Themes. Settings uses maxWidth so it's already
-        usable. Talk (voice) needs its own check.
+  - [x] Remaining list+detail views got master-detail (like Crons): **Memory**
+        (connections ↔ detail), **Gateway** (200px sub-tab rail → full-width menu ↔
+        content), **Models** (provider list ↔ provider panel), **Themes** (gallery ↔
+        editor) — all narrow-gated, desktop unchanged; type-check + build:web + 365
+        tests green. Settings uses maxWidth so it's already usable. Talk (voice) needs
+        its own check.
 - [ ] Pairing/approval UX for a new browser device
 - [ ] Decide wrapper (pure PWA vs Capacitor) → manifest + service worker, or native shell
 - [ ] Notifications

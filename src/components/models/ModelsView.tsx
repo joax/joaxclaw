@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { Plus, Trash2, ChevronRight, Cpu, KeyRound, Link, Pencil, Check, X, RefreshCw, AlertCircle, Save, BarChart2, Plug, HardDriveDownload } from 'lucide-react'
+import { Plus, Trash2, ChevronRight, Cpu, KeyRound, Link, Pencil, Check, X, RefreshCw, AlertCircle, Save, BarChart2, Plug, HardDriveDownload, ArrowLeft } from 'lucide-react'
+import { useIsNarrow } from '../../lib/useIsNarrow'
 import { useModelsStore } from '../../store/models'
 import { LocalModelsPanel } from './LocalModelsPanel'
 import { useSessionsStore } from '../../store/sessions'
@@ -309,7 +310,7 @@ function ConfigField({ icon, label, value, onSave, placeholder }: {
 
 // ── Provider panel ────────────────────────────────────────────────────────────
 
-function ProviderPanel({ id, provider }: { id: string; provider: GwModelProvider }) {
+function ProviderPanel({ id, provider, onBack }: { id: string; provider: GwModelProvider; onBack?: () => void }) {
   const { updateProviderConfig, deleteModel } = useModelsStore()
   const [addingModel, setAddingModel] = useState(false)
 
@@ -317,6 +318,11 @@ function ProviderPanel({ id, provider }: { id: string; provider: GwModelProvider
     <div className="flex flex-col flex-1 min-h-0" style={{ background: 'var(--bg-primary)' }}>
       {/* Header */}
       <div className="px-5 py-3 flex items-center gap-3" style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-surface)' }}>
+        {onBack && (
+          <button onClick={onBack} title="Back" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 32, height: 32, marginLeft: -6, borderRadius: 'var(--radius)', border: 'none', background: 'transparent', color: 'var(--text-primary)', cursor: 'pointer', flexShrink: 0 }}>
+            <ArrowLeft size={18} />
+          </button>
+        )}
         <div style={{ width: 32, height: 32, borderRadius: 8, background: 'color-mix(in srgb, var(--accent) 15%, var(--bg-elevated))', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--accent)', flexShrink: 0 }}>
           {hasProviderLogo(id) ? <ProviderLogo provider={id} size={18} /> : <Cpu size={16} />}
         </div>
@@ -577,10 +583,17 @@ export function ModelsView() {
   const { providers, pluginProviderIds, pluginEnabled, selectedId, loading, error, dirty, saving, load, selectProvider, setProviderEnabled, deleteProvider, save } = useModelsStore()
   const [addingProvider, setAddingProvider] = useState(false)
   const [tab, setTab] = useState<'providers' | 'local' | 'usage'>('providers')
+  // Mobile master-detail: provider list ↔ provider detail (with ← back). Desktop keeps
+  // both side-by-side.
+  const narrow = useIsNarrow()
+  const [mobileDetail, setMobileDetail] = useState(false)
 
   useEffect(() => { load() }, [])
 
   const selectedProvider = selectedId ? providers[selectedId] : null
+  const openProvider = (pid: string) => { selectProvider(pid); if (narrow) setMobileDetail(true) }
+  const showList = !narrow || !mobileDetail
+  const showDetail = !narrow || mobileDetail
 
   // Config-origin providers first (alphabetical), then plugin-only ones (alphabetical)
   const allProviderIds = [
@@ -626,8 +639,9 @@ export function ModelsView() {
       )}
 
       <div className="flex flex-1 min-h-0">
-        {/* Left sidebar */}
-        <div className="flex flex-col shrink-0" style={{ width: 220, borderRight: '1px solid var(--border)', background: 'var(--bg-surface)' }}>
+        {/* Left sidebar (full-width provider list on mobile) */}
+        {showList && (
+        <div className="flex flex-col shrink-0" style={{ width: narrow ? '100%' : 220, borderRight: narrow ? 'none' : '1px solid var(--border)', background: 'var(--bg-surface)' }}>
           <div className="px-4 py-2.5 text-xs font-semibold uppercase tracking-wider flex items-center justify-between" style={{ borderBottom: '1px solid var(--border)', color: 'var(--text-secondary)' }}>
             <span>Providers</span>
             <button onClick={load} style={{ ...iconBtnStyle, opacity: loading ? 0.5 : 1 }} title="Reload from gateway">
@@ -652,8 +666,8 @@ export function ModelsView() {
               return (
                 <div key={pid}
                   className="group relative flex items-center gap-2.5 px-3 py-2.5 cursor-pointer"
-                  onClick={() => selectProvider(pid)}
-                  style={{ background: active ? 'color-mix(in srgb, var(--accent) 12%, var(--bg-elevated))' : 'transparent', borderLeft: `3px solid ${active ? 'var(--accent)' : 'transparent'}`, transition: 'background 0.1s' }}
+                  onClick={() => openProvider(pid)}
+                  style={{ background: !narrow && active ? 'color-mix(in srgb, var(--accent) 12%, var(--bg-elevated))' : 'transparent', borderLeft: `3px solid ${!narrow && active ? 'var(--accent)' : 'transparent'}`, transition: 'background 0.1s' }}
                   onMouseEnter={e => { if (!active) e.currentTarget.style.background = 'var(--bg-elevated)' }}
                   onMouseLeave={e => { if (!active) e.currentTarget.style.background = 'transparent' }}
                 >
@@ -693,10 +707,11 @@ export function ModelsView() {
             </div>
           )}
         </div>
+        )}
 
         {/* Right panel */}
-        {selectedId && selectedProvider ? (
-          <ProviderPanel key={selectedId} id={selectedId} provider={selectedProvider} />
+        {showDetail && (selectedId && selectedProvider ? (
+          <ProviderPanel key={selectedId} id={selectedId} provider={selectedProvider} onBack={narrow ? () => setMobileDetail(false) : undefined} />
         ) : (
           <div className="flex-1 flex flex-col items-center justify-center gap-2" style={{ background: 'var(--bg-primary)' }}>
             <Cpu size={36} style={{ color: 'var(--text-secondary)', opacity: 0.2 }} />
@@ -704,7 +719,7 @@ export function ModelsView() {
               {loading ? 'Loading from gateway…' : 'Select a provider'}
             </p>
           </div>
-        )}
+        ))}
       </div>
       </>}
     </div>

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { RotateCcw, Square, CheckCircle2, XCircle, AlertCircle, RefreshCw, Eye, EyeOff, Server, Plug, Cpu, MessageSquare, MonitorSmartphone, ArrowUpCircle, ClipboardList, Puzzle, Boxes } from 'lucide-react'
+import { RotateCcw, Square, CheckCircle2, XCircle, AlertCircle, RefreshCw, Eye, EyeOff, Server, Plug, Cpu, MessageSquare, MonitorSmartphone, ArrowUpCircle, ClipboardList, Puzzle, Boxes, ArrowLeft } from 'lucide-react'
+import { useIsNarrow } from '../../lib/useIsNarrow'
 import Editor from '@monaco-editor/react'
 import { useConnectionStore, useIsRemoteGateway } from '../../store/connection'
 import { useMetricsStore } from '../../store/metrics'
@@ -63,6 +64,14 @@ export function GatewayView({ onOpenChat }: { onOpenChat?: () => void } = {}) {
 
   const [tab, setTabState] = useState<SettingsTab>(lastSettingsTab)
   const setTab = (t: SettingsTab) => { lastSettingsTab = t; setTabState(t) }
+  // Mobile master-detail: the 200px sub-tab rail becomes a full-width menu (master);
+  // tapping a tab opens its content (detail) with a ← back. Desktop keeps both.
+  const narrow = useIsNarrow()
+  const [mobileTabOpen, setMobileTabOpen] = useState(false)
+  const openTab = (t: SettingsTab) => { setTab(t); if (narrow) setMobileTabOpen(true) }
+  const showRail = !narrow || !mobileTabOpen
+  const showContent = !narrow || mobileTabOpen
+  const currentTabLabel = SETTINGS_TABS.find(t => t.id === tab)?.label ?? 'Gateway'
   // Top-level config sections last loaded (remote), so removals become deletes on save.
   const loadedKeysRef = useRef<string[]>([])
 
@@ -242,20 +251,21 @@ export function GatewayView({ onOpenChat }: { onOpenChat?: () => void } = {}) {
 
   return (
     <div className="flex flex-1 min-h-0">
-      {/* Category rail */}
+      {/* Category rail (full-width menu on mobile) */}
+      {showRail && (
       <div
         className="flex flex-col shrink-0 py-4 px-3 gap-1"
-        style={{ width: 200, borderRight: '1px solid var(--border)', background: 'var(--bg-surface)' }}
+        style={{ width: narrow ? '100%' : 200, borderRight: narrow ? 'none' : '1px solid var(--border)', background: 'var(--bg-surface)' }}
       >
         <h1 className="text-sm font-semibold px-2 mb-2" style={{ color: 'var(--text-primary)' }}>Gateway</h1>
         {SETTINGS_TABS.map(t => (
           <button
             key={t.id}
-            onClick={() => setTab(t.id)}
+            onClick={() => openTab(t.id)}
             className="flex items-center gap-2.5 px-3 py-2 text-sm text-left rounded"
             style={{
-              background: tab === t.id ? 'color-mix(in srgb, var(--accent) 15%, var(--bg-elevated))' : 'transparent',
-              color: tab === t.id ? 'var(--accent)' : 'var(--text-secondary)',
+              background: !narrow && tab === t.id ? 'color-mix(in srgb, var(--accent) 15%, var(--bg-elevated))' : 'transparent',
+              color: !narrow && tab === t.id ? 'var(--accent)' : 'var(--text-secondary)',
               border: 'none', cursor: 'pointer', borderRadius: 'var(--radius)',
             }}
           >
@@ -266,9 +276,20 @@ export function GatewayView({ onOpenChat }: { onOpenChat?: () => void } = {}) {
         <div className="flex-1" />
         <div className="px-2">{statusDot}</div>
       </div>
+      )}
 
       {/* Content */}
+      {showContent && (
       <div className="flex flex-col flex-1 min-w-0 min-h-0">
+        {narrow && (
+          <button
+            onClick={() => setMobileTabOpen(false)}
+            className="flex items-center gap-2 px-4 py-3 text-sm shrink-0"
+            style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-surface)', color: 'var(--text-primary)', border: 'none', cursor: 'pointer' }}
+          >
+            <ArrowLeft size={18} /> <span className="font-medium">{currentTabLabel}</span>
+          </button>
+        )}
 
         {/* ── Connection ── */}
         {tab === 'connection' && (
@@ -450,6 +471,7 @@ export function GatewayView({ onOpenChat }: { onOpenChat?: () => void } = {}) {
           <ExtensionsView onOpenChat={() => onOpenChat?.()} />
         )}
       </div>
+      )}
     </div>
   )
 }
