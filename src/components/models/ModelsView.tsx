@@ -42,8 +42,10 @@ const iconBtnStyle: React.CSSProperties = { background: 'none', border: 'none', 
 function Toggle({ value, onChange }: { value: boolean; onChange: (v: boolean) => void }) {
   return (
     <button
+      role="switch"
+      aria-checked={value}
       onClick={() => onChange(!value)}
-      style={{ width: 32, height: 18, borderRadius: 9, cursor: 'pointer', border: 'none', background: value ? 'var(--accent)' : 'var(--border)', transition: 'background 0.15s', position: 'relative', flexShrink: 0 }}
+      style={{ width: 32, height: 18, minHeight: 18, borderRadius: 9, cursor: 'pointer', border: 'none', background: value ? 'var(--accent)' : 'var(--border)', transition: 'background 0.15s', position: 'relative', flexShrink: 0 }}
     >
       <div style={{ width: 12, height: 12, borderRadius: '50%', background: '#fff', position: 'absolute', top: 3, left: value ? 17 : 3, transition: 'left 0.15s' }} />
     </button>

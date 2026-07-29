@@ -110,6 +110,9 @@ html, body { background: var(--bg-primary); }
 
 .animate-pulse-dot { animation: pulse-dot 2s infinite; }
 .animate-fade-in { animation: fade-in 0.2s ease-out; }
+@keyframes slide-up { from { transform: translateY(100%); } to { transform: translateY(0); } }
+.animate-slide-up { animation: slide-up 0.25s cubic-bezier(0.2, 0.7, 0.2, 1); }
+@media (prefers-reduced-motion: reduce) { .animate-slide-up { animation: none; } }
 .animate-heartbeat { animation: heartbeat 0.6s ease-out; }
 .animate-spin { animation: spin 1s linear infinite; }
 .animate-typing { animation: typing-cursor 1s step-end infinite; }
@@ -246,7 +249,9 @@ code {
 @media (max-width: 767px) {
   html, body, #root { font-size: 15px; }
 
-  button, [role="button"], select {
+  /* Exclude switches — a pill switch's height defines its shape, so growing it to
+     40px turns it into a square. Switches carry role="switch" and set their own size. */
+  button:not([role="switch"]), [role="button"], select {
     min-height: 40px;
   }
   input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
