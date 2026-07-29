@@ -484,7 +484,7 @@ function AddSkillForm({ onAdd, onCancel }: { onAdd: (s: Skill) => void; onCancel
       style={{ top: 36, background: 'rgba(0,0,0,0.5)' }} onClick={onCancel}>
       <div className="flex flex-col p-5 gap-4" style={{
         background: 'var(--bg-surface)', border: '1px solid var(--border)',
-        borderRadius: 'var(--radius)', width: 400, boxShadow: '0 8px 24px rgba(0,0,0,0.4)'
+        borderRadius: 'var(--radius)', width: 400, maxWidth: '92vw', maxHeight: '86vh', overflowY: 'auto', boxShadow: '0 8px 24px rgba(0,0,0,0.4)'
       }} onClick={e => e.stopPropagation()}>
         <h3 className="font-semibold text-base" style={{ color: 'var(--text-primary)' }}>Add Skill</h3>
         <FormField label="ID *"><Input value={id} onChange={setId} placeholder="e.g. my-skill" autoFocus /></FormField>
@@ -515,7 +515,7 @@ function AddPluginForm({ onAdd, onCancel }: { onAdd: (p: Plugin) => void; onCanc
       style={{ top: 36, background: 'rgba(0,0,0,0.5)' }} onClick={onCancel}>
       <div className="flex flex-col p-5 gap-4" style={{
         background: 'var(--bg-surface)', border: '1px solid var(--border)',
-        borderRadius: 'var(--radius)', width: 400, boxShadow: '0 8px 24px rgba(0,0,0,0.4)'
+        borderRadius: 'var(--radius)', width: 400, maxWidth: '92vw', maxHeight: '86vh', overflowY: 'auto', boxShadow: '0 8px 24px rgba(0,0,0,0.4)'
       }} onClick={e => e.stopPropagation()}>
         <h3 className="font-semibold text-base" style={{ color: 'var(--text-primary)' }}>Add Plugin</h3>
         <FormField label="ID *"><Input value={id} onChange={setId} placeholder="e.g. my-plugin" autoFocus /></FormField>

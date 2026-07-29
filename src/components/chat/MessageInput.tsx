@@ -10,6 +10,7 @@ import type { MediaAttachment } from '../../lib/types'
 import { classifyKind } from '../../lib/attachments'
 import { AttachmentCard } from './AttachmentCard'
 import { searchEmoji, activeEmojiToken, completedEmojiAt, type EmojiHit } from '../../lib/emoji'
+import { useIsNarrow } from '../../lib/useIsNarrow'
 
 function fileToAttachment(file: File): Promise<PendingAttachment> {
   return new Promise((resolve, reject) => {
@@ -50,6 +51,7 @@ const EMPTY_DRAFT = { text: '', attachments: [] as PendingAttachment[] }
 interface Props { convId: string }
 
 export function MessageInput({ convId }: Props) {
+  const narrow = useIsNarrow()
   const { setText: storSetText, setAttachments: storeSetAtts, clear: storeClear, get: storeGet } = useDraftsStore()
   const draft = useDraftsStore(s => s.drafts[convId] ?? EMPTY_DRAFT)
   const text = draft.text
@@ -230,7 +232,9 @@ export function MessageInput({ convId }: Props) {
       if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); insertEmoji(emojiMenu.items[emojiMenu.active]); return }
       if (e.key === 'Escape') { e.preventDefault(); setEmojiMenu(null); return }
     }
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend() }
+    // On mobile the return key inserts a newline (Send is the explicit button); on
+    // desktop, Enter sends and Shift+Enter makes a newline.
+    if (!narrow && e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend() }
   }
 
   // Recompute the popup after caret-only moves (arrows / Home / End) with no edit.
@@ -471,9 +475,12 @@ export function MessageInput({ convId }: Props) {
         )}
       </div>
       </div>
-      <p className="text-center mt-1.5 text-xs" style={{ color: 'var(--text-secondary)', opacity: 0.5 }}>
-        Enter to send · Shift+Enter for new line · Paste or drag images · <code>:</code> for emoji
-      </p>
+      {/* Keyboard-shortcut hint — desktop only; none of it applies to a touch keyboard. */}
+      {!narrow && (
+        <p className="text-center mt-1.5 text-xs" style={{ color: 'var(--text-secondary)', opacity: 0.5 }}>
+          Enter to send · Shift+Enter for new line · Paste or drag images · <code>:</code> for emoji
+        </p>
+      )}
     </div>
   )
 }

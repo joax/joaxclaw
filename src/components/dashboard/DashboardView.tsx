@@ -14,6 +14,7 @@ import { useLogoUrl } from '../../lib/logo'
 import { useCronsStore } from '../../store/crons'
 import { useMetricsStore } from '../../store/metrics'
 import { listJobs, stopJob, type ScriptJob } from '../../lib/scriptJobs'
+import { useIsNarrow } from '../../lib/useIsNarrow'
 import { reminderBySession, fmtCountdown, isReminderJob } from '../../lib/reminders'
 import { formatRelativeDate } from '../../lib/dateUtils'
 import type { NavSection } from '../../App'
@@ -83,7 +84,39 @@ function ResourceBar({ value, max, color }: { value: number; max?: number; color
   )
 }
 
-// ── Health strip ──────────────────────────────────────────────────────────────
+// Mobile card surface + section header. Desktop keeps its bare, dense sections; the
+// mobile feed wraps each one in a rounded card and uses a larger, tappable header.
+function MobileCard({ children, style }: { children: React.ReactNode; style?: React.CSSProperties }) {
+  return (
+    <div style={{ border: '1px solid var(--border)', borderRadius: 14, background: 'var(--bg-surface)', padding: 14, ...style }}>
+      {children}
+    </div>
+  )
+}
+
+function SectionHead({ Icon, label, iconColor = 'var(--text-secondary)', narrow, action }: {
+  Icon: typeof Activity; label: string; iconColor?: string; narrow?: boolean; action?: React.ReactNode
+}) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: narrow ? 10 : 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <Icon size={narrow ? 14 : 11} style={{ color: iconColor }} />
+        <span style={{ fontSize: narrow ? 12 : 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text-secondary)' }}>{label}</span>
+      </div>
+      {action}
+    </div>
+  )
+}
+
+function SeeAll({ onClick, narrow }: { onClick: () => void; narrow?: boolean }) {
+  return (
+    <button onClick={onClick} style={{ fontSize: narrow ? 12 : 10, color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer', padding: narrow ? '4px 2px' : 0 }}>
+      See all →
+    </button>
+  )
+}
+
+// ── Health strip (desktop) ──────────────────────────────────────────────────────
 
 function HealthStrip({ onNavigate }: { onNavigate: (s: NavSection) => void }) {
   const { status, uptimeStart, lastHeartbeat } = useConnectionStore()
@@ -144,6 +177,43 @@ function HealthStrip({ onNavigate }: { onNavigate: (s: NavSection) => void }) {
   )
 }
 
+// ── Mobile: quick-stat tiles (replaces the cramped health strip) ─────────────────
+
+function QuickStats({ onNavigate }: { onNavigate: (s: NavSection) => void }) {
+  const { sessions } = useSessionsStore()
+  const { runs } = useProcessesStore()
+  const { blueprints } = useTeamsStore()
+
+  const teamIds      = new Set(blueprints.map(b => b.id))
+  const activeSess   = sessions.filter(s => s.hasActiveRun).length
+  const runningProcs = Object.values(runs).filter(r => r.status === 'running' && !teamIds.has(r.processId)).length
+  const runningTeams = Object.values(runs).filter(r => r.status === 'running' && teamIds.has(r.processId)).length
+
+  const tile = (Icon: typeof Activity, count: number, label: string, nav: NavSection) => (
+    <button
+      onClick={() => onNavigate(nav)}
+      style={{
+        flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2,
+        padding: '12px 12px', borderRadius: 12, border: '1px solid var(--border)',
+        background: count > 0 ? 'color-mix(in srgb, var(--accent) 7%, var(--bg-surface))' : 'var(--bg-surface)',
+        cursor: 'pointer', textAlign: 'left', minWidth: 0,
+      }}
+    >
+      <Icon size={14} style={{ color: count > 0 ? 'var(--accent)' : 'var(--text-secondary)' }} />
+      <span style={{ fontSize: 22, fontWeight: 700, lineHeight: 1.1, color: count > 0 ? 'var(--text-primary)' : 'var(--text-secondary)', fontVariantNumeric: 'tabular-nums' }}>{count}</span>
+      <span style={{ fontSize: 11, color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' }}>{label}</span>
+    </button>
+  )
+
+  return (
+    <div style={{ display: 'flex', gap: 8 }}>
+      {tile(Activity, activeSess, 'Sessions', 'sessions')}
+      {tile(Zap, runningProcs, 'Processes', 'processes')}
+      {tile(UsersRound, runningTeams, 'Teams', 'teams')}
+    </div>
+  )
+}
+
 // ── Agent picker ──────────────────────────────────────────────────────────────
 
 function AgentPicker({ value, onChange }: { value: string; onChange: (id: string) => void }) {
@@ -178,7 +248,7 @@ function AgentPicker({ value, onChange }: { value: string; onChange: (id: string
       {open && (
         <>
           <div className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
-          <div style={{ position: 'fixed', top: dropPos.top, left: dropPos.left, zIndex: 40, minWidth: 220, background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', boxShadow: '0 8px 24px rgba(0,0,0,0.3)', overflow: 'hidden' }}>
+          <div style={{ position: 'fixed', top: dropPos.top, left: dropPos.left, zIndex: 40, minWidth: 220, maxWidth: 'calc(100vw - 24px)', maxHeight: '60vh', overflowY: 'auto', background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', boxShadow: '0 8px 24px rgba(0,0,0,0.3)' }}>
             {agents.length === 0 && (
               <div style={{ padding: '12px 14px', fontSize: 12, color: 'var(--text-secondary)' }}>No agents configured</div>
             )}
@@ -203,7 +273,7 @@ function AgentPicker({ value, onChange }: { value: string; onChange: (id: string
 
 // ── Chat input card ───────────────────────────────────────────────────────────
 
-function ChatInputCard({ onSend }: { onSend: (agentId: string, text: string) => void }) {
+function ChatInputCard({ onSend, narrow }: { onSend: (agentId: string, text: string) => void; narrow?: boolean }) {
   const { agents } = useAgentsStore()
   const [agentId, setAgentId]   = useState('')
   const [message, setMessage]   = useState('')
@@ -223,7 +293,8 @@ function ChatInputCard({ onSend }: { onSend: (agentId: string, text: string) => 
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    // On a phone, Enter should insert a newline — sending is the explicit button.
+    if (!narrow && e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       handleSend()
     }
@@ -243,7 +314,7 @@ function ChatInputCard({ onSend }: { onSend: (agentId: string, text: string) => 
         onChange={e => setMessage(e.target.value)}
         onKeyDown={handleKeyDown}
         placeholder="Ask anything…"
-        rows={3}
+        rows={narrow ? 4 : 3}
         style={{
           display: 'block', width: '100%', padding: '14px 14px 6px',
           fontSize: 14, lineHeight: 1.6, resize: 'none', outline: 'none',
@@ -252,20 +323,22 @@ function ChatInputCard({ onSend }: { onSend: (agentId: string, text: string) => 
         }}
       />
 
-      {/* Send row */}
-      <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '6px 10px 10px' }}>
+      {/* Send row — full-width, thumb-friendly button on mobile. */}
+      <div style={{ display: 'flex', justifyContent: 'flex-end', padding: narrow ? '6px 12px 12px' : '6px 10px 10px' }}>
         <button
           onClick={handleSend}
           disabled={!canSend}
           style={{
-            display: 'flex', alignItems: 'center', gap: 5, padding: '6px 14px',
-            borderRadius: 8, border: 'none', fontSize: 12, fontWeight: 500,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+            padding: narrow ? '11px 14px' : '6px 14px',
+            width: narrow ? '100%' : 'auto',
+            borderRadius: narrow ? 10 : 8, border: 'none', fontSize: narrow ? 14 : 12, fontWeight: 600,
             background: canSend ? 'var(--accent)' : 'var(--bg-elevated)',
             color: canSend ? 'var(--accent-fg)' : 'var(--text-secondary)',
             cursor: canSend ? 'pointer' : 'default', transition: 'background 0.15s',
           }}
         >
-          <Send size={13} /> Send
+          <Send size={narrow ? 15 : 13} /> Send
         </button>
       </div>
     </div>
@@ -274,7 +347,7 @@ function ChatInputCard({ onSend }: { onSend: (agentId: string, text: string) => 
 
 // ── Recent conversations ──────────────────────────────────────────────────────
 
-function RecentConversations({ onOpen, onNavigate }: { onOpen: (convId: string) => void; onNavigate: (s: NavSection) => void }) {
+function RecentConversations({ onOpen, onNavigate, narrow }: { onOpen: (convId: string) => void; onNavigate: (s: NavSection) => void; narrow?: boolean }) {
   const conversations = useChatStore(s => s.conversations)
   const { agents } = useAgentsStore()
 
@@ -285,50 +358,65 @@ function RecentConversations({ onOpen, onNavigate }: { onOpen: (convId: string) 
 
   if (recent.length === 0) return null
 
-  return (
-    <div style={{ marginTop: 28 }}>
-      <p style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text-secondary)', marginBottom: 10 }}>Recent</p>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+  const list = (
+    <>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: narrow ? 2 : 2 }}>
         {recent.map(conv => {
           const agent = agents.find(a => a.id === conv.agentId)
           return (
             <button key={conv.id} onClick={() => onOpen(conv.id)}
-              style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 12px', borderRadius: 'var(--radius)', border: 'none', background: 'none', cursor: 'pointer', textAlign: 'left', width: '100%' }}
-              onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-elevated)')}
-              onMouseLeave={e => (e.currentTarget.style.background = 'none')}
+              style={{ display: 'flex', alignItems: 'center', gap: 12, padding: narrow ? '11px 8px' : '9px 12px', borderRadius: 'var(--radius)', border: 'none', background: 'none', cursor: 'pointer', textAlign: 'left', width: '100%' }}
+              onMouseEnter={e => { if (!narrow) (e.currentTarget.style.background = 'var(--bg-elevated)') }}
+              onMouseLeave={e => { if (!narrow) (e.currentTarget.style.background = 'none') }}
             >
-              <span style={{ fontSize: 16, flexShrink: 0 }}>{agent?.identity?.emoji ?? '🤖'}</span>
+              <span style={{ fontSize: narrow ? 20 : 16, flexShrink: 0 }}>{agent?.identity?.emoji ?? '🤖'}</span>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 1 }}>
-                  <span style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-primary)', flexShrink: 0 }}>
+                  <span style={{ fontSize: narrow ? 14 : 12, fontWeight: 600, color: 'var(--text-primary)', flexShrink: 0 }}>
                     {agent?.identity?.name ?? agent?.name ?? conv.agentId}
                   </span>
                   {conv.lastAt && (
-                    <span style={{ fontSize: 10, color: 'var(--text-secondary)', opacity: 0.5, flexShrink: 0 }}>
+                    <span style={{ fontSize: narrow ? 11 : 10, color: 'var(--text-secondary)', opacity: 0.5, flexShrink: 0, marginLeft: 'auto' }}>
                       {formatRelativeDate(conv.lastAt)}
                     </span>
                   )}
                 </div>
-                <p style={{ fontSize: 12, color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', margin: 0 }}>
+                <p style={{ fontSize: narrow ? 13 : 12, color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', margin: 0 }}>
                   {conv.lastMessage}
                 </p>
               </div>
-              <ArrowRight size={12} style={{ color: 'var(--text-secondary)', opacity: 0.3, flexShrink: 0 }} />
+              {!narrow && <ArrowRight size={12} style={{ color: 'var(--text-secondary)', opacity: 0.3, flexShrink: 0 }} />}
             </button>
           )
         })}
       </div>
       <button onClick={() => onNavigate('chat')}
-        style={{ marginTop: 6, fontSize: 11, color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer', padding: '4px 12px' }}>
+        style={{ marginTop: 6, fontSize: narrow ? 13 : 11, color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer', padding: '6px 8px' }}>
         See all conversations →
       </button>
+    </>
+  )
+
+  if (narrow) {
+    return (
+      <MobileCard>
+        <SectionHead Icon={Clock} label="Recent" narrow />
+        {list}
+      </MobileCard>
+    )
+  }
+
+  return (
+    <div style={{ marginTop: 28 }}>
+      <p style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text-secondary)', marginBottom: 10 }}>Recent</p>
+      {list}
     </div>
   )
 }
 
-// ── Right panel: Active (processes + sessions) ────────────────────────────────
+// ── Active (processes + sessions) ─────────────────────────────────────────────
 
-function ActiveSection({ onNavigate }: { onNavigate: (s: NavSection) => void }) {
+function ActiveSection({ onNavigate, narrow }: { onNavigate: (s: NavSection) => void; narrow?: boolean }) {
   const { processes, runs } = useProcessesStore()
   const { blueprints } = useTeamsStore()
   const { sessions, customLabels, derivedNames } = useSessionsStore()
@@ -346,14 +434,9 @@ function ActiveSection({ onNavigate }: { onNavigate: (s: NavSection) => void }) 
 
   if (runningProcs.length === 0 && activeSessions.length === 0) return null
 
-  const sectionLabel: React.CSSProperties = { fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text-secondary)' }
-
-  return (
-    <div style={{ marginBottom: 16 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
-        <Activity size={11} style={{ color: 'var(--accent)' }} />
-        <span style={sectionLabel}>Active</span>
-      </div>
+  const content = (
+    <>
+      <SectionHead Icon={Activity} label="Active" iconColor="var(--accent)" narrow />
 
       {runningProcs.map(({ run, def }) => {
         const name        = def?.name ?? run.processId
@@ -368,11 +451,11 @@ function ActiveSection({ onNavigate }: { onNavigate: (s: NavSection) => void }) 
 
         return (
           <button key={run.processId} onClick={() => onNavigate('processes')}
-            style={{ width: '100%', display: 'block', padding: '10px 12px', marginBottom: 6, borderRadius: 'var(--radius)', border: '1px solid color-mix(in srgb, var(--accent) 25%, var(--border))', background: 'color-mix(in srgb, var(--accent) 5%, var(--bg-surface))', cursor: 'pointer', textAlign: 'left' }}>
+            style={{ width: '100%', display: 'block', padding: narrow ? '12px 12px' : '10px 12px', marginBottom: 6, borderRadius: 'var(--radius)', border: '1px solid color-mix(in srgb, var(--accent) 25%, var(--border))', background: 'color-mix(in srgb, var(--accent) 5%, var(--bg-surface))', cursor: 'pointer', textAlign: 'left' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: hasProgress ? 6 : 0 }}>
-              <Loader2 size={11} style={{ color: 'var(--accent)', flexShrink: 0 }} className="animate-spin" />
-              <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
-              <span style={{ fontSize: 10, color: 'var(--text-secondary)', flexShrink: 0 }}>{elapsedStr}</span>
+              <Loader2 size={narrow ? 13 : 11} style={{ color: 'var(--accent)', flexShrink: 0 }} className="animate-spin" />
+              <span style={{ fontSize: narrow ? 14 : 12, fontWeight: 600, color: 'var(--text-primary)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
+              <span style={{ fontSize: narrow ? 11 : 10, color: 'var(--text-secondary)', flexShrink: 0 }}>{elapsedStr}</span>
             </div>
             {hasProgress && (
               <div style={{ marginBottom: progLabel ? 4 : 0 }}>
@@ -380,10 +463,10 @@ function ActiveSection({ onNavigate }: { onNavigate: (s: NavSection) => void }) 
                   <div style={{ flex: 1, height: 3, borderRadius: 2, background: 'var(--bg-elevated)', overflow: 'hidden' }}>
                     <div style={{ height: '100%', width: `${progPct}%`, background: 'var(--accent)', borderRadius: 2, transition: 'width 0.4s ease' }} />
                   </div>
-                  <span style={{ fontSize: 9, color: 'var(--text-secondary)', flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>{progCurrent}/{progTotal}</span>
+                  <span style={{ fontSize: narrow ? 10 : 9, color: 'var(--text-secondary)', flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>{progCurrent}/{progTotal}</span>
                 </div>
                 {progLabel && (
-                  <p style={{ fontSize: 10, color: 'var(--text-secondary)', opacity: 0.7, margin: '3px 0 0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  <p style={{ fontSize: narrow ? 11 : 10, color: 'var(--text-secondary)', opacity: 0.7, margin: '3px 0 0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {progLabel}
                   </p>
                 )}
@@ -397,21 +480,23 @@ function ActiveSection({ onNavigate }: { onNavigate: (s: NavSection) => void }) 
         const label = customLabels[sess.key] ?? derivedNames[sess.key] ?? sess.displayName ?? sess.label ?? sess.key
         return (
           <div key={sess.key}
-            style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 12px', marginBottom: 4, borderRadius: 'var(--radius)', border: '1px solid var(--border)', background: 'var(--bg-surface)' }}>
-            <Loader2 size={10} style={{ color: 'var(--accent)', flexShrink: 0 }} className="animate-spin" />
-            <span style={{ fontSize: 12, color: 'var(--text-primary)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            style={{ display: 'flex', alignItems: 'center', gap: 8, padding: narrow ? '10px 12px' : '7px 12px', marginBottom: 4, borderRadius: 'var(--radius)', border: '1px solid var(--border)', background: 'var(--bg-surface)' }}>
+            <Loader2 size={narrow ? 12 : 10} style={{ color: 'var(--accent)', flexShrink: 0 }} className="animate-spin" />
+            <span style={{ fontSize: narrow ? 14 : 12, color: 'var(--text-primary)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {label}
             </span>
           </div>
         )
       })}
-    </div>
+    </>
   )
+
+  return narrow ? <MobileCard>{content}</MobileCard> : <div style={{ marginBottom: 16 }}>{content}</div>
 }
 
-// ── Right panel: Crons ────────────────────────────────────────────────────────
+// ── Crons ─────────────────────────────────────────────────────────────────────
 
-function CronsSection({ onNavigate }: { onNavigate: (s: NavSection) => void }) {
+function CronsSection({ onNavigate, narrow }: { onNavigate: (s: NavSection) => void; narrow?: boolean }) {
   const { jobs, runningNow } = useCronsStore()
   const [, tick] = useState(0)
 
@@ -433,39 +518,32 @@ function CronsSection({ onNavigate }: { onNavigate: (s: NavSection) => void }) {
 
   if (visible.length === 0) return null
 
-  const sectionLabel: React.CSSProperties = { fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text-secondary)' }
+  const content = (
+    <>
+      <SectionHead Icon={Timer} label="Crons" narrow action={<SeeAll narrow={narrow} onClick={() => onNavigate('crons')} />} />
 
-  return (
-    <div style={{ marginBottom: 16 }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <Timer size={11} style={{ color: 'var(--text-secondary)' }} />
-          <span style={sectionLabel}>Crons</span>
-        </div>
-        <button onClick={() => onNavigate('crons')} style={{ fontSize: 10, color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>See all →</button>
-      </div>
-
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: narrow ? 2 : 4 }}>
         {visible.map(job => {
           const isRunning  = runningNow.has(job.id) || Boolean(job.state?.runningAtMs)
           const nextMs     = job.state?.nextRunAtMs
           const lastMs     = job.state?.lastRunAtMs
           const lastStatus = job.state?.lastRunStatus
+          const iconSz     = narrow ? 13 : 11
 
           return (
-            <div key={job.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 0' }}>
+            <div key={job.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: narrow ? '8px 0' : '5px 0' }}>
               {isRunning
-                ? <Loader2 size={11} style={{ color: 'var(--accent)', flexShrink: 0 }} className="animate-spin" />
+                ? <Loader2 size={iconSz} style={{ color: 'var(--accent)', flexShrink: 0 }} className="animate-spin" />
                 : lastStatus === 'error'
-                ? <XCircle size={11} style={{ color: 'var(--danger)', flexShrink: 0 }} />
+                ? <XCircle size={iconSz} style={{ color: 'var(--danger)', flexShrink: 0 }} />
                 : lastMs
-                ? <CheckCircle2 size={11} style={{ color: 'var(--success)', flexShrink: 0 }} />
-                : <Clock size={11} style={{ color: 'var(--text-secondary)', flexShrink: 0 }} />
+                ? <CheckCircle2 size={iconSz} style={{ color: 'var(--success)', flexShrink: 0 }} />
+                : <Clock size={iconSz} style={{ color: 'var(--text-secondary)', flexShrink: 0 }} />
               }
-              <span style={{ fontSize: 11, color: 'var(--text-primary)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              <span style={{ fontSize: narrow ? 14 : 11, color: 'var(--text-primary)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {job.name}
               </span>
-              <span style={{ fontSize: 10, color: 'var(--text-secondary)', flexShrink: 0, opacity: 0.7 }}>
+              <span style={{ fontSize: narrow ? 12 : 10, color: 'var(--text-secondary)', flexShrink: 0, opacity: 0.7 }}>
                 {isRunning ? 'running'
                   : nextMs ? `in ${fmtNextRun(nextMs)}`
                   : lastMs ? fmtLastRun(lastMs)
@@ -476,35 +554,33 @@ function CronsSection({ onNavigate }: { onNavigate: (s: NavSection) => void }) {
           )
         })}
       </div>
-    </div>
+    </>
   )
+
+  return narrow ? <MobileCard>{content}</MobileCard> : <div style={{ marginBottom: 16 }}>{content}</div>
 }
 
-// ── Right panel: Resources ────────────────────────────────────────────────────
+// ── Resources ─────────────────────────────────────────────────────────────────
 
-function ResourcesSection() {
+function ResourcesSection({ narrow }: { narrow?: boolean }) {
   const { metrics, ollamaModels } = useMetricsStore()
   const remoteGateway = useIsRemoteGateway()
   const gwHost = useConnectionStore(s => gatewayHost(s.connection?.url))
-
-  const sectionLabelHdr: React.CSSProperties = { fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text-secondary)' }
 
   // On a remote gateway the metrics come from the HOST via the joaxclaw-fs plugin's
   // host.metrics RPC (see store/metrics). If the plugin is too old to provide it,
   // `metrics` stays null — explain that instead of showing the client machine's numbers.
   if (remoteGateway && !metrics) {
-    return (
-      <div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
-          <Cpu size={11} style={{ color: 'var(--text-secondary)' }} />
-          <span style={sectionLabelHdr}>Resources</span>
-        </div>
-        <p style={{ fontSize: 11, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+    const body = (
+      <>
+        <SectionHead Icon={Cpu} label="Resources" narrow />
+        <p style={{ fontSize: narrow ? 13 : 11, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
           Gateway runs on <b style={{ color: 'var(--text-primary)', fontFamily: 'monospace' }}>{gwHost}</b>.
           Update the <b style={{ color: 'var(--text-primary)' }}>joaxclaw-fs</b> plugin on the host to see its CPU / RAM / GPU here.
         </p>
-      </div>
+      </>
     )
+    return narrow ? <MobileCard>{body}</MobileCard> : <div>{body}</div>
   }
 
   if (!metrics) return null
@@ -525,41 +601,37 @@ function ResourcesSection() {
 
   const barColor = (pct: number) => pct > 90 ? 'var(--danger)' : pct > 70 ? 'var(--warning)' : 'var(--success)'
 
-  const sectionLabel: React.CSSProperties = { fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text-secondary)' }
-  const labelW: React.CSSProperties       = { fontSize: 10, color: 'var(--text-secondary)', width: 32, flexShrink: 0 }
-  const valueW: React.CSSProperties       = { fontSize: 10, color: 'var(--text-secondary)', flexShrink: 0, whiteSpace: 'nowrap', textAlign: 'right', minWidth: 36 }
+  const labelFs: React.CSSProperties = { fontSize: narrow ? 12 : 10, color: 'var(--text-secondary)', width: narrow ? 40 : 32, flexShrink: 0 }
+  const valueW: React.CSSProperties  = { fontSize: narrow ? 12 : 10, color: 'var(--text-secondary)', flexShrink: 0, whiteSpace: 'nowrap', textAlign: 'right', minWidth: 36 }
 
-  return (
-    <div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
-        <Cpu size={11} style={{ color: 'var(--text-secondary)' }} />
-        <span style={sectionLabel}>Resources</span>
-        {/* Make it unmistakable these numbers are the gateway host's, not this client's. */}
-        {remoteGateway && (
+  const content = (
+    <>
+      <SectionHead
+        Icon={Cpu} label="Resources" narrow
+        action={remoteGateway ? (
           <span
             title={`Live from the gateway host ${gwHost ?? ''}`.trim()}
             style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--accent)', background: 'color-mix(in srgb, var(--accent) 15%, transparent)', padding: '1px 5px', borderRadius: 4 }}
           >
             host
           </span>
-        )}
-      </div>
+        ) : undefined}
+      />
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: narrow ? 12 : 8 }}>
 
         {/* GPU — utilization bar when it's measurable (NVIDIA/AMD); model name only when
-            it isn't (e.g. Apple Silicon: unified memory, no util without sudo). The model
-            is on the label's tooltip in both cases. */}
+            it isn't (e.g. Apple Silicon: unified memory, no util without sudo). */}
         {gpu && (gpu.memTotal > 0 || gpu.utilizationGpu > 0 ? (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={labelW} title={gpu.model}>GPU</span>
+            <span style={labelFs} title={gpu.model}>GPU</span>
             <ResourceBar value={gpuPct} color={barColor(gpuPct)} />
             <span style={valueW}>{gpuPct}%</span>
           </div>
         ) : (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={labelW}>GPU</span>
-            <span style={{ fontSize: 10, color: 'var(--text-secondary)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={gpu.model}>
+            <span style={labelFs}>GPU</span>
+            <span style={{ fontSize: narrow ? 12 : 10, color: 'var(--text-secondary)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={gpu.model}>
               {gpu.model}
             </span>
           </div>
@@ -569,7 +641,7 @@ function ResourcesSection() {
             local gateway. On remote we still show host GPU%/RAM above, but not this. */}
         {!remoteGateway && hasVram && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={labelW}>VRAM</span>
+            <span style={labelFs}>VRAM</span>
             <ResourceBar value={vramTotalBytes > 0 ? vramPct : 0} color={barColor(vramPct)} />
             <span style={valueW}>{vramUsedG}G</span>
           </div>
@@ -577,21 +649,21 @@ function ResourcesSection() {
 
         {/* RAM */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={labelW}>RAM</span>
+          <span style={labelFs}>RAM</span>
           <ResourceBar value={ramPct} color={barColor(ramPct)} />
           <span style={valueW}>{ramUsed.toFixed(1)}G</span>
         </div>
 
         {/* Loaded models breakdown — client-side Ollama, local gateway only (see VRAM note) */}
         {!remoteGateway && loaded.length > 0 && (
-          <div style={{ marginTop: 2, display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <div style={{ marginTop: 2, display: 'flex', flexDirection: 'column', gap: narrow ? 6 : 4 }}>
             {loaded.map(m => {
               const vram     = modelVram(m)
               const vramG    = (vram / (1024 ** 3)).toFixed(1)
               const modelPct = vramTotalBytes && vram ? Math.min(100, (vram / vramTotalBytes) * 100) : 0
               return (
                 <div key={m.name} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span style={{ fontSize: 10, color: 'var(--text-secondary)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  <span style={{ fontSize: narrow ? 12 : 10, color: 'var(--text-secondary)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {m.name.split(':')[0]}
                   </span>
                   {modelPct > 0 && <ResourceBar value={modelPct} color="color-mix(in srgb, var(--accent) 60%, transparent)" />}
@@ -602,13 +674,15 @@ function ResourcesSection() {
           </div>
         )}
       </div>
-    </div>
+    </>
   )
+
+  return narrow ? <MobileCard>{content}</MobileCard> : <div>{content}</div>
 }
 
-// ── Right panel: Teams ────────────────────────────────────────────────────────
+// ── Teams ─────────────────────────────────────────────────────────────────────
 
-function TeamsSection({ onNavigate }: { onNavigate: (s: NavSection) => void }) {
+function TeamsSection({ onNavigate, narrow }: { onNavigate: (s: NavSection) => void; narrow?: boolean }) {
   const { blueprints } = useTeamsStore()
   const { runs } = useProcessesStore()
   const [, tick] = useState(0)
@@ -635,17 +709,9 @@ function TeamsSection({ onNavigate }: { onNavigate: (s: NavSection) => void }) {
     })
     .slice(0, 5)
 
-  const sectionLabel: React.CSSProperties = { fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text-secondary)' }
-
-  return (
-    <div style={{ marginBottom: 16 }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <UsersRound size={11} style={{ color: 'var(--text-secondary)' }} />
-          <span style={sectionLabel}>Teams</span>
-        </div>
-        <button onClick={() => onNavigate('teams')} style={{ fontSize: 10, color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>See all →</button>
-      </div>
+  const content = (
+    <>
+      <SectionHead Icon={UsersRound} label="Teams" narrow action={<SeeAll narrow={narrow} onClick={() => onNavigate('teams')} />} />
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
         {entries.map(({ bp, run }) => {
@@ -653,37 +719,38 @@ function TeamsSection({ onNavigate }: { onNavigate: (s: NavSection) => void }) {
           const isRunning = status === 'running'
           const elapsed   = isRunning && run?.startedAt ? Math.floor((Date.now() - run.startedAt) / 1000) : 0
           const elapsedStr = fmtElapsed(elapsed)
+          const iconSz    = narrow ? 13 : 11
 
           return (
             <button key={bp.id} onClick={() => onNavigate('teams')}
               style={{
-                display: 'flex', alignItems: 'center', gap: 8, padding: '5px 8px',
+                display: 'flex', alignItems: 'center', gap: 8, padding: narrow ? '9px 8px' : '5px 8px',
                 borderRadius: 'var(--radius)', width: '100%', textAlign: 'left', cursor: 'pointer',
                 border: isRunning ? '1px solid color-mix(in srgb, var(--accent) 25%, var(--border))' : '1px solid transparent',
                 background: isRunning ? 'color-mix(in srgb, var(--accent) 5%, var(--bg-surface))' : 'none',
               }}
-              onMouseEnter={e => { if (!isRunning) (e.currentTarget as HTMLElement).style.background = 'var(--bg-elevated)' }}
-              onMouseLeave={e => { if (!isRunning) (e.currentTarget as HTMLElement).style.background = 'none' }}
+              onMouseEnter={e => { if (!narrow && !isRunning) (e.currentTarget as HTMLElement).style.background = 'var(--bg-elevated)' }}
+              onMouseLeave={e => { if (!narrow && !isRunning) (e.currentTarget as HTMLElement).style.background = 'none' }}
             >
               {isRunning
-                ? <Loader2 size={11} style={{ color: 'var(--accent)', flexShrink: 0 }} className="animate-spin" />
+                ? <Loader2 size={iconSz} style={{ color: 'var(--accent)', flexShrink: 0 }} className="animate-spin" />
                 : status === 'done'
-                ? <CheckCircle2 size={11} style={{ color: 'var(--success)', flexShrink: 0 }} />
+                ? <CheckCircle2 size={iconSz} style={{ color: 'var(--success)', flexShrink: 0 }} />
                 : status === 'error'
-                ? <XCircle size={11} style={{ color: 'var(--danger)', flexShrink: 0 }} />
-                : <Clock size={11} style={{ color: 'var(--text-secondary)', opacity: 0.35, flexShrink: 0 }} />
+                ? <XCircle size={iconSz} style={{ color: 'var(--danger)', flexShrink: 0 }} />
+                : <Clock size={iconSz} style={{ color: 'var(--text-secondary)', opacity: 0.35, flexShrink: 0 }} />
               }
               <div style={{ flex: 1, minWidth: 0 }}>
-                <span style={{ fontSize: 11, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block' }}>
+                <span style={{ fontSize: narrow ? 14 : 11, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block' }}>
                   {bp.name}
                 </span>
                 {isRunning && run?.currentAgent && (
-                  <span style={{ fontSize: 10, color: 'var(--text-secondary)', opacity: 0.7, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block' }}>
+                  <span style={{ fontSize: narrow ? 12 : 10, color: 'var(--text-secondary)', opacity: 0.7, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block' }}>
                     {run.currentAgent}
                   </span>
                 )}
               </div>
-              <span style={{ fontSize: 10, color: 'var(--text-secondary)', flexShrink: 0, opacity: 0.65 }}>
+              <span style={{ fontSize: narrow ? 12 : 10, color: 'var(--text-secondary)', flexShrink: 0, opacity: 0.65 }}>
                 {isRunning
                   ? elapsedStr
                   : status === 'done' && run?.finishedAt
@@ -697,17 +764,15 @@ function TeamsSection({ onNavigate }: { onNavigate: (s: NavSection) => void }) {
           )
         })}
       </div>
-    </div>
+    </>
   )
+
+  return narrow ? <MobileCard>{content}</MobileCard> : <div style={{ marginBottom: 16 }}>{content}</div>
 }
 
-// ── Right panel ───────────────────────────────────────────────────────────────
+// ── Scripts (background jobs the model launched via script_start) ───────────────
 
-// ── Right panel: Scripts (background jobs the model launched via script_start) ──
-
-const rightSectionLabel: React.CSSProperties = { fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text-secondary)' }
-
-function ScriptsSection() {
+function ScriptsSection({ narrow }: { narrow?: boolean }) {
   const status = useConnectionStore(s => s.status)
   const [jobs, setJobs] = useState<ScriptJob[]>([])
 
@@ -725,39 +790,38 @@ function ScriptsSection() {
   const running = jobs.filter(j => j.running)
   if (running.length === 0) return null
 
-  return (
-    <div style={{ marginBottom: 16 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
-        <Terminal size={11} style={{ color: 'var(--text-secondary)' }} />
-        <span style={rightSectionLabel}>Scripts</span>
-      </div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+  const content = (
+    <>
+      <SectionHead Icon={Terminal} label="Scripts" narrow />
+      <div style={{ display: 'flex', flexDirection: 'column', gap: narrow ? 2 : 4 }}>
         {running.slice(0, 5).map(job => (
-          <div key={job.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 0' }}>
-            <Loader2 size={11} className="animate-spin" style={{ color: 'var(--warning)', flexShrink: 0 }} />
-            <span style={{ fontSize: 11, color: 'var(--text-primary)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'monospace' }} title={job.command}>
+          <div key={job.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: narrow ? '8px 0' : '5px 0' }}>
+            <Loader2 size={narrow ? 13 : 11} className="animate-spin" style={{ color: 'var(--warning)', flexShrink: 0 }} />
+            <span style={{ fontSize: narrow ? 13 : 11, color: 'var(--text-primary)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'monospace' }} title={job.command}>
               {job.command}
             </span>
-            <span style={{ fontSize: 10, color: 'var(--text-secondary)', flexShrink: 0, opacity: 0.8, fontVariantNumeric: 'tabular-nums' }}>
+            <span style={{ fontSize: narrow ? 11 : 10, color: 'var(--text-secondary)', flexShrink: 0, opacity: 0.8, fontVariantNumeric: 'tabular-nums' }}>
               {job.percent != null ? `${job.percent}% · ` : ''}{fmtElapsed(Math.round(job.elapsedMs / 1000))}
             </span>
             <button
               onClick={() => { void stopJob(job.id) }}
               title="Stop the script"
-              style={{ display: 'flex', alignItems: 'center', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--danger)', padding: 2, flexShrink: 0 }}
+              style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--danger)', padding: narrow ? 6 : 2, flexShrink: 0 }}
             >
-              <Square size={10} />
+              <Square size={narrow ? 13 : 10} />
             </button>
           </div>
         ))}
       </div>
-    </div>
+    </>
   )
+
+  return narrow ? <MobileCard>{content}</MobileCard> : <div style={{ marginBottom: 16 }}>{content}</div>
 }
 
-// ── Right panel: Reminders (one-shot self-pings the model scheduled) ────────────
+// ── Reminders (one-shot self-pings the model scheduled) ─────────────────────────
 
-function RemindersSection() {
+function RemindersSection({ narrow }: { narrow?: boolean }) {
   const jobs = useCronsStore(s => s.jobs)
   const cancel = useCronsStore(s => s.remove)
   const [now, setNow] = useState(() => Date.now())
@@ -774,39 +838,45 @@ function RemindersSection() {
 
   if (reminders.length === 0) return null
 
-  return (
-    <div style={{ marginBottom: 16 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
-        <Bell size={11} style={{ color: 'var(--text-secondary)' }} />
-        <span style={rightSectionLabel}>Reminders</span>
-      </div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+  const content = (
+    <>
+      <SectionHead Icon={Bell} label="Reminders" narrow />
+      <div style={{ display: 'flex', flexDirection: 'column', gap: narrow ? 2 : 4 }}>
         {reminders.slice(0, 5).map(r => (
-          <div key={r.jobId} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 0' }}>
-            <Bell size={11} style={{ color: 'var(--accent)', flexShrink: 0 }} />
-            <span style={{ fontSize: 11, color: 'var(--text-primary)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.prompt}>
+          <div key={r.jobId} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: narrow ? '8px 0' : '5px 0' }}>
+            <Bell size={narrow ? 13 : 11} style={{ color: 'var(--accent)', flexShrink: 0 }} />
+            <span style={{ fontSize: narrow ? 14 : 11, color: 'var(--text-primary)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.prompt}>
               {r.prompt || 'Reminder'}
             </span>
-            <span style={{ fontSize: 10, color: 'var(--text-secondary)', flexShrink: 0, opacity: 0.8, fontVariantNumeric: 'tabular-nums' }}>
+            <span style={{ fontSize: narrow ? 12 : 10, color: 'var(--text-secondary)', flexShrink: 0, opacity: 0.8, fontVariantNumeric: 'tabular-nums' }}>
               {r.fireAtMs ? `in ${fmtCountdown(r.fireAtMs, now)}` : ''}
             </span>
             <button
               onClick={() => { void cancel(r.jobId) }}
               title="Cancel this reminder"
-              style={{ display: 'flex', alignItems: 'center', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)', padding: 2, flexShrink: 0 }}
+              style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)', padding: narrow ? 6 : 2, flexShrink: 0 }}
             >
-              <X size={11} />
+              <X size={narrow ? 14 : 11} />
             </button>
           </div>
         ))}
       </div>
-    </div>
+    </>
   )
+
+  return narrow ? <MobileCard>{content}</MobileCard> : <div style={{ marginBottom: 16 }}>{content}</div>
 }
+
+// ── Desktop right panel ─────────────────────────────────────────────────────────
 
 function RightPanel({ onNavigate }: { onNavigate: (s: NavSection) => void }) {
   return (
-    <div style={{ width: 300, flexShrink: 0, borderLeft: '1px solid var(--border)', overflowY: 'auto', padding: '20px 16px', background: 'var(--bg-surface)', display: 'flex', flexDirection: 'column', gap: 0 }}>
+    <div style={{
+      width: 300, flexShrink: 0,
+      borderLeft: '1px solid var(--border)',
+      overflowY: 'auto',
+      padding: '20px 16px', background: 'var(--bg-surface)', display: 'flex', flexDirection: 'column', gap: 0,
+    }}>
       <ActiveSection onNavigate={onNavigate} />
       <ScriptsSection />
       <RemindersSection />
@@ -817,7 +887,7 @@ function RightPanel({ onNavigate }: { onNavigate: (s: NavSection) => void }) {
   )
 }
 
-// ── Left panel ────────────────────────────────────────────────────────────────
+// ── Desktop left panel ──────────────────────────────────────────────────────────
 
 function LeftPanel({ onSendMessage, onOpenConversation, onNavigate }: {
   onSendMessage: (agentId: string, text: string) => void
@@ -845,6 +915,55 @@ function LeftPanel({ onSendMessage, onOpenConversation, onNavigate }: {
   )
 }
 
+// ── Mobile dashboard ────────────────────────────────────────────────────────────
+
+function MobileHeader({ onNavigate }: { onNavigate: (s: NavSection) => void }) {
+  const logoUrl = useLogoUrl()
+  const status = useConnectionStore(s => s.status)
+  const dot = status === 'connected' ? 'var(--success)' : status === 'connecting' ? 'var(--warning)' : 'var(--danger)'
+  const label = status === 'connected' ? 'Connected' : status === 'connecting' ? 'Connecting…' : 'Offline'
+
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <img src={logoUrl} alt="JoaxClaw" style={{ height: 30, width: 'auto', flexShrink: 0 }} />
+        <span style={{ fontSize: 20, fontWeight: 600, color: 'var(--text-primary)', letterSpacing: '-0.02em', flex: 1 }}>JoaxClaw</span>
+        <button
+          onClick={() => onNavigate('gateway')}
+          style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 10px', borderRadius: 999, border: '1px solid var(--border)', background: 'var(--bg-surface)', cursor: 'pointer' }}
+        >
+          <span style={{ width: 8, height: 8, borderRadius: '50%', background: dot, flexShrink: 0 }} />
+          <span style={{ fontSize: 12, color: 'var(--text-secondary)', fontWeight: 500 }}>{label}</span>
+        </button>
+      </div>
+      <p style={{ fontSize: 14, color: 'var(--text-secondary)', marginTop: 8 }}>{greeting()}</p>
+    </div>
+  )
+}
+
+function MobileDashboard({ onSendMessage, onOpenConversation, onNavigate }: {
+  onSendMessage: (agentId: string, text: string) => void
+  onOpenConversation: (convId: string) => void
+  onNavigate: (s: NavSection) => void
+}) {
+  return (
+    <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: '16px 14px 28px', maxWidth: 640, margin: '0 auto' }}>
+        <MobileHeader onNavigate={onNavigate} />
+        <ChatInputCard onSend={onSendMessage} narrow />
+        <QuickStats onNavigate={onNavigate} />
+        <ActiveSection onNavigate={onNavigate} narrow />
+        <RecentConversations onOpen={onOpenConversation} onNavigate={onNavigate} narrow />
+        <TeamsSection onNavigate={onNavigate} narrow />
+        <CronsSection onNavigate={onNavigate} narrow />
+        <RemindersSection narrow />
+        <ScriptsSection narrow />
+        <ResourcesSection narrow />
+      </div>
+    </div>
+  )
+}
+
 // ── Main view ─────────────────────────────────────────────────────────────────
 
 interface Props {
@@ -860,6 +979,7 @@ export function DashboardView({ onNavigate }: Props) {
   const { fetch: fetchCrons }           = useCronsStore()
   const { load: loadProcesses }         = useProcessesStore()
   const { load: loadTeams }             = useTeamsStore()
+  const narrow = useIsNarrow()
 
   useEffect(() => {
     fetchAgents()
@@ -883,10 +1003,21 @@ export function DashboardView({ onNavigate }: Props) {
     onNavigate('chat')
   }
 
+  // Mobile: a single scrolling, card-based feed. Desktop: the two-panel layout.
+  if (narrow) {
+    return (
+      <MobileDashboard
+        onSendMessage={handleSendMessage}
+        onOpenConversation={handleOpenConversation}
+        onNavigate={onNavigate}
+      />
+    )
+  }
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
       <HealthStrip onNavigate={onNavigate} />
-      <div style={{ display: 'flex', flex: 1, minHeight: 0, overflow: 'hidden' }}>
+      <div style={{ display: 'flex', flexDirection: 'row', flex: 1, minHeight: 0, overflowY: 'hidden', overflowX: 'hidden' }}>
         <LeftPanel
           onSendMessage={handleSendMessage}
           onOpenConversation={handleOpenConversation}

@@ -1,39 +1,23 @@
 import { useEffect, useRef, useState } from 'react'
 import { Terminal, Loader2, CheckCircle2, XCircle, ChevronDown, ChevronRight, Square, AlertTriangle } from 'lucide-react'
-import { jobStatus, stopJob, fmtElapsed, type ScriptJob } from '../../lib/scriptJobs'
+import { stopJob, fmtElapsed } from '../../lib/scriptJobs'
+import { useScriptJob } from './useScriptJob'
 
 // Live card for a background script started via the joaxclaw-fs `script_start` tool.
-// Polls jobs.get on the host while the job runs; shows status, elapsed, a % bar when
+// Follows jobs.get on the host while the job runs; shows status, elapsed, a % bar when
 // the script prints one, and a streaming output tail. Because the job lives on the
-// host, this reconnects to live progress even after an app reload.
+// host, this reconnects to live progress even after an app reload. While the job runs
+// it is also mirrored in the chat's sticky ScriptJobDock, which stays visible when this
+// card scrolls out of view.
 
 export function ScriptJobCard({ jobId, command }: { jobId: string; command?: string }) {
-  const [job, setJob] = useState<ScriptJob | null>(null)
-  const [expired, setExpired] = useState(false)   // job unknown / GC'd — we lost track
+  const { job, expired } = useScriptJob(jobId)
   const [open, setOpen] = useState(true)          // output visible while running
   const [stopping, setStopping] = useState(false)
   const preRef = useRef<HTMLPreElement>(null)
 
-  useEffect(() => {
-    let alive = true
-    let timer: ReturnType<typeof setTimeout> | undefined
-    const poll = async () => {
-      try {
-        const j = await jobStatus(jobId)
-        if (!alive) return
-        setJob(j)
-        setExpired(false)
-        if (!j.done) timer = setTimeout(poll, 1500)
-        else setOpen(false)   // collapse the log once it finishes
-      } catch {
-        // Unknown jobId (finished + cleaned up, or plugin too old) — stop polling and
-        // show whatever we last had.
-        if (alive) setExpired(true)
-      }
-    }
-    poll()
-    return () => { alive = false; if (timer) clearTimeout(timer) }
-  }, [jobId])
+  // Collapse the log once the job finishes.
+  useEffect(() => { if (job?.done) setOpen(false) }, [job?.done])
 
   // Follow the tail while the log is open and the job is live.
   useEffect(() => {

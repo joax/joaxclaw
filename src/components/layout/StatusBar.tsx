@@ -10,6 +10,7 @@ import { useChatStore } from '../../store/chat'
 import { useModelsStore } from '../../store/models'
 import { useHelpStore } from '../../store/help'
 import { formatBytes } from '../../lib/ollama'
+import { useIsNarrow } from '../../lib/useIsNarrow'
 
 export function StatusBar() {
   const { status, lastHeartbeat, heartbeats, uptimeStart } = useConnectionStore()
@@ -24,6 +25,9 @@ export function StatusBar() {
   const [hbPulse, setHbPulse] = useState(false)
   const [uptime, setUptime] = useState('')
   const prevHb = useRef<number | null>(null)
+  // On a phone the full metrics row overflows; keep only connection + signal (and a
+  // compact heartbeat), and drop the desktop-only monitor toggle.
+  const narrow = useIsNarrow()
 
   // Heartbeat pulse animation
   useEffect(() => {
@@ -76,16 +80,22 @@ export function StatusBar() {
 
   return (
     <div
-      className="flex items-center gap-4 px-3 shrink-0 text-xs"
+      className="flex items-center px-3 shrink-0 text-xs"
+      // On mobile the whole bar is the tap target for the system monitor — a 28px icon
+      // is too small for a finger, so the full-width, taller bar opens the sheet.
+      onClick={narrow ? toggleMonitor : undefined}
+      role={narrow ? 'button' : undefined}
       style={{
-        height: 28,
+        height: narrow ? 34 : 28,
+        gap: narrow ? 8 : 16,
+        cursor: narrow ? 'pointer' : 'default',
         background: 'var(--bg-surface)',
         borderTop: '1px solid var(--border)',
         color: 'var(--text-secondary)'
       }}
     >
       {/* Connection */}
-      <div className="flex items-center gap-1.5">
+      <div className="flex items-center gap-1.5 min-w-0">
         {status === 'connected'
           ? <Wifi size={11} style={{ color: 'var(--success)' }} />
           : <WifiOff size={11} style={{ color: 'var(--danger)' }} />
@@ -93,12 +103,12 @@ export function StatusBar() {
         <span style={{ color: statusColor }}>
           {status === 'connected' ? 'Connected' : status === 'connecting' ? 'Connecting…' : 'Disconnected'}
         </span>
-        {uptime && (
+        {!narrow && uptime && (
           <span className="opacity-50" style={{ fontVariantNumeric: 'tabular-nums', fontFamily: 'monospace', minWidth: '4ch' }}>
             · {uptime}
           </span>
         )}
-        {status === 'connected' && (
+        {!narrow && status === 'connected' && (
           <button
             onClick={() => openHelp('gateways')}
             title={`${remoteGateway ? 'Remote' : 'Local'} gateway — tap for the difference`}
@@ -121,6 +131,9 @@ export function StatusBar() {
         )}
       </div>
 
+      {/* Desktop-only: full metrics row + monitor toggle. Hidden on a phone. */}
+      {!narrow && (
+      <>
       <Divider />
 
       {/* Heartbeat */}
@@ -200,6 +213,27 @@ export function StatusBar() {
         <ChevronUp size={11} style={{ transform: monitorVisible ? 'rotate(180deg)' : undefined, transition: 'transform 0.2s' }} />
         Monitor
       </button>
+      </>
+      )}
+
+      {/* Mobile: a compact heartbeat + a chevron affordance, pushed right. The whole
+          bar (above) is the tap target that opens the monitor sheet — on a remote
+          gateway that shows the gateway HOST's CPU/RAM/GPU. */}
+      {narrow && (
+        <div className="flex items-center gap-2.5" style={{ marginLeft: 'auto' }}>
+          {showHeartbeat && status === 'connected' && (
+            <Heart
+              size={12}
+              className={hbPulse ? 'animate-heartbeat' : ''}
+              style={{ color: hbLate ? 'var(--warning)' : 'var(--success)' }}
+            />
+          )}
+          <span className="flex items-center gap-1" style={{ color: monitorVisible ? 'var(--accent)' : 'var(--text-secondary)' }}>
+            <Cpu size={12} />
+            <ChevronUp size={13} style={{ transform: monitorVisible ? 'rotate(180deg)' : undefined, transition: 'transform 0.2s' }} />
+          </span>
+        </div>
+      )}
     </div>
   )
 }
