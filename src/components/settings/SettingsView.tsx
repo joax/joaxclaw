@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { RefreshCw, Download, ExternalLink, RotateCw, Sparkles, CheckCircle2 } from 'lucide-react'
 import { useSettingsStore, ZOOM_MIN, ZOOM_MAX, ZOOM_STEP } from '../../store/settings'
 import { useUpdaterStore } from '../../store/updater'
+import { useIsNarrow } from '../../lib/useIsNarrow'
 import { Btn } from '../ui/Btn'
 
 // Theme editing lives in its own screen now (components/theme/ThemesView). This keeps the
@@ -245,19 +246,31 @@ function SliderField({ label, value, min, max, unit, description, onChange }: {
 }
 
 function Toggle({ label, value, onChange }: { label: string; value: boolean; onChange: (v: boolean) => void }) {
+  const narrow = useIsNarrow()
+  // A larger pill on mobile for a comfortable tap target. `minHeight` is set explicitly
+  // so the global `button { min-height: 40px }` mobile rule doesn't stretch the switch
+  // into a square (it only grows buttons that DON'T set their own min-height).
+  const W = narrow ? 46 : 36
+  const H = narrow ? 26 : 20
+  const K = narrow ? 20 : 14   // knob diameter
+  const pad = 3
   return (
-    <div className="flex items-center justify-between">
+    <div className="flex items-center justify-between gap-3">
       <span className="text-sm" style={{ color: 'var(--text-primary)' }}>{label}</span>
       <button
+        role="switch"
+        aria-checked={value}
+        aria-label={label}
         onClick={() => onChange(!value)}
         style={{
-          width: 36, height: 20, borderRadius: 10, cursor: 'pointer', border: 'none', position: 'relative',
+          width: W, height: H, minHeight: H, flexShrink: 0, borderRadius: H / 2,
+          cursor: 'pointer', border: 'none', position: 'relative',
           background: value ? 'var(--accent)' : 'var(--border)', transition: 'background 0.2s'
         }}
       >
         <div style={{
-          width: 14, height: 14, borderRadius: '50%', background: '#fff',
-          position: 'absolute', top: 3, left: value ? 19 : 3, transition: 'left 0.2s'
+          width: K, height: K, borderRadius: '50%', background: '#fff',
+          position: 'absolute', top: pad, left: value ? W - K - pad : pad, transition: 'left 0.2s'
         }} />
       </button>
     </div>
