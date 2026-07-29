@@ -22,7 +22,7 @@ import { PluginUpdateBanner } from './components/layout/PluginUpdateBanner'
 import { GatewayUpdateBanner } from './components/layout/GatewayUpdateBanner'
 import { ScopeWarningBanner } from './components/layout/ScopeWarningBanner'
 import { WelcomeModal } from './components/layout/WelcomeModal'
-import { MobileNav } from './components/layout/MobileNav'
+import { BottomNav } from './components/layout/BottomNav'
 import { useIsNarrow } from './lib/useIsNarrow'
 import { isElectron } from './lib/platform'
 import { useUpdaterStore } from './store/updater'
@@ -155,14 +155,12 @@ export default function App() {
       <GatewayUpdateBanner onOpenChat={() => setSection('chat')} />
       <PluginUpdateBanner onOpenChat={() => setSection('chat')} />
       <div className="flex flex-1 min-h-0">
-        {/* Persistent side rail on desktop; a hamburger drawer on narrow (mobile) screens. */}
+        {/* Persistent side rail on desktop; a bottom tab bar on narrow (mobile) screens
+            (rendered below, as a sibling of the status bar so it sits in the thumb zone). */}
         {!narrow && <NavRail section={section} onNavigate={setSection} disabledSections={disabledSections} />}
         <main className="flex-1 min-w-0 flex flex-col relative" style={{ background: 'var(--bg-primary)' }}>
           <ThemeBackground slot="app" />
           <div className="relative z-[1] flex-1 min-w-0 min-h-0 flex flex-col">
-          {narrow && !showConnect && !reconnecting && (
-            <MobileNav section={section} onNavigate={setSection} disabledSections={disabledSections} />
-          )}
           {reconnecting ? (
             <ReconnectOverlay />
           ) : showConnect ? (
@@ -187,6 +185,12 @@ export default function App() {
         </main>
       </div>
       <StatusBar />
+      {/* Mobile primary navigation lives at the very bottom (thumb zone), just under the
+          status bar. Shown in the same states the app itself is usable — not on the
+          connect screen or the reconnect overlay. */}
+      {narrow && !showConnect && !reconnecting && (
+        <BottomNav section={section} onNavigate={setSection} disabledSections={disabledSections} />
+      )}
       {/* First-run welcome — once the user is connected and in the app, invite them to
           introduce themselves (Settings → You covers it afterward). */}
       {status === 'connected' && !welcomeSeen && <WelcomeModal />}
