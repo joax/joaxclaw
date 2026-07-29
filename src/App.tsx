@@ -182,11 +182,7 @@ export default function App() {
               {section === 'settings' && <SettingsView />}
             </>
           )}
-          {monitorVisible && (
-            <div className="absolute bottom-4 right-4 z-50">
-              <SystemMonitorHUD />
-            </div>
-          )}
+          {monitorVisible && <SystemMonitorHUD />}
           </div>
         </main>
       </div>

@@ -4,6 +4,7 @@ import { useMetricsStore } from '../../store/metrics'
 import { useSettingsStore } from '../../store/settings'
 import { formatBytes } from '../../lib/ollama'
 import { gatewayHost } from '../../lib/ollamaHealth'
+import { useIsNarrow } from '../../lib/useIsNarrow'
 
 export function SystemMonitorHUD() {
   const { status, heartbeats, lastHeartbeat, uptimeStart } = useConnectionStore()
@@ -11,29 +12,24 @@ export function SystemMonitorHUD() {
   const gwHost = useConnectionStore(s => gatewayHost(s.connection?.url))
   const { metrics, ollamaModels } = useMetricsStore()
   const { toggleMonitor } = useSettingsStore()
+  const narrow = useIsNarrow()
 
   const gpu = metrics?.gpu?.[0]
   const hbAgo = lastHeartbeat ? Math.round((Date.now() - lastHeartbeat) / 1000) : null
   const uptime = uptimeStart ? formatUptime(Date.now() - uptimeStart) : null
 
-  return (
-    <div
-      className="animate-fade-in"
-      style={{
-        width: 280,
-        background: 'var(--bg-surface)',
-        border: '1px solid var(--border)',
-        borderRadius: 'var(--radius)',
-        boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
-        overflow: 'hidden'
-      }}
-    >
-      {/* Header */}
-      <div className="flex items-center gap-2 px-3 py-2" style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-elevated)' }}>
-        <Monitor size={13} style={{ color: 'var(--accent)' }} />
-        <span className="text-xs font-semibold flex-1" style={{ color: 'var(--text-primary)' }}>System Monitor</span>
-        <button onClick={toggleMonitor} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)', padding: 2 }}>
-          <X size={13} />
+  const inner = (
+    <>
+      {/* Header — a large, finger-friendly close on mobile. */}
+      <div className="flex items-center gap-2" style={{ padding: narrow ? '10px 14px' : '8px 12px', borderBottom: '1px solid var(--border)', background: 'var(--bg-elevated)' }}>
+        <Monitor size={narrow ? 16 : 13} style={{ color: 'var(--accent)' }} />
+        <span className="font-semibold flex-1" style={{ color: 'var(--text-primary)', fontSize: narrow ? 15 : 12 }}>System Monitor</span>
+        <button
+          onClick={toggleMonitor}
+          title="Close"
+          style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)', width: narrow ? 40 : 20, height: narrow ? 40 : 20, marginRight: narrow ? -8 : 0, borderRadius: 'var(--radius)' }}
+        >
+          <X size={narrow ? 20 : 13} />
         </button>
       </div>
 
@@ -171,6 +167,44 @@ export function SystemMonitorHUD() {
         </>
         )}
       </div>
+    </>
+  )
+
+  // Mobile: a bottom sheet with a backdrop + drag handle. Desktop: the compact
+  // bottom-right card. Both self-position (fixed), so App.tsx just renders <HUD/>.
+  if (narrow) {
+    return (
+      <>
+        <div className="animate-fade-in" style={{ position: 'fixed', inset: 0, zIndex: 60, background: 'rgba(0,0,0,0.55)' }} onClick={toggleMonitor} />
+        <div
+          className="animate-slide-up"
+          style={{
+            position: 'fixed', left: 0, right: 0, bottom: 0, zIndex: 61,
+            background: 'var(--bg-surface)', borderTop: '1px solid var(--border)',
+            borderTopLeftRadius: 16, borderTopRightRadius: 16,
+            maxHeight: '80vh', overflowY: 'auto',
+            boxShadow: '0 -8px 32px rgba(0,0,0,0.45)', paddingBottom: 'env(safe-area-inset-bottom)',
+          }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'center', paddingTop: 8, paddingBottom: 2 }}>
+            <div style={{ width: 40, height: 4, borderRadius: 2, background: 'var(--border)' }} />
+          </div>
+          {inner}
+        </div>
+      </>
+    )
+  }
+
+  return (
+    <div
+      className="animate-fade-in"
+      style={{
+        position: 'fixed', bottom: 38, right: 16, zIndex: 50, width: 280,
+        background: 'var(--bg-surface)', border: '1px solid var(--border)',
+        borderRadius: 'var(--radius)', boxShadow: '0 8px 32px rgba(0,0,0,0.4)', overflow: 'hidden',
+      }}
+    >
+      {inner}
     </div>
   )
 }
