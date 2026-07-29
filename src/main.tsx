@@ -8,12 +8,22 @@ import { DEFAULT_THEME } from './lib/presetThemes'
 import { applyTheme } from './lib/theme'
 import { useSettingsStore } from './store/settings'
 import { installBrowserApi } from './lib/mobile/browserApi'
+import { isElectron } from './lib/platform'
 
 // In a plain browser (PWA / mobile companion) there's no Electron preload, so provide
 // a `window.api` shim: a real WebSocket for the gateway + a WebCrypto device identity,
 // with desktop-only surfaces degraded to no-ops. No-op under Electron. Must run before
 // anything touches window.api.
 installBrowserApi()
+
+// Register the PWA service worker in the browser build only (never under Electron) —
+// enables install-to-home-screen and an offline-capable launch. See public/sw.js. The
+// './' base keeps it working whether the app is served at the root or a sub-path.
+if (!isElectron() && 'serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js').catch(() => { /* SW optional; app still runs */ })
+  })
+}
 
 // Apply the active theme before first render. The settings store has already
 // rehydrated from localStorage by the time this runs (it's imported transitively via
