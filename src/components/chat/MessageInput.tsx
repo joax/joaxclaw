@@ -232,7 +232,9 @@ export function MessageInput({ convId }: Props) {
       if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); insertEmoji(emojiMenu.items[emojiMenu.active]); return }
       if (e.key === 'Escape') { e.preventDefault(); setEmojiMenu(null); return }
     }
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend() }
+    // On mobile the return key inserts a newline (Send is the explicit button); on
+    // desktop, Enter sends and Shift+Enter makes a newline.
+    if (!narrow && e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend() }
   }
 
   // Recompute the popup after caret-only moves (arrows / Home / End) with no edit.
