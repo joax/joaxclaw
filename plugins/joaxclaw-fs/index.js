@@ -688,6 +688,9 @@ function jobView(job, includeOutput = true) {
     running: job.running, done: job.done, exitCode: job.exitCode, error: job.error,
     percent: job.percent, startedAt: job.startedAt, finishedAt: job.finishedAt,
     elapsedMs: (job.finishedAt ?? Date.now()) - job.startedAt,
+    // Who launched it: lets the app re-attach a chat to its running scripts after a
+    // reload, when the reloaded transcript no longer carries the script_start call.
+    sessionKey: job.sessionKey,
   }
   if (includeOutput) {
     view.output = job.output.length > JOB_TAIL_BYTES ? job.output.slice(-JOB_TAIL_BYTES) : job.output

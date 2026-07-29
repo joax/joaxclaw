@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { Check, Plus, Trash2, Upload, Download, Copy, Image as ImageIcon, X, Loader2 } from 'lucide-react'
+import { Check, Plus, Trash2, Upload, Download, Copy, Image as ImageIcon, X, Loader2, ArrowLeft } from 'lucide-react'
+import { useIsNarrow } from '../../lib/useIsNarrow'
 import { useSettingsStore } from '../../store/settings'
 import type { ThemeSettings, IconFamily, ThemeBgSlot, ThemeBackground, ThemeBgFit } from '../../lib/types'
 import { THEME_BG_SLOTS } from '../../lib/themeFormat'
@@ -38,6 +39,12 @@ export function ThemesView() {
 
   const [busy, setBusy] = useState<'import' | 'export' | null>(null)
   const [err, setErr] = useState('')
+  // Mobile master-detail: theme gallery ↔ editor (with ← back). Desktop keeps both.
+  const narrow = useIsNarrow()
+  const [mobileDetail, setMobileDetail] = useState(false)
+  const openTheme = (id: string) => { setActiveTheme(id); if (narrow) setMobileDetail(true) }
+  const showList = !narrow || !mobileDetail
+  const showDetail = !narrow || mobileDetail
 
   const duplicate = (t: ThemeSettings) => {
     saveTheme({ ...t, id: nanoid(), name: `${t.name} copy`, backgrounds: undefined }) // saves + activates
@@ -57,8 +64,9 @@ export function ThemesView() {
 
   return (
     <div className="flex flex-1 min-h-0">
-      {/* ── Gallery ── */}
-      <div className="flex flex-col shrink-0 border-r overflow-y-auto" style={{ width: 280, borderColor: 'var(--border)', background: 'var(--bg-surface)' }}>
+      {/* ── Gallery (full-width on mobile) ── */}
+      {showList && (
+      <div className="flex flex-col shrink-0 overflow-y-auto" style={{ width: narrow ? '100%' : 280, borderRight: narrow ? 'none' : '1px solid var(--border)', background: 'var(--bg-surface)' }}>
         <div className="flex items-center justify-between px-4 py-3 shrink-0">
           <h1 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>Themes</h1>
           <div className="flex items-center gap-1">
@@ -70,17 +78,24 @@ export function ThemesView() {
         <div className="px-3 pb-4 grid grid-cols-2 gap-2">
           {themes.map(t => (
             <ThemeCard key={t.id} theme={t} active={t.id === activeThemeId}
-              onApply={() => setActiveTheme(t.id)}
+              onApply={() => openTheme(t.id)}
               onDelete={isPreset(t.id) ? undefined : () => deleteTheme(t.id)}
               onDuplicate={() => duplicate(t)} />
           ))}
         </div>
       </div>
+      )}
 
       {/* ── Editor ── */}
+      {showDetail && (
       <div className="flex-1 min-w-0 overflow-y-auto">
         <div className="max-w-3xl mx-auto p-6 flex flex-col gap-4">
           <div className="flex items-center gap-3">
+            {narrow && (
+              <button onClick={() => setMobileDetail(false)} title="Back" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 32, height: 32, marginLeft: -6, borderRadius: 'var(--radius)', border: 'none', background: 'transparent', color: 'var(--text-primary)', cursor: 'pointer', flexShrink: 0 }}>
+                <ArrowLeft size={18} />
+              </button>
+            )}
             <input
               value={active.name}
               onChange={e => updateActiveColors({ name: e.target.value })}
@@ -143,6 +158,7 @@ export function ThemesView() {
           <Section title="Preview"><ThemePreview theme={active} /></Section>
         </div>
       </div>
+      )}
     </div>
   )
 }

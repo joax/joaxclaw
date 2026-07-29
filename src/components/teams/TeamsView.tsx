@@ -2,9 +2,10 @@ import { useEffect, useRef, useState } from 'react'
 import {
   Plus, RefreshCw, UsersRound, Play, X, Trash2, ChevronDown,
   Upload, Download, GripVertical, Loader2, CheckCircle2, XCircle,
-  Clock, ArrowRight, FileText, AlertTriangle, GitBranch,
+  Clock, ArrowRight, ArrowLeft, FileText, AlertTriangle, GitBranch,
   Wrench, BarChart2, BookOpen, History, Bot,
 } from 'lucide-react'
+import { useIsNarrow } from '../../lib/useIsNarrow'
 import { useTeamsStore } from '../../store/teams'
 import { useProcessesStore, runsDir, type ProcessRun } from '../../store/processes'
 import { useAgentsStore } from '../../store/agents'
@@ -1373,11 +1374,106 @@ function NewTeamModal({ onCreated, onCancel }: { onCreated: (bp: TeamBlueprint) 
 
 // ── Main TeamsView ─────────────────────────────────────────────────────────────
 
+// ── Mobile team detail ────────────────────────────────────────────────────────
+// The desktop TeamDetail is a 5-tab builder (canvas editing). On a phone that doesn't
+// fit, so this is a read-and-run view: the flow as a vertical list of members, a task
+// box, and Run/Stop. Structural editing stays on desktop.
+function MobileTeamDetail({ blueprint, compiledDef, onBack, onOpenChat }: {
+  blueprint: TeamBlueprint
+  compiledDef: ProcessDef | undefined
+  onBack: () => void
+  onOpenChat?: () => void
+}) {
+  const { runs, startRun, stopRun } = useProcessesStore()
+  const { agents } = useAgentsStore()
+  const run = runs[blueprint.id]
+  const running = run?.status === 'running'
+  const [task, setTask] = useState(run?.objective ?? '')
+  const [starting, setStarting] = useState(false)
+
+  const agentName = (id: string) => { const a = agents.find(x => x.id === id); return a?.identity?.name ?? a?.name ?? id }
+  const validation = validateTeamForLaunch(blueprint, compiledDef)
+  const usesObjective = blueprint.members.some(m => m.task?.includes('{objective}')) || (blueprint.outputContract?.includes('{objective}') ?? false)
+  const canRun = validation.valid && !(usesObjective && !task.trim())
+
+  const handleRun = async () => {
+    if (!canRun) return
+    setStarting(true)
+    try { await startRun(blueprint.id, compiledDef, blueprint.controllerAgentId, task.trim()) }
+    finally { setStarting(false) }
+  }
+
+  return (
+    <div className="flex flex-col h-full min-h-0">
+      <div className="flex items-center gap-2 px-3 py-3 shrink-0" style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-surface)' }}>
+        <button onClick={onBack} aria-label="Back to teams" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 32, height: 32, marginLeft: -4, borderRadius: 'var(--radius)', border: 'none', background: 'transparent', color: 'var(--text-primary)', cursor: 'pointer', flexShrink: 0 }}>
+          <ArrowLeft size={18} />
+        </button>
+        <div className="min-w-0 flex-1">
+          <div className="text-sm font-semibold truncate" style={{ color: 'var(--text-primary)' }}>{blueprint.name}</div>
+          <div className="text-xs truncate" style={{ color: 'var(--text-secondary)' }}>Lead: {agentName(blueprint.controllerAgentId)}</div>
+        </div>
+        <StatusDot status={run?.status ?? 'idle'} />
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-4" style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+        {/* Run */}
+        <div>
+          <label className="text-xs font-semibold uppercase" style={{ color: 'var(--text-secondary)', letterSpacing: '0.05em' }}>Task</label>
+          <textarea
+            value={task} onChange={e => setTask(e.target.value)} rows={2}
+            placeholder={usesObjective ? 'What should the team do this run?' : 'Optional task…'}
+            style={{ width: '100%', marginTop: 6, padding: '10px', borderRadius: 'var(--radius)', border: '1px solid var(--border)', background: 'var(--bg-elevated)', color: 'var(--text-primary)', outline: 'none', resize: 'vertical', fontFamily: 'inherit' }}
+          />
+          <div className="flex items-center gap-2 mt-2">
+            {running
+              ? <Btn size="sm" variant="outline" icon={<XCircle size={12} />} onClick={() => stopRun(blueprint.id)}>Stop</Btn>
+              : <Btn size="sm" icon={<Play size={12} />} loading={starting} disabled={!canRun} onClick={handleRun}>Run</Btn>}
+            {running && onOpenChat && <Btn size="sm" variant="ghost" onClick={onOpenChat}>Open run in chat</Btn>}
+          </div>
+          {!validation.valid && <p className="text-xs mt-1.5" style={{ color: 'var(--danger)' }}>{validation.reason ?? 'Not runnable — check the blueprint on desktop.'}</p>}
+        </div>
+
+        {/* Flow */}
+        <div>
+          <div className="text-xs font-semibold uppercase mb-2" style={{ color: 'var(--text-secondary)', letterSpacing: '0.05em' }}>Flow · {blueprint.members.length} members</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {blueprint.members.map((m, i) => (
+              <div key={i} className="flex gap-3 p-3 rounded" style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)' }}>
+                <div style={{ flexShrink: 0, width: 24, height: 24, borderRadius: 12, background: 'var(--bg-elevated)', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 600 }}>{i + 1}</div>
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
+                    {m.reviewBefore && i > 0 && <span title="Review gate" style={{ marginRight: 4 }}>🔍</span>}
+                    {m.role || m.agentId}
+                  </div>
+                  <div className="text-xs" style={{ color: 'var(--text-secondary)' }}>{agentName(m.agentId)}</div>
+                  {m.task && <div className="text-xs mt-1" style={{ color: 'var(--text-secondary)', opacity: 0.85, lineHeight: 1.5 }}>{m.task}</div>}
+                </div>
+              </div>
+            ))}
+          </div>
+          {blueprint.routes?.length ? (
+            <p className="text-xs mt-2" style={{ color: 'var(--text-secondary)' }}>
+              <GitBranch size={11} style={{ verticalAlign: 'middle', marginRight: 4 }} />
+              {blueprint.routes.length} conditional route{blueprint.routes.length > 1 ? 's' : ''} — view/edit on desktop.
+            </p>
+          ) : null}
+        </div>
+
+        <p className="text-xs" style={{ color: 'var(--text-secondary)', opacity: 0.6, lineHeight: 1.5 }}>
+          Editing a team's structure (members, routes, graph) is done on the desktop app. Here you can review the flow and run it.
+        </p>
+      </div>
+    </div>
+  )
+}
+
 export function TeamsView({ onOpenChat }: { onOpenChat?: () => void } = {}) {
   const { blueprints, compiledDefs, loading, error, needsPlugin, load, deleteTeam, importBundle } = useTeamsStore()
   const { runs, _startEventListening } = useProcessesStore()
   const { fetch: fetchAgents } = useAgentsStore()
   const status = useConnectionStore(s => s.status)
+  const narrow = useIsNarrow()
 
   const [selectedId, setSelectedId]  = useState<string | null>(null)
   const [search,     setSearch]      = useState('')
@@ -1397,12 +1493,13 @@ export function TeamsView({ onOpenChat }: { onOpenChat?: () => void } = {}) {
   }, [status])
 
   useEffect(() => {
-    if (!selectedId && blueprints.length > 0) {
-      // Prefer the team with an active run so the monitor is visible on return
+    // Desktop auto-selects the first/active team (side-by-side). On mobile, land on the
+    // list first (master-detail).
+    if (!narrow && !selectedId && blueprints.length > 0) {
       const active = blueprints.find(b => runs[b.id]?.status === 'running')
       setSelectedId(active?.id ?? blueprints[0].id)
     }
-  }, [blueprints.length])
+  }, [blueprints.length, narrow])
 
   const filtered = blueprints.filter(bp =>
     !search ||
@@ -1412,6 +1509,8 @@ export function TeamsView({ onOpenChat }: { onOpenChat?: () => void } = {}) {
 
   const selectedBp  = blueprints.find(b => b.id === selectedId)
   const selectedDef = selectedId ? compiledDefs[selectedId] : undefined
+  const showList = !narrow || !selectedBp
+  const showDetail = !narrow || !!selectedBp
 
   const handleTopImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -1433,8 +1532,9 @@ export function TeamsView({ onOpenChat }: { onOpenChat?: () => void } = {}) {
         />
       )}
 
-      {/* Sidebar */}
-      <div style={{ width: 280, borderRight: '1px solid var(--border)', background: 'var(--bg-surface)', display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
+      {/* Sidebar (team list) — full-width on mobile when no team is open */}
+      {showList && (
+      <div style={{ width: narrow ? '100%' : 280, borderRight: narrow ? 'none' : '1px solid var(--border)', background: 'var(--bg-surface)', display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '10px 12px', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
           <span style={{ flex: 1, fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>Teams</span>
           <span style={{ fontSize: 11, padding: '1px 6px', borderRadius: 4, background: 'var(--bg-elevated)', color: 'var(--text-secondary)' }}>{blueprints.length}</span>
@@ -1483,10 +1583,21 @@ export function TeamsView({ onOpenChat }: { onOpenChat?: () => void } = {}) {
           ))}
         </div>
       </div>
+      )}
 
       {/* Detail */}
+      {showDetail && (
       <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', background: 'var(--bg-primary)' }}>
         {selectedBp ? (
+          narrow ? (
+            <MobileTeamDetail
+              key={selectedBp.id}
+              blueprint={selectedBp}
+              compiledDef={selectedDef}
+              onOpenChat={onOpenChat}
+              onBack={() => setSelectedId(null)}
+            />
+          ) : (
           <TeamDetail
             key={selectedBp.id}
             blueprint={selectedBp}
@@ -1497,6 +1608,7 @@ export function TeamsView({ onOpenChat }: { onOpenChat?: () => void } = {}) {
               setSelectedId(updated.id)
             }}
           />
+          )
         ) : (
           <div style={{ display: 'flex', flex: 1, flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12 }}>
             <UsersRound size={40} style={{ color: 'var(--text-secondary)', opacity: 0.2 }} />
@@ -1507,6 +1619,7 @@ export function TeamsView({ onOpenChat }: { onOpenChat?: () => void } = {}) {
           </div>
         )}
       </div>
+      )}
     </div>
   )
 }

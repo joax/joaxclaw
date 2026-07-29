@@ -1,5 +1,6 @@
 import { useState, useEffect, type ReactNode, type MouseEvent as ReactMouseEvent } from 'react'
-import { Plus, Search, Trash2, MessageSquare, Radio, Heart, ExternalLink, ArrowLeftToLine, ChevronDown, Pencil, Clock } from 'lucide-react'
+import { Plus, Search, Trash2, MessageSquare, Radio, Heart, ExternalLink, ArrowLeftToLine, ArrowLeft, ChevronDown, Pencil, Clock } from 'lucide-react'
+import { useIsNarrow } from '../../lib/useIsNarrow'
 import { ModelIcon } from '../ui/ModelIcon'
 import { useChatStore } from '../../store/chat'
 import { useAgentsStore } from '../../store/agents'
@@ -9,6 +10,8 @@ import { cronJobForSession } from '../../lib/reminders'
 import { useModelsStore } from '../../store/models'
 import { useSettingsStore } from '../../store/settings'
 import { MessageThread } from './MessageThread'
+import { ScriptJobDock } from './ScriptJobDock'
+import { MobileChatList } from './MobileChatList'
 import { ThemeBackground } from '../theme/ThemeBackground'
 import { MessageInput } from './MessageInput'
 import { useLogoUrl } from '../../lib/logo'
@@ -19,7 +22,7 @@ import { agentIdFromSessionKey as sessionAgentId, isAutoKeyTitle, isCronSessionK
 
 // A single row in the unified chat list — an opened conversation or a running-but-
 // unopened gateway session, normalized to one shape.
-interface ChatItem {
+export interface ChatItem {
   key: string
   sessionKey?: string
   emoji: string
@@ -190,6 +193,12 @@ export function ChatView({ solo }: { solo?: string } = {}) {
   })
 
   const activeConv = conversations.find(c => c.id === activeConvId)
+  // Mobile master-detail: show the chat LIST full-width when nothing is selected, and
+  // the CONVERSATION full-width (with a back button) when one is — instead of the
+  // desktop side-by-side sidebar + conversation. `solo` (pop-out) has no list either way.
+  const narrow = useIsNarrow()
+  const showList = !solo && (!narrow || !activeConv)
+  const showChatArea = solo || !narrow || !!activeConv
 
   // ── Unified chat list ──────────────────────────────────────────────────────
   // One model instead of two zones: opened conversations + running-but-unopened
@@ -304,8 +313,30 @@ export function ChatView({ solo }: { solo?: string } = {}) {
 
   return (
     <div className="flex flex-1 min-h-0">
-      {/* Sidebar — hidden in a popped-out (solo) window */}
-      {!solo && (
+      {/* Chat list. Hidden in a pop-out. On mobile it's a purpose-built full-screen list
+          (MobileChatList); on desktop it's the fixed sidebar. */}
+      {showList && (narrow ? (
+        <MobileChatList
+          search={search}
+          setSearch={setSearch}
+          onNewChat={startNewChat}
+          emptyHint={search ? 'No chats found' : 'Tap the ＋ button to start a chat'}
+          groups={[
+            { label: 'Active', tone: 'success', items: activeItems },
+            { label: 'Scheduled', tone: 'muted', items: cronItems },
+            ...dateGroups.map(g => ({ label: g.label, tone: 'muted' as const, items: g.items })),
+          ]}
+          footer={(hiddenRestCount > 0 || showAllRecent) ? (
+            <button
+              onClick={() => setShowAllRecent(v => !v)}
+              className="w-full text-xs px-2 py-2 rounded"
+              style={{ background: 'var(--bg-elevated)', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', textAlign: 'left' }}
+            >
+              {showAllRecent ? 'Show less' : `Show ${hiddenRestCount} older…`}
+            </button>
+          ) : undefined}
+        />
+      ) : (
       <div
         className="flex flex-col shrink-0"
         style={{
@@ -436,15 +467,59 @@ export function ChatView({ solo }: { solo?: string } = {}) {
           )}
         </div>
       </div>
-      )}
+      ))}
 
-      {/* Chat area */}
+      {/* Chat area — full-width on mobile once a chat is open (back button returns to list) */}
+      {showChatArea && (
       <div className="flex flex-1 flex-col min-w-0 min-h-0 relative">
         <ThemeBackground slot="chat" />
         <div className="relative z-[1] flex flex-1 flex-col min-w-0 min-h-0">
         {activeConv ? (
           <>
-            {/* Chat header */}
+            {/* Chat header — two stacked rows on mobile (nav + title + menu, then the
+                model/thinking pills) so the title can't wrap and the controls can't
+                overflow off-screen; a single dense row on desktop. */}
+            {narrow ? (
+              <div className="flex flex-col shrink-0" style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-surface)' }}>
+                <div className="flex items-center gap-2 px-3 text-sm" style={{ minHeight: 48 }}>
+                  {!solo && (
+                    <button
+                      onClick={() => selectConversation('')}
+                      aria-label="Back to chats"
+                      style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 32, height: 32, marginLeft: -4, borderRadius: 'var(--radius)', border: 'none', background: 'transparent', color: 'var(--text-primary)', cursor: 'pointer', flexShrink: 0 }}
+                    >
+                      <ArrowLeft size={20} />
+                    </button>
+                  )}
+                  <span style={{ flexShrink: 0 }}>🤖</span>
+                  <span className="font-medium" style={{ color: 'var(--text-primary)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {convDisplayName(activeConv)}
+                  </span>
+                  {activeConv.sessionKey?.includes(':heartbeat') && (
+                    <Heart size={14} title="Heartbeat session" style={{ color: 'var(--accent)', opacity: 0.8, flexShrink: 0 }} />
+                  )}
+                  <DisplayMenu
+                    mode={chatMode}
+                    setMode={setChatMode}
+                    reasoning={showReasoning} setReasoning={setShowReasoning}
+                    actions={showTools}       setActions={setShowTools}
+                    context={showContext}     setContext={setShowContext}
+                  />
+                </div>
+                {/* Per-chat model + thinking overrides — own row, scrolls if it can't fit. */}
+                <div className="flex items-center gap-1.5 px-3 pb-2" style={{ overflowX: 'auto' }}>
+                  <ModelSelect
+                    value={activeConv.modelOverride}
+                    agentDefault={agents.find(a => a.id === activeConv.agentId)?.model?.primary}
+                    onChange={model => setModelOverride(activeConv.id, model)}
+                  />
+                  <ThinkingSelect
+                    value={activeConv.thinkingLevel}
+                    onChange={level => setThinkingLevel(activeConv.id, level)}
+                  />
+                </div>
+              </div>
+            ) : (
             <div
               className="flex items-center gap-3 px-4 py-2 shrink-0 text-sm"
               style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-surface)' }}
@@ -507,10 +582,14 @@ export function ChatView({ solo }: { solo?: string } = {}) {
                 ) : null}
               </div>
             </div>
+            )}
 
             {showContext && activeConv.sessionKey && (
               <ContextBar sessionKey={activeConv.sessionKey} />
             )}
+            {/* Scripts this chat has running — pinned above the thread so progress and
+                output stay reachable however far the user has scrolled. */}
+            <ScriptJobDock key={activeConv.id} messages={activeConv.messages} sessionKey={activeConv.sessionKey} />
             <MessageThread conv={activeConv} showTools={showTools} showReasoning={showReasoning} />
             <MessageInput convId={activeConv.id} />
           </>
@@ -525,6 +604,7 @@ export function ChatView({ solo }: { solo?: string } = {}) {
         )}
         </div>
       </div>
+      )}
     </div>
   )
 }

@@ -41,6 +41,9 @@ export function MessageThread({ conv, showTools, showReasoning }: Props) {
       if (pinnedRef.current) el.scrollTop = el.scrollHeight
     })
     ro.observe(content)
+    // Also watch the viewport itself: the sticky script dock appearing above the thread
+    // shrinks it, which would otherwise slide the newest messages out of view.
+    ro.observe(el)
     return () => ro.disconnect()
   }, [])
 

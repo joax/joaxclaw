@@ -1,78 +1,77 @@
-import { MessageSquare, Bot, Settings, Server, HelpCircle, Timer, Brain, GitBranch, LayoutDashboard, UsersRound, Mic, Palette } from 'lucide-react'
+import { MessageSquare, Bot, Settings, Server, HelpCircle, Timer, Brain, GitBranch, LayoutDashboard, UsersRound, Mic, Palette, type LucideIcon } from 'lucide-react'
 import type { NavSection } from '../../App'
 import { HelpModal } from '../help/HelpModal'
 import { useHelpStore } from '../../store/help'
 
-interface NavItem { id: NavSection; icon: React.ReactNode; label: string; disabled?: boolean }
+interface NavItem { id: NavSection; Icon: LucideIcon; label: string }
 
 const GROUP_1: NavItem[] = [
-  { id: 'dashboard', icon: <LayoutDashboard size={20} />, label: 'Dashboard' },
-  { id: 'chat',      icon: <MessageSquare size={20} />,   label: 'Chats' },
-  { id: 'talk',      icon: <Mic size={20} />,             label: 'Talk' },
-  { id: 'obsidian',  icon: <Brain size={20} />,           label: 'Memory' },
+  { id: 'dashboard', Icon: LayoutDashboard, label: 'Dashboard' },
+  { id: 'chat',      Icon: MessageSquare,   label: 'Chats' },
+  { id: 'talk',      Icon: Mic,             label: 'Talk' },
+  { id: 'obsidian',  Icon: Brain,           label: 'Memory' },
 ]
 
 const GROUP_2: NavItem[] = [
-  { id: 'agents',     icon: <Bot size={20} />,          label: 'Agents' },
-  { id: 'processes',  icon: <GitBranch size={20} />,    label: 'Processes' },
-  { id: 'teams',      icon: <UsersRound size={20} />,   label: 'Teams' },
-  { id: 'crons',      icon: <Timer size={20} />,        label: 'Crons' },
+  { id: 'agents',     Icon: Bot,        label: 'Agents' },
+  { id: 'processes',  Icon: GitBranch,  label: 'Processes' },
+  { id: 'teams',      Icon: UsersRound, label: 'Teams' },
+  { id: 'crons',      Icon: Timer,      label: 'Crons' },
 ]
 
 const GROUP_3: NavItem[] = [
-  { id: 'gateway',  icon: <Server size={20} />,   label: 'Gateway' },
-  { id: 'themes',   icon: <Palette size={20} />,  label: 'Themes' },
-  { id: 'settings', icon: <Settings size={20} />, label: 'Settings' },
+  { id: 'gateway',  Icon: Server,   label: 'Gateway' },
+  { id: 'themes',   Icon: Palette,  label: 'Themes' },
+  { id: 'settings', Icon: Settings, label: 'Settings' },
 ]
 
-interface Props { section: NavSection; onNavigate: (s: NavSection) => void; disabledSections?: NavSection[] }
+// 'rail' = the 52px icon-only desktop rail (tooltip labels). 'list' = a wider, touch
+// sized list with larger icons + labels, used in the mobile nav drawer.
+type Variant = 'rail' | 'list'
 
-export function NavRail({ section, onNavigate, disabledSections = [] }: Props) {
+interface Props { section: NavSection; onNavigate: (s: NavSection) => void; disabledSections?: NavSection[]; variant?: Variant }
+
+export function NavRail({ section, onNavigate, disabledSections = [], variant = 'rail' }: Props) {
   const { open: helpOpen, tab: helpTab, openHelp, closeHelp } = useHelpStore()
+  const list = variant === 'list'
+  const renderGroup = (group: NavItem[]) =>
+    group.map(item => (
+      <NavBtn key={item.id} Icon={item.Icon} label={item.label} variant={variant}
+        active={section === item.id} disabled={disabledSections.includes(item.id)}
+        onClick={() => onNavigate(item.id)} />
+    ))
+
   return (
     <nav
-      className="flex flex-col items-center py-2 shrink-0"
+      className="flex flex-col shrink-0"
       style={{
-        width: 52,
+        width: list ? '100%' : 52,
+        height: '100%',
+        alignItems: list ? 'stretch' : 'center',
+        padding: list ? '8px 0' : '8px 0',
         background: 'var(--bg-surface)',
-        borderRight: '1px solid var(--border)'
+        borderRight: list ? 'none' : '1px solid var(--border)',
+        overflowY: 'auto',
       }}
     >
-      {/* Group 1: Chats, Sessions, Memory */}
-      <div className="flex flex-col gap-1 w-full px-2 pt-1">
-        {GROUP_1.map(item => (
-          <NavBtn key={item.id} active={section === item.id} disabled={disabledSections.includes(item.id)} label={item.label} onClick={() => onNavigate(item.id)}>
-            {item.icon}
-          </NavBtn>
-        ))}
+      <div className="flex flex-col gap-1 w-full" style={{ padding: list ? '4px 8px 0' : '4px 8px 0' }}>
+        {renderGroup(GROUP_1)}
       </div>
 
       <Divider />
 
-      {/* Group 2: Agents, Plugins, Crons */}
-      <div className="flex flex-col gap-1 w-full px-2">
-        {GROUP_2.map(item => (
-          <NavBtn key={item.id} active={section === item.id} disabled={disabledSections.includes(item.id)} label={item.label} onClick={() => onNavigate(item.id)}>
-            {item.icon}
-          </NavBtn>
-        ))}
+      <div className="flex flex-col gap-1 w-full" style={{ padding: '0 8px' }}>
+        {renderGroup(GROUP_2)}
       </div>
 
       {/* Spacer pushes group 3 + help to the bottom */}
-      <div className="flex-1" />
+      <div className="flex-1" style={{ minHeight: 8 }} />
 
       <Divider />
 
-      {/* Group 3: Gateway, Settings + Help */}
-      <div className="flex flex-col gap-1 w-full px-2 pb-1">
-        {GROUP_3.map(item => (
-          <NavBtn key={item.id} active={section === item.id} disabled={disabledSections.includes(item.id)} label={item.label} onClick={() => onNavigate(item.id)}>
-            {item.icon}
-          </NavBtn>
-        ))}
-        <NavBtn label="Help" active={helpOpen} onClick={() => openHelp()}>
-          <HelpCircle size={20} />
-        </NavBtn>
+      <div className="flex flex-col gap-1 w-full" style={{ padding: '0 8px 4px' }}>
+        {renderGroup(GROUP_3)}
+        <NavBtn Icon={HelpCircle} label="Help" variant={variant} active={helpOpen} onClick={() => openHelp()} />
       </div>
 
       {helpOpen && <HelpModal initialTab={helpTab} onClose={closeHelp} />}
@@ -82,31 +81,33 @@ export function NavRail({ section, onNavigate, disabledSections = [] }: Props) {
 
 function Divider() {
   return (
-    <div
-      className="w-full my-1 px-3"
-    >
+    <div className="w-full my-1 px-3">
       <div style={{ height: 1, background: 'var(--border)', borderRadius: 1 }} />
     </div>
   )
 }
 
 function NavBtn({
-  children, active, disabled, label, onClick
-}: { children: React.ReactNode; active?: boolean; disabled?: boolean; label: string; onClick: () => void }) {
+  Icon, active, disabled, label, onClick, variant,
+}: { Icon: LucideIcon; active?: boolean; disabled?: boolean; label: string; onClick: () => void; variant: Variant }) {
+  const list = variant === 'list'
   return (
     <button
       onClick={disabled ? undefined : onClick}
-      title={label}
-      className="relative flex items-center justify-center transition-all group"
+      title={list ? undefined : label}
+      className="relative flex items-center transition-all group"
       style={{
         width: '100%',
-        height: 40,
+        height: list ? 48 : 40,
+        gap: list ? 14 : 0,
+        justifyContent: list ? 'flex-start' : 'center',
+        padding: list ? '0 14px' : 0,
         borderRadius: 'var(--radius)',
         border: 'none',
         cursor: disabled ? 'default' : 'pointer',
         opacity: disabled ? 0.35 : 1,
         background: active ? 'color-mix(in srgb, var(--accent) 20%, var(--bg-elevated))' : 'transparent',
-        color: active ? 'var(--accent)' : 'var(--text-secondary)'
+        color: active ? 'var(--accent)' : 'var(--text-secondary)',
       }}
       onMouseEnter={e => {
         if (!active && !disabled) {
@@ -122,20 +123,20 @@ function NavBtn({
       }}
     >
       {active && !disabled && (
-        <span
-          className="absolute left-0 top-2 bottom-2"
-          style={{ width: 3, borderRadius: '0 2px 2px 0', background: 'var(--accent)' }}
-        />
+        <span className="absolute left-0" style={{ top: 8, bottom: 8, width: 3, borderRadius: '0 2px 2px 0', background: 'var(--accent)' }} />
       )}
-      {children}
+      <Icon size={list ? 22 : 20} style={{ flexShrink: 0 }} />
+      {list && <span style={{ fontSize: 15, fontWeight: 500 }}>{label}</span>}
 
-      {/* Tooltip */}
-      <span
-        className="absolute left-full ml-2 px-2 py-1 text-xs rounded whitespace-nowrap pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity z-50"
-        style={{ background: 'var(--bg-elevated)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
-      >
-        {disabled ? `${label} (plugin disabled)` : label}
-      </span>
+      {/* Tooltip — rail only (list shows the label inline) */}
+      {!list && (
+        <span
+          className="absolute left-full ml-2 px-2 py-1 text-xs rounded whitespace-nowrap pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity z-50"
+          style={{ background: 'var(--bg-elevated)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
+        >
+          {disabled ? `${label} (plugin disabled)` : label}
+        </span>
+      )}
     </button>
   )
 }
