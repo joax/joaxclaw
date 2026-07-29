@@ -28,6 +28,11 @@ gateway. Major areas already in place:
 - **Obsidian** — vault browser, graph, and memory panel, plus a configurable
   **Agent access** control (Off / Read-only / Read & write) that lets gateway agents —
   not just the app — read and write the vault.
+- **Mobile companion (PWA)** — the same renderer, installable on a phone from the
+  `build:web` bundle. The phone pairs as its own device (WebCrypto Ed25519 identity), so
+  it holds full operator scopes without copying the desktop token. Every view has a
+  phone design pass (bottom tabs, master-detail, read-and-run Teams/Processes) plus
+  in-session background notifications. Notes: [docs/mobile-companion.md](docs/mobile-companion.md).
 
 ## Next / under consideration
 
@@ -40,6 +45,9 @@ gateway. Major areas already in place:
   with a reactive orb (over the gateway-relay transport) → VRM avatar + audio-driven
   lip-sync → expressions/idle → WebRTC transport + polish. Design notes:
   [src/lib/TALK.md](src/lib/TALK.md).
+- **Mobile follow-ons** — true background push (Web Push + VAPID, blocked on the gateway
+  sending push messages to a stored subscription; an inert handler is already in the
+  service worker), and a phone design pass for the Talk/voice view.
 - **Per-engine model listing in the model picker** for remote engines (the
   `engines.fetch` primitive exists; surface it more widely).
 - **Richer plugin config forms** — schema-driven fields beyond the curated API-key

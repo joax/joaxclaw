@@ -5,6 +5,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.21.0] - Unreleased
+
+### Added
+
+- **JoaxClaw on your phone.** The web build is now an **installable PWA** — serve it from your gateway (or any allow-listed origin), add it to your home screen, and you get the real app on a phone: chat, agents, teams, processes, crons, models, memory, all over the same gateway connection the desktop uses. The phone pairs as **its own device** (a WebCrypto Ed25519 identity approved once with `openclaw devices approve`), so it holds full operator scopes without copying the desktop's token; while approval is pending the connect screen shows the device id and keeps retrying, connecting the moment you approve it. Every surface got a real phone design pass rather than a squeezed desktop layout: a bottom tab bar, master-detail chat with a purpose-built list, a card-based dashboard feed, read-and-run views for Teams and Processes, a stacked Agents overview, full-screen editor sheets, ≥40px touch targets, and Return inserting a newline instead of sending. Background and design notes: [docs/mobile-companion.md](docs/mobile-companion.md).
+- **Notifications when the mobile app is in the background.** Opt in under **Settings → Notifications** and a finished agent reply, a fired reminder, or a completed team/process run raises an OS notification; tapping it opens the app on the right chat or view. Browser/PWA only — the desktop app is unchanged — and it covers the app being backgrounded, not fully closed (true push needs gateway-side Web Push).
+- **Running scripts stay pinned to the top of the chat.** A script the agent launches with `script_start` now sits in a sticky strip above the conversation — command, elapsed time, a % bar, **Stop**, and an expandable output tail — so a long build or test run stays visible however far you scroll, and its result stays put until you dismiss it. It also **survives an app reload**: the chat re-attaches to whatever the host is still running, where before the script simply vanished from the UI (the reloaded transcript carries no tool calls to recover it from). The reload case needs the `joaxclaw-fs` plugin ≥ **0.11.5** on your gateway.
+
+---
+
 ## [0.20.2] - 2026-07-28
 
 ### Fixed
