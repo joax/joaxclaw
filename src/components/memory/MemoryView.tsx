@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Plus, Search, Pencil, Trash2, ChevronDown, Loader2, Brain, KeyRound, Check, X } from 'lucide-react'
+import { Plus, Search, Pencil, Trash2, ChevronDown, Loader2, Brain, KeyRound, Check, X, ArrowLeft } from 'lucide-react'
 import { useMemoryStore } from '../../store/memory'
+import { useIsNarrow } from '../../lib/useIsNarrow'
 import { useIsRemoteGateway, useConnectionStore } from '../../store/connection'
 import { gatewayHost } from '../../lib/ollamaHealth'
 import { buildPluginInstallPrompt } from '../../lib/joaxclawFsInstall'
@@ -31,17 +32,26 @@ export function MemoryView({ onOpenChat }: { onOpenChat?: () => void } = {}) {
   const remote = useIsRemoteGateway()
   const status = useConnectionStore(s => s.status)
   const gwHost = useConnectionStore(s => gatewayHost(s.connection?.url))
+  // Mobile master-detail: on a narrow screen the connections list and the detail are
+  // separate screens (list → tap → detail with a ← back), instead of side-by-side.
+  const narrow = useIsNarrow()
+  const [mobileDetail, setMobileDetail] = useState(false)
 
   // On a remote gateway, memory is managed by the joaxclaw-fs plugin — probe for it
   // whenever the connection/remoteness changes.
   useEffect(() => { void probePlugin() }, [remote, status, probePlugin])
 
-  // Select + load the first connection on mount if nothing is active yet.
+  // Select + load the first connection on mount if nothing is active yet. On mobile we
+  // start on the list (no auto-select into detail), like the other master-detail views.
   useEffect(() => {
-    if (!selectedId && connections.length > 0) void select(connections[0].id)
+    if (!narrow && !selectedId && connections.length > 0) void select(connections[0].id)
     else if (selectedId && !graph && !items && !loading) void select(selectedId)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  const openConn = (id: string) => { void select(id); if (narrow) setMobileDetail(true) }
+  const showList = !narrow || !mobileDetail
+  const showDetail = !narrow || mobileDetail
 
   // Management (add / access / skill install) works on a local gateway, or a remote
   // gateway once the plugin is confirmed. Browsing content is local-gateway-only in P1.
@@ -80,25 +90,28 @@ export function MemoryView({ onOpenChat }: { onOpenChat?: () => void } = {}) {
       ) : (
         <div className="flex flex-1 min-h-0">
           {/* Connections list */}
-          <div className="flex flex-col shrink-0 overflow-y-auto py-3 px-2.5 gap-1" style={{ width: 246, borderRight: '1px solid var(--border)' }}>
-            {groups.map(g => (
-              <div key={g.location} className="flex flex-col gap-1">
-                <div className="text-[10.5px] font-semibold uppercase tracking-wider px-2 pt-2 pb-1" style={{ color: 'var(--text-secondary)', opacity: 0.7 }}>
-                  {LOCATION_LABEL[g.location]}
+          {showList && (
+            <div className="flex flex-col shrink-0 overflow-y-auto py-3 px-2.5 gap-1" style={{ width: narrow ? '100%' : 246, borderRight: narrow ? 'none' : '1px solid var(--border)' }}>
+              {groups.map(g => (
+                <div key={g.location} className="flex flex-col gap-1">
+                  <div className="text-[10.5px] font-semibold uppercase tracking-wider px-2 pt-2 pb-1" style={{ color: 'var(--text-secondary)', opacity: 0.7 }}>
+                    {LOCATION_LABEL[g.location]}
+                  </div>
+                  {g.conns.map(c => <ConnRow key={c.id} conn={c} active={!narrow && c.id === selectedId} onClick={() => openConn(c.id)} />)}
                 </div>
-                {g.conns.map(c => <ConnRow key={c.id} conn={c} active={c.id === selectedId} onClick={() => void select(c.id)} />)}
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
 
           {/* Detail */}
-          {selected ? (
+          {showDetail && (selected ? (
             <Detail
               key={selected.id}
               conn={selected}
               remote={remote}
               loading={loading} progress={progress} graph={graph} items={items} info={info} error={error}
               preview={preview}
+              onBack={narrow ? () => setMobileDetail(false) : undefined}
               onOpenItem={openItem}
               onSetEnabled={setEnabled}
               onSetAccess={setAccess}
@@ -107,7 +120,7 @@ export function MemoryView({ onOpenChat }: { onOpenChat?: () => void } = {}) {
             />
           ) : (
             <div className="flex-1" />
-          )}
+          ))}
         </div>
       )}
 
@@ -147,7 +160,7 @@ function ConnRow({ conn, active, onClick }: { conn: MemoryConnection; active: bo
   )
 }
 
-function Detail({ conn, remote, loading, progress, graph, items, info, error, preview, onOpenItem, onSetEnabled, onSetAccess, onEdit, onRemove }: {
+function Detail({ conn, remote, loading, progress, graph, items, info, error, preview, onBack, onOpenItem, onSetEnabled, onSetAccess, onEdit, onRemove }: {
   conn: MemoryConnection
   remote: boolean
   loading: boolean; progress: number
@@ -156,6 +169,7 @@ function Detail({ conn, remote, loading, progress, graph, items, info, error, pr
   info: ReturnType<typeof useMemoryStore.getState>['info']
   error: string | null
   preview: ReturnType<typeof useMemoryStore.getState>['preview']
+  onBack?: () => void
   onOpenItem: (id: string) => void
   onSetEnabled: (id: string, v: boolean) => void
   onSetAccess: (id: string, a: MemoryAccess) => void
@@ -172,6 +186,11 @@ function Detail({ conn, remote, loading, progress, graph, items, info, error, pr
       {/* Detail header */}
       <div className="flex flex-col gap-2.5 px-5 py-4" style={{ borderBottom: '1px solid var(--border)' }}>
         <div className="flex items-center gap-3">
+          {onBack && (
+            <button onClick={onBack} title="Back" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 32, height: 32, marginLeft: -6, borderRadius: 'var(--radius)', border: 'none', background: 'transparent', color: 'var(--text-primary)', cursor: 'pointer', flexShrink: 0 }}>
+              <ArrowLeft size={18} />
+            </button>
+          )}
           <span className="grid place-items-center text-[20px] shrink-0" style={{ width: 40, height: 40, borderRadius: 10, background: 'var(--bg-elevated)' }}>{def?.icon ?? '🧠'}</span>
           <div className="flex-1 min-w-0">
             <div className="text-[15px] font-semibold" style={{ color: 'var(--text-primary)' }}>{conn.name}</div>
