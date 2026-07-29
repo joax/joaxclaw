@@ -128,6 +128,11 @@ export class GatewayClient {
   // single callback — otherwise the last mounter clobbers the others.
   private logListeners = new Set<(entry: ConnLog) => void>()
   onStatusChange?: (status: 'connecting' | 'connected' | 'disconnected' | 'error', detail?: string) => void
+  // Fired when the gateway accepts our device identity but the device isn't approved
+  // yet — a recoverable "waiting for approval" state, distinct from a terminal auth
+  // error. The store shows a pairing card and retries until the operator approves it
+  // on the host (`openclaw devices approve`).
+  onPairingPending?: (deviceId: string) => void
   onHeartbeat?: () => void
 
   // Subscribe to live log entries; returns an unsubscribe. Existing entries are
@@ -364,9 +369,12 @@ export class GatewayClient {
       // (with the deviceId to approve) instead of a bare "auth rejected".
       const pairing = /not[_ ]?paired|pair|approv|device.*identity/i.test(msg)
       if (pairing && device) {
-        const hint = `This device isn't approved on the gateway yet. On the gateway host run:  openclaw devices approve  (device ${device.id.slice(0, 12)}…), then reconnect.`
-        this._addLog('info', hint)
-        this.onStatusChange?.('error', hint)
+        // Recoverable: this device just needs a one-time approval on the host. Signal
+        // the pairing-pending state (the store retries) rather than a terminal error.
+        // Fall back to a clear error for any consumer that doesn't handle pairing.
+        this._addLog('info', `Device ${device.id.slice(0, 12)}… is awaiting approval on the gateway (openclaw devices approve).`)
+        if (this.onPairingPending) this.onPairingPending(device.id)
+        else this.onStatusChange?.('error', `This device isn't approved on the gateway yet — run: openclaw devices approve (device ${device.id.slice(0, 12)}…)`)
       } else {
         this._addLog('info', `Auth rejected: ${msg}`)
         this.onStatusChange?.('error', `Auth rejected by gateway: ${msg}`)

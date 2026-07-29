@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useLogoUrl } from '../../lib/logo'
-import { Wifi, Trash2, ChevronDown, ChevronRight, AlertCircle, CheckCircle2, Zap } from 'lucide-react'
+import { Wifi, Trash2, ChevronDown, ChevronRight, AlertCircle, CheckCircle2, Zap, Loader2, ShieldCheck } from 'lucide-react'
 import { useConnectionStore } from '../../store/connection'
 import { gatewayClient, type ConnLog } from '../../lib/gateway'
 import { Btn } from '../ui/Btn'
@@ -9,7 +9,7 @@ import { Input } from '../ui/Input'
 interface Props { onConnect: () => void }
 
 export function ConnectScreen({ onConnect }: Props) {
-  const { connect, disconnect, savedConnections, removeConnection, status, statusDetail } = useConnectionStore()
+  const { connect, disconnect, savedConnections, removeConnection, status, statusDetail, pairingPending } = useConnectionStore()
   const logoUrl = useLogoUrl()
   const [url, setUrl] = useState('ws://localhost:18789')
   const [token, setToken] = useState('')
@@ -170,13 +170,40 @@ export function ConnectScreen({ onConnect }: Props) {
             </div>
 
             {/* Status banner */}
-            {isConnecting && (
+            {isConnecting && !pairingPending && (
               <div
                 className="flex items-center gap-2 px-3 py-2.5 rounded text-sm animate-fade-in"
                 style={{ background: 'color-mix(in srgb, var(--accent) 10%, transparent)', border: '1px solid var(--accent)', color: 'var(--accent)' }}
               >
                 <div className="w-2 h-2 rounded-full animate-pulse-dot" style={{ background: 'var(--accent)', flexShrink: 0 }} />
                 Connecting — check the log below for progress
+              </div>
+            )}
+
+            {/* Pairing: a new device awaiting one-time approval on the host. We keep
+                retrying, so it connects the moment you approve it — no need to reconnect. */}
+            {pairingPending && (
+              <div
+                className="px-3.5 py-3 rounded animate-fade-in"
+                style={{ background: 'color-mix(in srgb, var(--accent) 8%, transparent)', border: '1px solid var(--accent)' }}
+              >
+                <div className="flex items-center gap-2 mb-2" style={{ color: 'var(--accent)' }}>
+                  <ShieldCheck size={16} style={{ flexShrink: 0 }} />
+                  <span className="font-medium text-sm flex-1">Approve this device</span>
+                  <Loader2 size={14} className="animate-spin" style={{ flexShrink: 0, opacity: 0.8 }} />
+                </div>
+                <p className="text-xs mb-2" style={{ color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+                  This device needs a one-time approval. On your gateway host, run:
+                </p>
+                <div
+                  className="mb-2 px-2.5 py-1.5 rounded font-mono text-xs select-all"
+                  style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)', color: 'var(--text-primary)', wordBreak: 'break-all' }}
+                >
+                  openclaw devices approve --latest
+                </div>
+                <p className="text-xs" style={{ color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+                  Device <code style={{ fontFamily: 'monospace', color: 'var(--text-primary)' }}>{pairingPending.deviceId.slice(0, 12)}…</code> · you'll connect automatically once it's approved.
+                </p>
               </div>
             )}
 
