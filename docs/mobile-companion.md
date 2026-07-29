@@ -240,4 +240,17 @@ gateway — no `allowedOrigins` change — or any mount point).
       apple-touch + standalone metas in `index.html`, and SW registration in `main.tsx`
       gated to the browser build (never Electron). Verified via `build:web` (assets emitted)
       + desktop build unaffected. No native shell.
-- [ ] Notifications
+- [~] Notifications
+  - [x] **Tier 1 — local (in-session) notifications.** While the PWA is backgrounded but
+        still in memory, a finished agent reply, a fired reminder, or a completed
+        team/process run raises an OS notification via the service worker
+        (`registration.showNotification` — required on Android Chrome). Tapping it focuses
+        the app and routes to the chat/view (`notificationclick` → `postMessage` →
+        `joax:navigate` window event → `setSection`/`selectConversation`). Opt-in via
+        Settings → Notifications (`notificationsEnabled` pref; requests OS permission);
+        browser/PWA only (no-op under Electron); only fires while `document` is hidden.
+        `lib/notifications.ts`, `lib/useNotificationsWatcher.ts` (run + reminder diffs),
+        reply hook in `store/chat.ts`. type-check + build:web + desktop build + 369 tests.
+  - [ ] **Tier 2 — true background push (app fully killed).** Deferred: needs Web Push +
+        VAPID and the OpenClaw gateway sending push messages to a stored subscription. An
+        inert `push` handler is already in `public/sw.js` for when the gateway supports it.
