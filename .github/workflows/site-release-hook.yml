@@ -1,0 +1,30 @@
+name: Refresh site on release
+
+# Vercel deploys joaxclaw.ai from its own Git integration on every push to main, but a
+# GitHub *release* isn't a push — so the site would keep serving the previous version's
+# baked-in download links until the next commit. This pings a Vercel deploy hook to
+# rebuild it. Cosmetic safety net: site/download.js also refreshes the links client-side,
+# so a skipped run degrades to "the no-JS view names the previous version".
+#
+# Setup: create a deploy hook in the Vercel project (Settings → Git → Deploy Hooks) and
+# store the URL as the VERCEL_DEPLOY_HOOK repository secret. Without it, this no-ops.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger the Vercel deploy hook
+        env:
+          HOOK: ${{ secrets.VERCEL_DEPLOY_HOOK }}
+        run: |
+          if [ -z "$HOOK" ]; then
+            echo "::notice::VERCEL_DEPLOY_HOOK is not set — skipping the site rebuild."
+            exit 0
+          fi
+          curl -fsS -X POST "$HOOK" > /dev/null
+          echo "Asked Vercel to rebuild the site."
