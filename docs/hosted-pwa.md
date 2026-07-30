@@ -100,11 +100,15 @@ usually easier to test on production.
   (`connect-src 'self' wss: https:`, inline styles) because the app connects to arbitrary
   user gateways and React sets inline styles. Both are in `vercel.json`.
 - **The install step is no longer a no-op** (unlike the marketing-only build): the web app
-  needs Vite, so Vercel runs `npm ci --ignore-scripts`. The flag alone didn't stop
-  Electron's binary download in practice — the build log showed its `postinstall` running
-  anyway — so `ELECTRON_SKIP_BINARY_DOWNLOAD=1` is set via `build.env` in `vercel.json`,
-  which skips it regardless of how the install is invoked. The web build never needs the
-  Electron binary.
+  needs Vite, so `vercel.json` sets `npm ci --ignore-scripts`. Note that **Vercel runs a
+  second install of its own** for the serverless functions (visible in the build log as an
+  extra `up to date` after ours), and `--ignore-scripts` doesn't apply to it — that's what
+  triggers Electron's `postinstall` and its ~100MB binary download, which nothing here
+  needs. Suppressing it takes `ELECTRON_SKIP_BINARY_DOWNLOAD=1` as a **project environment
+  variable** (set for all three targets); the same key in `vercel.json`'s `build.env` was
+  not enough, since that only covers the build command. Confirm it's working by watching
+  the `Uploading build cache [...]` size in the log — with the binary skipped it should sit
+  well under the ~193MB it was before.
 - **Node version.** The project is pinned to **24.x** in Vercel's project settings. It was
   on 20.x, which Vercel deprecated: builds created on or after **2026-10-01** would have
   failed outright. Worth re-checking when Vercel next deprecates a version, since this is a
