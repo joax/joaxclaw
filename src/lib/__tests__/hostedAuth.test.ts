@@ -3,6 +3,8 @@ import { describe, it, expect } from 'vitest'
 import { signSession, readSession, readCookie, sessionCookie, clearedSessionCookie, TTL_SECONDS } from '../../../api/_lib/session.mjs'
 // @ts-expect-error — same
 import { entitled, allowlist, accessFor, authorizeUrl, OAUTH_SCOPE } from '../../../api/_lib/github.mjs'
+// @ts-expect-error — same
+import { isPublicAppAsset } from '../../../api/_lib/gate.mjs'
 
 // The session cookie IS the authorisation for the hosted web app, so these cover the ways
 // it could be forged or outlive a cancelled sponsorship.
@@ -125,5 +127,32 @@ describe('authorize url', () => {
     expect(OAUTH_SCOPE).toBe('read:user')
     expect(url.searchParams.get('state')).toBe('st')
     expect(url.searchParams.get('redirect_uri')).toBe('https://x/cb')
+  })
+})
+
+describe('public app assets', () => {
+  // A PWA is only installable if these stay fetchable: the manifest is requested without
+  // credentials, and a redirected service-worker script fails registration outright.
+  it('lets the PWA infrastructure through the gate', () => {
+    for (const p of [
+      '/app/manifest.webmanifest',
+      '/app/sw.js',
+      '/app/apple-touch-icon.png',
+      '/app/icons/icon-192.png',
+      '/app/icons/maskable-512.png',
+    ]) expect(isPublicAppAsset(p)).toBe(true)
+  })
+
+  it('keeps the app itself gated', () => {
+    for (const p of [
+      '/app/',
+      '/app/index.html',
+      '/app/assets/index-abc123.js',
+      '/app/icons/nested/deep.png',   // only the flat icons directory is public
+      '/app/sw.js.map',
+      '/app/manifest.webmanifest.bak',
+      '/account.html',
+      '',
+    ]) expect(isPublicAppAsset(p)).toBe(false)
   })
 })
