@@ -154,9 +154,10 @@ Actions creates the release and builds the Linux `.deb` + macOS `.dmg`. The
 `joaxclaw-fs` plugin publishes to npm separately when its own version changes.
 
 The [joaxclaw.ai](https://joaxclaw.ai) site is deployed by **Vercel** from this repo —
-`vercel.json` runs `npm run build:site` and serves `out/site`. It rebuilds on every push
-to `main`; publishing a release also pings a deploy hook (if the `VERCEL_DEPLOY_HOOK`
-secret is set) so the download links pick up the new artifacts.
+`vercel.json` runs `npm run build:site` and serves `out/site`. `main` is the production
+branch; every other branch gets a preview deployment, so a site change can be reviewed on
+a real URL before it's merged. Publishing a release also pings a deploy hook (if the
+`VERCEL_DEPLOY_HOOK` secret is set) so the download links pick up the new artifacts.
 
 ## Contributing
 
