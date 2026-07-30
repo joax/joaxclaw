@@ -135,6 +135,7 @@ npm run dev          # hot-reload dev build (Electron)
 npm run dev:web      # the same renderer in a browser, for the PWA / mobile layout
 npm run build        # production build
 npm run build:web    # static web bundle → out/web (npm run preview:web to serve it)
+npm run build:site   # joaxclaw.ai landing page → out/site
 npm run package:linux  # build the .deb (npm run package:mac for the .dmg)
 ```
 
@@ -151,6 +152,12 @@ Architecture notes live next to the code, e.g. [`src/lib/TEAMS.md`](src/lib/TEAM
 Bump `version` in `package.json`, update `CHANGELOG.md`, and push to `main`. GitHub
 Actions creates the release and builds the Linux `.deb` + macOS `.dmg`. The
 `joaxclaw-fs` plugin publishes to npm separately when its own version changes.
+
+The [joaxclaw.ai](https://joaxclaw.ai) site is deployed by **Vercel** from this repo —
+`vercel.json` runs `npm run build:site` and serves `out/site`. `main` is the production
+branch; every other branch gets a preview deployment, so a site change can be reviewed on
+a real URL before it's merged. Publishing a release also pings a deploy hook (if the
+`VERCEL_DEPLOY_HOOK` secret is set) so the download links pick up the new artifacts.
 
 ## Contributing
 

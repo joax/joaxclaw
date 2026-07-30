@@ -13,6 +13,7 @@
     "dev:web": "NODE_OPTIONS=--max-http-header-size=65536 vite --config vite.config.web.ts",
     "build": "electron-vite build",
     "build:web": "vite build --config vite.config.web.ts",
+    "build:site": "node scripts/build-site.mjs",
     "preview:web": "NODE_OPTIONS=--max-http-header-size=65536 vite preview --config vite.config.web.ts",
     "preview": "unset ELECTRON_RUN_AS_NODE && electron-vite preview",
     "start": "unset ELECTRON_RUN_AS_NODE && electron-vite dev",
