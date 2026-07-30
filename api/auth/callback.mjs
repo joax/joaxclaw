@@ -4,7 +4,7 @@
 // The GitHub access token is deliberately NOT kept — it's used once, here, and dropped.
 // The session carries only the login and the entitlement.
 
-import { exchangeCode, viewerSponsorship, entitled, minMonthlyDollars } from '../_lib/github.mjs'
+import { exchangeCode, viewerSponsorship, accessFor, minMonthlyDollars } from '../_lib/github.mjs'
 import { signSession, readSession, sessionCookie, serializeCookie, readCookie } from '../_lib/session.mjs'
 
 const STATE_COOKIE = 'joax_oauth_state'
@@ -37,10 +37,12 @@ export default async function handler(req, res) {
   try {
     const token = await exchangeCode({ code, clientId, clientSecret, redirectUri: `${origin}/api/auth/callback` })
     const viewer = await viewerSponsorship(token)
+    const access = accessFor(viewer)
     const session = await signSession({
       login: viewer.login,
       avatarUrl: viewer.avatarUrl,
-      sponsor: entitled(viewer),
+      sponsor: access.granted,
+      via: access.via,
       oneTime: viewer.oneTime,
       monthlyDollars: viewer.monthlyDollars,
       minDollars: minMonthlyDollars(),
@@ -50,7 +52,7 @@ export default async function handler(req, res) {
     res.setHeader('Cache-Control', 'no-store')
     // Sponsors go where they asked to go; everyone else lands on the account page, which
     // explains what's missing rather than bouncing them off a locked door.
-    res.redirect(302, entitled(viewer) ? (statePayload.next || '/app/') : '/account.html')
+    res.redirect(302, access.granted ? (statePayload.next || '/app/') : '/account.html')
   } catch (err) {
     console.error('oauth callback failed:', err.message)
     res.setHeader('Set-Cookie', serializeCookie(STATE_COOKIE, '', { maxAge: 0 }))

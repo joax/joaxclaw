@@ -76,6 +76,7 @@ is live, but a monthly tier has to exist for anyone to subscribe — check
 | `SESSION_SECRET` | a long random string — `openssl rand -hex 32` |
 | `SPONSOR_MAINTAINER` | optional, defaults to `joax` |
 | `SPONSOR_MIN_DOLLARS` | optional, defaults to `1` |
+| `SPONSOR_ALLOWLIST` | optional — extra logins that get in without sponsoring, comma- or space-separated |
 
 Until `GITHUB_CLIENT_ID` and `SESSION_SECRET` are set, sign-in reports itself as
 unconfigured and `/app/*` stays closed — the marketing pages are unaffected.
@@ -92,6 +93,13 @@ usually easier to test on production.
 - **Private sponsorships** are honoured: `viewerIsSponsoring` is authoritative and the
   tier amount may be hidden, so `entitled()` admits a sponsor whose amount reads as `null`
   rather than failing closed.
+- **The maintainer is always allowed in.** GitHub won't let an account sponsor itself, so
+  without an explicit bypass the owner would be locked out of their own hosted app.
+  `SPONSOR_MAINTAINER` is implicitly on the allowlist, and `SPONSOR_ALLOWLIST` adds
+  collaborators, testers, or comped access. This isn't a hole in the gate: the login comes
+  from the verified OAuth identity and the list is server-side config the visitor can't
+  influence. The account page says *why* someone is in ("maintainer access" vs "sponsor"),
+  so it never claims a sponsorship that doesn't exist.
 - **One-time sponsorships don't unlock hosting** — the account page thanks the user and
   explains that a monthly tier is what's needed.
 - **Raising the price later** doesn't retroactively lock out existing sponsors unless

@@ -45,9 +45,14 @@ function show(session) {
 
   if (session.sponsor) {
     const amount = session.monthlyDollars ? ` ($${session.monthlyDollars}/mo)` : ''
+    // Say which door they came through. The maintainer can't sponsor their own account, so
+    // claiming "sponsor" for them would be a lie.
+    const why = session.via === 'maintainer' ? ' — maintainer access.'
+      : session.via === 'allowlist' ? ' — access granted directly.'
+      : ` — sponsor${esc(amount)}. Thank you.`
     render(`
       <h3>You're in</h3>
-      <p>Signed in as ${who} — sponsor${esc(amount)}. Thank you.</p>
+      <p>Signed in as ${who}${why}</p>
       <p><a class="btn primary" href="${esc(next)}">Open the web app</a>
          <a class="btn" href="/api/auth/logout">Sign out</a></p>`)
     return
