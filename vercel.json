@@ -4,6 +4,11 @@
   "buildCommand": "npm run build:web && npm run build:site",
   "outputDirectory": "out/site",
   "installCommand": "npm ci --ignore-scripts",
+  "build": {
+    "env": {
+      "ELECTRON_SKIP_BINARY_DOWNLOAD": "1"
+    }
+  },
   "headers": [
     {
       "source": "/((?!app/).*)",
