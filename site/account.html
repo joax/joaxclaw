@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Account — JoaxClaw</title>
+<meta name="description" content="Sign in with GitHub to use JoaxClaw in your browser. Hosted for sponsors; free to self-host.">
+<link rel="icon" href="assets/icon.png">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header class="nav">
+  <a class="brand" href="/">
+    <picture>
+      <source srcset="assets/logo-on-light.png" media="(prefers-color-scheme: light)">
+      <img src="assets/logo-on-dark.png" alt="" width="28" height="28">
+    </picture>
+    <span>JoaxClaw</span>
+  </a>
+  <nav>
+    <a href="/#features">Features</a>
+    <a href="/#download">Download</a>
+    <a href="changelog.html">Changelog</a>
+    <a href="https://github.com/joax/joaxclaw">GitHub</a>
+  </nav>
+</header>
+
+<main>
+<section class="doc">
+
+  <h1>JoaxClaw in your browser</h1>
+
+  <p class="lede narrow lede-left">
+    The web version runs the same app as the desktop build, in a browser or installed as a
+    phone app. It's hosted here for sponsors — and it's MIT-licensed, so you can always
+    host it yourself for free instead.
+  </p>
+
+  <!-- Live state, filled in by account.js. Starts in a neutral "checking" state so the
+       page never flashes the wrong status. -->
+  <div id="status" class="card" hidden></div>
+
+  <noscript>
+    <div class="card">
+      <p>This page needs JavaScript to check your sign-in status.
+      <a href="/api/auth/login">Sign in with GitHub</a> to continue.</p>
+    </div>
+  </noscript>
+
+  <h2>Before it will work</h2>
+
+  <p>Two things are required by the browser and by your own gateway — neither is something
+  this site can do for you:</p>
+
+  <ul>
+    <li><strong>Your gateway needs TLS</strong> (a <code>wss://</code> address). A page served
+    over HTTPS cannot open a plain <code>ws://</code> socket, so a bare LAN gateway won't
+    connect. Tailscale Serve or any TLS-terminating proxy in front of your gateway works.</li>
+    <li><strong>This origin has to be allowed by your gateway.</strong> Add it to
+    <code>gateway.controlUi.allowedOrigins</code>:
+    <pre><code>joaxclaw.ai</code></pre>
+    Loopback, private-range, <code>.local</code>, and <code>.ts.net</code> origins are
+    accepted automatically — a public domain like this one is not.</li>
+  </ul>
+
+  <p>Your phone or browser then pairs as its own device: it generates a key, and you approve
+  it once on the gateway host with <code>openclaw devices approve --latest</code>. Your
+  gateway token and that key stay in your browser — see the
+  <a href="privacy.html">privacy policy</a>.</p>
+
+  <h2 id="self-host">Or host it yourself, free</h2>
+
+  <p>Nothing here is exclusive. The web app is part of the public repository, and the build
+  has no server component:</p>
+
+  <pre><code>git clone https://github.com/joax/joaxclaw
+cd joaxclaw
+npm install
+npm run build:web        # static bundle → out/web</code></pre>
+
+  <p>Serve <code>out/web</code> from anywhere your phone can reach over HTTPS. If you serve
+  it from the gateway host itself, or any <code>.ts.net</code> / private-range origin, you
+  don't even need the <code>allowedOrigins</code> change above. Sponsoring buys you the
+  convenience of not doing this, and it funds the project — not access.</p>
+
+</section>
+</main>
+
+<footer>
+  <p>
+    <a href="/">Home</a> ·
+    <a href="changelog.html">Changelog</a> ·
+    <a href="privacy.html">Privacy</a> ·
+    <a href="terms.html">Terms</a> ·
+    <a href="https://github.com/joax/joaxclaw">Source</a>
+  </p>
+  <p class="fineprint">© {{YEAR}} JoaxClaw · Not affiliated with the OpenClaw project.</p>
+</footer>
+
+<script src="account.js" defer></script>
+</body>
+</html>

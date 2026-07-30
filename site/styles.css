@@ -224,6 +224,46 @@ section > h2 {
 .doc hr { display: none; }
 .doc p, .doc li { color: var(--text); }
 
+/* ── Account card ────────────────────────────────────────────────────────── */
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px 22px;
+  margin: 26px 0 34px;
+}
+
+/* Inside .doc the h3 rule is a small-caps section label; the card's heading is a real
+   heading, so it opts back out. */
+.card h3 {
+  margin: 0 0 10px;
+  font-size: 18px;
+  text-transform: none;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+
+.card p { margin: 0 0 12px; }
+.card p:last-child { margin-bottom: 0; }
+.card .btn { margin: 4px 8px 0 0; }
+
+.notice-line {
+  margin: 0 0 16px;
+  padding: 9px 13px;
+  font-size: 14px;
+  border-left: 3px solid var(--accent);
+  border-radius: 0 5px 5px 0;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.avatar { border-radius: 50%; vertical-align: -5px; margin-right: 6px; }
+
+/* Left-aligned variants — the strict CSP forbids inline style attributes, so alignment
+   tweaks live here rather than on the element. */
+.lede-left { margin-left: 0; text-align: left; }
+.fineprint-left { text-align: left; }
+
 /* ── Footer ──────────────────────────────────────────────────────────────── */
 
 footer {
