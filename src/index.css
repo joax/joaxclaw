@@ -29,7 +29,13 @@
 }
 
 html, body, #root {
+  /* `100%` resolves against the LARGE viewport on mobile browsers — the height the page
+     would have if the URL bar were hidden — so a full-height shell overflows behind the
+     browser chrome and anything anchored to the bottom (the mobile tab bar) falls below
+     the fold. `dvh` tracks the *visible* viewport instead, and shrinks/grows as the bar
+     collapses. The `100%` above it stays as the fallback for browsers without `dvh`. */
   height: 100%;
+  height: 100dvh;
   overflow: hidden;
   font-family: var(--font-family);
   font-size: var(--font-size);
