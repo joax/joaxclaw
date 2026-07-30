@@ -18,6 +18,7 @@ export default async function handler(req, res) {
     login: session?.login ?? null,
     avatarUrl: session?.avatarUrl ?? null,
     sponsor: !!session?.sponsor,
+    via: session?.via ?? null,
     oneTime: !!session?.oneTime,
     monthlyDollars: session?.monthlyDollars ?? null,
     // When the verdict is next refreshed from GitHub (the session's own expiry).
