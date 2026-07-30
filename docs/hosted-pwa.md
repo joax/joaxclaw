@@ -23,7 +23,7 @@ gateway — who are also the people most able to self-host. Price and promote ac
 
 ## Architecture
 
-```
+```text
 Browser ──► /account.html ──► /api/auth/login ──► GitHub OAuth
                                     │
                                     ▼
@@ -100,8 +100,15 @@ usually easier to test on production.
   (`connect-src 'self' wss: https:`, inline styles) because the app connects to arbitrary
   user gateways and React sets inline styles. Both are in `vercel.json`.
 - **The install step is no longer a no-op** (unlike the marketing-only build): the web app
-  needs Vite, so Vercel runs `npm ci --ignore-scripts` — the flag skips Electron's ~100MB
-  postinstall binary download, which the web build doesn't need.
+  needs Vite, so Vercel runs `npm ci --ignore-scripts`. The flag alone didn't stop
+  Electron's binary download in practice — the build log showed its `postinstall` running
+  anyway — so `ELECTRON_SKIP_BINARY_DOWNLOAD=1` is set via `build.env` in `vercel.json`,
+  which skips it regardless of how the install is invoked. The web build never needs the
+  Electron binary.
+- **Node version.** The project is pinned to **24.x** in Vercel's project settings. It was
+  on 20.x, which Vercel deprecated: builds created on or after **2026-10-01** would have
+  failed outright. Worth re-checking when Vercel next deprecates a version, since this is a
+  dashboard setting rather than something in the repo.
 
 ## What is deliberately not here
 
