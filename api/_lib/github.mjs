@@ -90,3 +90,24 @@ export function entitled({ sponsoring, monthlyDollars }, min = minMonthlyDollars
   // private sponsors.
   return monthlyDollars == null || monthlyDollars >= min
 }
+
+// Logins that get in without sponsoring. The maintainer is always included: GitHub won't
+// let an account sponsor itself, so without this the owner is locked out of their own
+// hosted app. SPONSOR_ALLOWLIST adds collaborators, testers, or comped access.
+//
+// This is not a hole in the gate: the login is whatever GitHub's OAuth flow proved, and
+// the list is server-side configuration the visitor can't influence.
+export function allowlist({ maintainer = MAINTAINER, extra = process.env.SPONSOR_ALLOWLIST } = {}) {
+  const listed = String(extra ?? '').split(/[,\s]+/).filter(Boolean)
+  return new Set([maintainer, ...listed].filter(Boolean).map(l => l.toLowerCase()))
+}
+
+// Access decision + why, so the account page can say "you're in as the maintainer"
+// instead of implying a sponsorship that doesn't exist.
+export function accessFor(viewer, { min = minMonthlyDollars(), allowed = allowlist() } = {}) {
+  const login = String(viewer?.login ?? '').toLowerCase()
+  if (login && allowed.has(login)) {
+    return { granted: true, via: login === String(MAINTAINER).toLowerCase() ? 'maintainer' : 'allowlist' }
+  }
+  return { granted: entitled(viewer, min), via: 'sponsor' }
+}
