@@ -153,6 +153,11 @@ Bump `version` in `package.json`, update `CHANGELOG.md`, and push to `main`. Git
 Actions creates the release and builds the Linux `.deb` + macOS `.dmg`. The
 `joaxclaw-fs` plugin publishes to npm separately when its own version changes.
 
+The [joaxclaw.ai](https://joaxclaw.ai) site is deployed by **Vercel** from this repo —
+`vercel.json` runs `npm run build:site` and serves `out/site`. It rebuilds on every push
+to `main`; publishing a release also pings a deploy hook (if the `VERCEL_DEPLOY_HOOK`
+secret is set) so the download links pick up the new artifacts.
+
 ## Contributing
 
 Issues and pull requests are welcome. Before opening a PR, please run
