@@ -5,6 +5,7 @@
 // account page says out loud). It exists so hosting is a supporter benefit, not a secret.
 
 import { readSession, readCookie, COOKIE } from './api/_lib/session.mjs'
+import { isPublicAppAsset } from './api/_lib/gate.mjs'
 
 export const config = {
   // Only the app bundle. The marketing pages, the API routes, and the assets they use
@@ -14,6 +15,11 @@ export const config = {
 
 export default async function middleware(request) {
   const url = new URL(request.url)
+
+  // The manifest, service worker, and icons must stay reachable or the app can't be
+  // installed at all — see api/_lib/gate.mjs for why gating them is self-defeating.
+  if (isPublicAppAsset(url.pathname)) return
+
   const secret = process.env.SESSION_SECRET
 
   const session = secret ? await readSession(readCookie(request.headers.get('cookie'), COOKIE), secret) : null
