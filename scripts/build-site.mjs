@@ -68,9 +68,10 @@ async function main() {
   const release = await latestRelease()
   const year = String(new Date().getFullYear())
 
-  // Static files that ship as-is.
-  for (const name of ['styles.css', 'download.js', 'CNAME']) {
-    if (existsSync(join(SITE, name))) await copyFile(join(SITE, name), join(OUT, name))
+  // Static files that ship as-is: every stylesheet and script in site/. Listing them by
+  // hand meant a new page's script silently didn't ship.
+  for (const name of (await readdir(SITE)).filter(f => /\.(css|js)$/.test(f))) {
+    await copyFile(join(SITE, name), join(OUT, name))
   }
 
   // Artwork. Both logo variants ship: the page follows the visitor's colour scheme, so
@@ -83,9 +84,8 @@ async function main() {
     await copyDir(join(ROOT, 'docs/screenshots'), join(OUT, 'assets/screenshots'))
   }
 
-  // Landing page.
-  const index = await readFile(join(SITE, 'index.html'), 'utf8')
-  await writeFile(join(OUT, 'index.html'), fill(index, {
+  // Hand-written pages (landing, account) — placeholders filled in.
+  const values = {
     VERSION: release.version ? `v${release.version}` : 'latest',
     MAC_URL: release.mac?.url ?? `${RELEASES}/latest`,
     MAC_SIZE: release.mac ? `Universal · ${release.mac.size}` : 'Universal',
@@ -93,7 +93,22 @@ async function main() {
     LINUX_SIZE: release.linux ? `x86-64 · ${release.linux.size}` : 'x86-64',
     RELEASES,
     YEAR: year,
-  }))
+  }
+  for (const name of (await readdir(SITE)).filter(f => f.endsWith('.html') && f !== 'template.html')) {
+    await writeFile(join(OUT, name), fill(await readFile(join(SITE, name), 'utf8'), values))
+    console.log(`  → ${name}`)
+  }
+
+  // The hosted web app, if it has been built (npm run build:web → out/web). Served under
+  // /app/ and gated by middleware.js; absent locally, the site still builds fine and the
+  // account page just has nothing to link to.
+  const web = join(ROOT, 'out', 'web')
+  if (existsSync(web)) {
+    await copyDir(web, join(OUT, 'app'))
+    console.log('  → app/ (hosted web app)')
+  } else {
+    console.log('  ! out/web missing — skipping /app (run npm run build:web first)')
+  }
 
   // Markdown pages: site/*.md plus the root changelog.
   const template = await readFile(join(SITE, 'template.html'), 'utf8')
