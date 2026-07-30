@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 // @ts-expect-error — plain ESM helpers shared by the Vercel functions and Edge middleware
 import { signSession, readSession, readCookie, sessionCookie, clearedSessionCookie, TTL_SECONDS } from '../../../api/_lib/session.mjs'
 // @ts-expect-error — same
-import { entitled, authorizeUrl, OAUTH_SCOPE } from '../../../api/_lib/github.mjs'
+import { entitled, allowlist, accessFor, authorizeUrl, OAUTH_SCOPE } from '../../../api/_lib/github.mjs'
 
 // The session cookie IS the authorisation for the hosted web app, so these cover the ways
 // it could be forged or outlive a cancelled sponsorship.
@@ -72,6 +72,48 @@ describe('entitlement', () => {
   it('admits a sponsor whose tier is hidden (private sponsorship)', () => {
     // The boolean is authoritative; failing closed here would lock out private sponsors.
     expect(entitled({ sponsoring: true, monthlyDollars: null }, 1)).toBe(true)
+  })
+})
+
+describe('allowlist', () => {
+  // GitHub won't let an account sponsor itself, so without this the owner is locked out
+  // of their own hosted app.
+  it('always includes the maintainer', () => {
+    expect(allowlist({ maintainer: 'joax', extra: '' }).has('joax')).toBe(true)
+  })
+
+  it('parses comma- or space-separated logins, case-insensitively', () => {
+    const list = allowlist({ maintainer: 'joax', extra: 'Alice, bob   carol,,' })
+    expect([...list].sort()).toEqual(['alice', 'bob', 'carol', 'joax'])
+    expect(list.has('ALICE'.toLowerCase())).toBe(true)
+  })
+
+  it('survives an unset variable', () => {
+    expect([...allowlist({ maintainer: 'joax', extra: undefined })]).toEqual(['joax'])
+  })
+})
+
+describe('accessFor', () => {
+  const allowed = allowlist({ maintainer: 'joax', extra: 'tester' })
+
+  it('lets the maintainer in without a sponsorship, and says why', () => {
+    const access = accessFor({ login: 'joax', sponsoring: false }, { allowed })
+    expect(access).toEqual({ granted: true, via: 'maintainer' })
+  })
+
+  it('lets an allow-listed login in, labelled separately from sponsors', () => {
+    expect(accessFor({ login: 'Tester', sponsoring: false }, { allowed })).toEqual({ granted: true, via: 'allowlist' })
+  })
+
+  it('still requires a sponsorship from everyone else', () => {
+    expect(accessFor({ login: 'stranger', sponsoring: false }, { allowed }).granted).toBe(false)
+    expect(accessFor({ login: 'stranger', sponsoring: true, monthlyDollars: 1 }, { allowed, min: 1 }))
+      .toEqual({ granted: true, via: 'sponsor' })
+  })
+
+  it('does not admit a missing or empty login', () => {
+    expect(accessFor({ login: null, sponsoring: false }, { allowed }).granted).toBe(false)
+    expect(accessFor({ login: '', sponsoring: false }, { allowed }).granted).toBe(false)
   })
 })
 
