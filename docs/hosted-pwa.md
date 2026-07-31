@@ -54,6 +54,7 @@ Browser ──► /account.html ──► /api/auth/login ──► GitHub OAuth
 | `api/auth/session.mjs` | What the account page renders from; never 401s |
 | `api/auth/logout.mjs` | Clears the cookie |
 | `middleware.js` | Edge gate on `/app/*` |
+| `api/_lib/gate.mjs` | Which `/app/*` paths stay public so the PWA remains installable |
 | `site/account.html`, `site/account.js` | Sign-in, status, and the self-host instructions |
 
 ## Turning it on
@@ -100,6 +101,18 @@ usually easier to test on production.
   from the verified OAuth identity and the list is server-side config the visitor can't
   influence. The account page says *why* someone is in ("maintainer access" vs "sponsor"),
   so it never claims a sponsorship that doesn't exist.
+- **The PWA's own files are deliberately NOT gated** — manifest, service worker, and
+  icons. Gating them makes the app uninstallable rather than protecting anything: a
+  manifest is fetched with credentials *omitted* unless the `<link>` sets
+  `crossorigin="use-credentials"`, so a cookie-gated manifest fails even for a signed-in
+  user, and a service-worker script that answers with a redirect fails registration
+  outright. Those files carry no user data and are public in the repo anyway. The app's
+  HTML and JS/CSS bundle stay behind the gate.
+- **Known rough edge:** an installed PWA launches `start_url` `/app/`. If the 12-hour
+  session has lapsed, that redirects to `/account.html`, which is outside the manifest's
+  scope, so the browser may open it in a tab rather than inside the installed app. Setting
+  the manifest `scope` to `/` would fix it, at the cost of the "serve the bundle from any
+  path" property self-hosters rely on.
 - **One-time sponsorships don't unlock hosting** — the account page thanks the user and
   explains that a monthly tier is what's needed.
 - **Raising the price later** doesn't retroactively lock out existing sponsors unless
