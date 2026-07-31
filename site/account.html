@@ -57,11 +57,22 @@
     <li><strong>Your gateway needs TLS</strong> (a <code>wss://</code> address). A page served
     over HTTPS cannot open a plain <code>ws://</code> socket, so a bare LAN gateway won't
     connect. Tailscale Serve or any TLS-terminating proxy in front of your gateway works.</li>
-    <li><strong>This origin has to be allowed by your gateway.</strong> Add it to
-    <code>gateway.controlUi.allowedOrigins</code>:
-    <pre><code>joaxclaw.ai</code></pre>
-    Loopback, private-range, <code>.local</code>, and <code>.ts.net</code> origins are
-    accepted automatically — a public domain like this one is not.</li>
+    <li><strong>This origin has to be allowed by your gateway.</strong> In your gateway's
+    <code>~/.openclaw/openclaw.json</code>, add the full origin — scheme included, no
+    trailing slash — to <code>gateway.controlUi.allowedOrigins</code>:
+    <pre><code>{
+  "gateway": {
+    "controlUi": {
+      "allowedOrigins": ["https://www.joaxclaw.ai", "https://joaxclaw.ai"]
+    }
+  }
+}</code></pre>
+    Merge it into any <code>controlUi</code> settings you already have rather than
+    replacing them. Loopback, private-range, <code>.local</code>, and <code>.ts.net</code>
+    origins are accepted automatically — a public domain like this one is not.
+    <br>Editing it in JoaxClaw (<em>Gateway → Config</em>) writes to the gateway you're
+    connected to and hot-reloads it; editing the file by hand needs
+    <code>openclaw gateway restart</code>.</li>
   </ul>
 
   <p>Your phone or browser then pairs as its own device: it generates a key, and you approve

@@ -162,7 +162,10 @@ export default function App() {
   const showConnect = notConnected && !reconnecting && section !== 'settings' && section !== 'themes'
 
   return (
-    <div className="flex flex-col h-screen select-none">
+    // h-full, not h-screen: #root is already sized to the visible viewport (100dvh in
+    // index.css). h-screen is 100vh, which on a mobile browser is taller than what you can
+    // see, and it pushes the bottom tab bar off-screen.
+    <div className="flex flex-col h-full select-none">
       {/* Custom title bar is Electron window chrome — omit it in the browser/PWA build. */}
       {isElectron() && <TitleBar />}
       <UpdateBanner />
