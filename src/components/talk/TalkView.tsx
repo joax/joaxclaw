@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Mic, MicOff, PhoneOff, Phone, Settings2, Captions, AlertCircle, Wrench, KeyRound, Bot, ListTree, Loader2, CheckCircle2, XCircle } from 'lucide-react'
 import type { TalkActivity } from '../../store/talk'
-import { useTalkStore, providersForMode, type TalkPhase, type VisualizerStyle } from '../../store/talk'
+import { useTalkStore, providersForMode, providerKeyPath, type TalkPhase, type VisualizerStyle } from '../../store/talk'
 import { useConnectionStore } from '../../store/connection'
 import { useAgentsStore } from '../../store/agents'
 import { Visualizer, type VizSource } from './Visualizer'
@@ -128,7 +128,7 @@ export function TalkView() {
           <Notice icon={<AlertCircle size={14} />}>
             Talk needs a configured <b style={{ color: 'var(--text-primary)' }}>{config.mode === 'realtime' ? 'realtime voice' : config.mode}</b> provider
             {modeProviders.length > 0 && <> — available: {modeProviders.map(p => p.label).join(', ')}</>}.
-            Set its key on the gateway at <code style={{ fontFamily: 'monospace' }}>talk.providers.&lt;id&gt;.apiKey</code>
+            Set its key on the gateway at <code style={{ fontFamily: 'monospace' }}>{providerKeyPath(config.mode)}.&lt;id&gt;.apiKey</code>
             {config.mode === 'realtime' && <> (ElevenLabs is transcription-only and can&apos;t drive realtime Talk)</>}.
           </Notice>
         )}
@@ -248,13 +248,13 @@ function SettingsBar({ catalog, config, setConfig, disabled, agents, defaultId, 
       </div>
       {/* Set the realtime provider's key (talk.providers.<id>.apiKey) right here. */}
       {provider && !provider.configured && !disabled && (
-        <ProviderKeyField providerId={provider.id} label={provider.label} onSave={setProviderKey} />
+        <ProviderKeyField providerId={provider.id} label={provider.label} path={providerKeyPath(config.mode)} onSave={setProviderKey} />
       )}
     </div>
   )
 }
 
-function ProviderKeyField({ providerId, label, onSave }: { providerId: string; label: string; onSave: (id: string, key: string) => Promise<boolean> }) {
+function ProviderKeyField({ providerId, label, path, onSave }: { providerId: string; label: string; path: string; onSave: (id: string, key: string) => Promise<boolean> }) {
   const [key, setKey] = useState('')
   const [reveal, setReveal] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -268,7 +268,7 @@ function ProviderKeyField({ providerId, label, onSave }: { providerId: string; l
         style={{ flex: 1, minWidth: 140, fontSize: 11, fontFamily: 'monospace', padding: '4px 8px', borderRadius: 'var(--radius)', border: '1px solid var(--border)', background: 'var(--bg-surface)', color: 'var(--text-primary)', outline: 'none' }} />
       <button onClick={() => setReveal(r => !r)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)', fontSize: 10 }}>{reveal ? 'hide' : 'show'}</button>
       <button onClick={save} disabled={saving || !key.trim()} style={{ fontSize: 11, padding: '4px 10px', borderRadius: 'var(--radius)', border: 'none', cursor: 'pointer', color: 'white', background: 'var(--accent)', opacity: saving || !key.trim() ? 0.5 : 1 }}>{saving ? '…' : 'Save'}</button>
-      <span className="text-xs" style={{ color: 'var(--text-secondary)', opacity: 0.6, whiteSpace: 'nowrap' }}>→ talk.providers.{providerId}.apiKey</span>
+      <span className="text-xs" style={{ color: 'var(--text-secondary)', opacity: 0.6, whiteSpace: 'nowrap' }}>→ {path}.{providerId}.apiKey</span>
     </div>
   )
 }
