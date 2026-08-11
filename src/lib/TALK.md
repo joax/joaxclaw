@@ -16,7 +16,10 @@ Config lives under `talk.*` (see `openclaw config schema`):
 - `talk.realtime.mode`: `realtime` (OpenAI/Google realtime API) · `stt-tts` · `transcription`
 - `talk.realtime.transport`: `webrtc` · `provider-websocket` · `gateway-relay` · `managed-room`
 - `talk.realtime.brain`: `agent-consult` (the voice consults *your* agent — its tools/memory) · `direct-tools` · `none`
-- `talk.realtime.provider`/`speakerVoice`, `talk.providers.<id>.apiKey` (openai/google/elevenlabs/inworld/minimax/xai)
+- `talk.realtime.provider`/`speakerVoice`, `talk.realtime.providers.<id>.apiKey` (openai/google/elevenlabs/inworld/minimax/xai)
+  — realtime keys resolve from `talk.realtime.providers.<id>`, then `models.providers.<id>.apiKey`,
+  then `GEMINI_API_KEY`/`GOOGLE_API_KEY`. The generic `talk.providers.<id>` bucket is **not**
+  read for realtime, so a key written there silently does nothing.
 - `talk.interruptOnSpeech`, `talk.silenceTimeoutMs`, `talk.speechLocale`
 
 ## RPC contract (over the existing gateway WebSocket)
@@ -26,6 +29,11 @@ Verified against the gateway protocol validators (`validateTalk*`).
 **Session lifecycle**
 - `talk.session.create({ mode?, transport?, brain?, provider?, model?, voice?, vadThreshold?, silenceDurationMs?, prefixPaddingMs?, reasoningEffort?, sessionKey?, ttlMs? })`
   → `{ sessionId, token, mode, transport, brain, provider?, model?, voice?, expiresAt?, relaySessionId?, roomUrl?, roomId? }`
+  The session is owned by the **socket that created it** and counts against a cap of
+  **2 relay sessions per connection** (64 global, 30-minute TTL). `cancelTurn` ends a turn
+  but keeps the slot — only `talk.session.close` frees it, so a client that skips it can
+  start Talk exactly twice per connection. A reconnect orphans any live session.
+  `session.ready` lands ~400 ms after create; audio appended before it is discarded.
 - `talk.session.join({ sessionId, token })` → session detail incl. `recentTalkEvents` (reconnect/resume)
 - `talk.session.appendAudio({ sessionId, audioBase64, timestamp? })` — stream mic audio (PCM16, base64)
 - `talk.session.startTurn` / `endTurn` / `cancelTurn` `({ sessionId, turnId? })`
@@ -33,13 +41,39 @@ Verified against the gateway protocol validators (`validateTalk*`).
 - `talk.ptt.start` / `stop` / `once` / `cancel` — push-to-talk control
 - `talk.client.create` / `steer` / `toolCall`, `talk.config`, `talk.catalog` (providers/voices)
 
-**Event stream** — `talk.event` frames, `type` ∈:
-`speechStart` · `transcript` / `transcript.delta` / `transcript.done` · `transcription` ·
-`audio` / `audioDone` · `tool.call` / `tool.progress` / `tool.result` · `error`
+**Event stream** — every `talk.event` frame carries the event **twice**, and the two use
+different vocabularies. Confirmed by probing a live 2026.6.5 gateway (`gateway-relay`):
 
-Map them to UI state: `speechStart`→user started (and barge-in trigger), `transcript.*`→live
-captions, `audio`/`audioDone`→playback + visualizer + turn end, `tool.*`→activity chip,
-`error`→error state.
+```jsonc
+{ "relaySessionId": "…", "type": "transcript",        // flat envelope: transport names,
+  "role": "user", "text": " He", "final": false,      //   data at the top level
+  "talkEvent": { "type": "transcript.delta",          // typed event: the real contract
+                 "turnId": "turn-1", "seq": 24, "id": "<sessionId>:24",
+                 "payload": { "role": "user", "text": " He" } } }
+```
+
+Envelope `type` → typed `talkEvent.type`: `ready`→`session.ready` · `transcript`→
+`transcript.delta` / `transcript.done` / `output.text.delta` / `output.text.done` (the
+typed name encodes the speaker) · `audio`→`output.audio.delta` · `clear` / `mark` /
+`audioDone`→`output.audio.done` · `inputAudio`→`turn.started` / `input.audio.delta` ·
+`toolCall` / `toolProgress` / `toolResult`→`tool.call` / `.progress` / `.result` ·
+`error`→`session.error` · `close`→`session.closed`.
+
+**Key off the typed name, read data off whichever level has it.** Three traps:
+
+- **`audioDone` frames have no `talkEvent`.** The envelope is a required fallback, not a
+  convenience.
+- **The envelope can mislead.** A working-consult update is envelope `toolResult` but typed
+  `tool.progress`; treating it as a result closes the activity row early.
+- **`talkEvent.id` is per-event** (`<sessionId>:<seq>`), so it cannot group a caption line.
+  Group on `turnId` + `role`.
+
+What the realtime relay does **not** send, whatever the validators suggest:
+`speechStart` (transcription relay only — use the first user `transcript.delta` as the
+speech-onset signal) and, on Google, `transcript.done` / `output.text.done` / `audioDone`
+(every transcript arrives with `final: false`). **There is therefore no dependable
+end-of-speech event** — return to `listening` when the local playback queue drains.
+`clear` is not that signal: it means "discard buffered output" and arrives mid-turn.
 
 ## Phase 1 — the voice loop (no avatar)
 
@@ -48,9 +82,9 @@ integration before any 3D work.
 
 ```
 Mic → AudioWorklet (PCM16 @24kHz) → talk.session.appendAudio ─► gateway Talk (VAD, brain:agent-consult)
-UI state machine ◄── talk.event (speechStart, transcript.*, audio/audioDone, tool.*, error)
+UI state machine ◄── talk.event (transcript.*, output.text.*, output.audio.*, tool.*, session.error)
    └─ orb (mic level when listening, TTS level when speaking)
-   barge-in: speechStart during SPEAKING → flush playback + talk.session.cancelOutput
+   barge-in: `clear` from the provider → flush playback; tapping the orb → talk.session.cancelOutput
 ```
 
 - **Transport `gateway-relay`** (PCM16 base64 over the WS we already hold) — simplest, works
@@ -79,9 +113,11 @@ UI state machine ◄── talk.event (speechStart, transcript.*, audio/audioDon
 **Interaction state machine** (drive from `talk.event`)
 ```
 idle → connecting → listening → user_speaking → thinking → speaking → listening
-                         ▲            │ (speechStart)        │ (audioDone)
-              (cancelOutput+flush) ───┴── interrupted ◄──────┘ (speechStart = barge-in)
+      (session.ready      ▲    (transcript.delta  (output.   (output.       ▲
+       gates the mic)     │      role=user)        text.*)    audio.delta)  │
+                          └────────── the playback queue drains ────────────┘
    + tool_running (sub-state), muted, error
+   `clear` → flush queued audio (provider barge-in); session.closed → idle
 ```
 
 **UX rules (from research)**
@@ -122,19 +158,21 @@ idle → connecting → listening → user_speaking → thinking → speaking �
 | `transcription` | `catalog.transcription.providers` (Deepgram, **ElevenLabs**) | `gateway-relay` | STT only, not a conversation. |
 
 So **ElevenLabs is a transcription (STT) provider here — it can't drive realtime Talk**, and
-provider keys live at **`talk.providers.<id>.apiKey`** (a different namespace from
-`messages.tts.providers.<id>.apiKey` that the general TTS feature uses). `providersForMode()` /
-`transportForMode()` in `store/talk.ts` encode this; Phase-1 UI offers `realtime` only.
+realtime provider keys live at **`talk.realtime.providers.<id>.apiKey`** (a different namespace
+from both `talk.providers.<id>` and the `messages.tts.providers.<id>.apiKey` the general TTS
+feature uses). `providersForMode()` / `transportForMode()` / `providerKeyPath()` in
+`store/talk.ts` encode this; Phase-1 UI offers `realtime` only.
 
 ## Decisions / open items
 
 - **Transport:** start `gateway-relay` (simplicity + remote); revisit `webrtc` if relay latency
   disappoints.
-- **Provider/key:** a `realtime` provider (openai/google) needs `talk.providers.<id>.apiKey`
-  (the plugin Configure modal already manages these); otherwise run `stt-tts` with existing
-  providers. Phase 1 should handle both.
-- **Confirm at build:** exact `audio` event encoding for `gateway-relay` (PCM16 sample rate),
-  and the `talk.ptt.*` param shapes (not in the validator `.d.ts`).
+- **Provider/key:** a `realtime` provider (openai/google) needs `talk.realtime.providers.<id>.apiKey`
+  — or an existing `models.providers.<id>.apiKey`, which is why Google can already read as
+  configured with no `talk` block at all; otherwise run `stt-tts` with existing providers.
+- **Confirmed against a live gateway:** `gateway-relay` carries PCM16 mono at 24 kHz in both
+  directions (the Google provider resamples to its own 16 kHz input); the `talk.ptt.*` param
+  shapes are still unverified (not in the validator `.d.ts`).
 
 ## References
 
@@ -159,7 +197,7 @@ local engines the gateway already ships.** (Researched 2026-07-27.)
 |---|---|---|
 | Brain (LLM) | `models.providers.<id>.baseUrl` + `.apiKey` | **Yes** — Ollama/LM Studio/vLLM/llama.cpp (already used) |
 | General TTS / transcription | `messages.tts.providers.<id>` | **Yes** — `sherpa-onnx-tts` (offline TTS), `openai-whisper` (local STT) exist in the provider list (`pluginConfig.ts:46`) |
-| **Realtime Talk voice** | `talk.providers.<id>.apiKey` | **No** — cloud only (openai/google/elevenlabs/deepgram/inworld/minimax/xai); the client writes **only** `apiKey`, and `talk.catalog` provider objects have **no** `baseUrl`/`endpoint` field |
+| **Realtime Talk voice** | `talk.realtime.providers.<id>.apiKey` | **No** — cloud only (openai/google/elevenlabs/deepgram/inworld/minimax/xai); the client writes **only** `apiKey`, and `talk.catalog` provider objects have **no** `baseUrl`/`endpoint` field |
 
 Key implication: the gateway **can** host in-process offline voice engines (sherpa-onnx + local
 Whisper) — just in the `messages.tts.*` namespace, not (yet, as far as the client knows) wired
