@@ -88,6 +88,11 @@ export interface TalkAudioCallbacks {
   onAudioChunk: (base64: string) => void   // mic PCM16 base64, ready for appendAudio
   onMicLevel?: (level: number) => void
   onAgentLevel?: (level: number) => void
+  // Fired when the last queued agent buffer finishes playing. The realtime relay has
+  // no reliable end-of-speech event (Google never emits `audioDone`, and `clear` can
+  // arrive mid-turn), so draining the local queue is what tells the UI the agent has
+  // stopped talking.
+  onPlaybackDrained?: () => void
 }
 
 // Owns the mic capture chain and the agent playback queue for one Talk session.
@@ -180,10 +185,18 @@ export class TalkAudio {
     node.start(this.playHead)
     this.playHead += buf.duration
     this.active.add(node)
-    node.onended = () => { this.active.delete(node); if (this.active.size === 0) this.cb.onAgentLevel?.(0) }
+    node.onended = () => {
+      this.active.delete(node)
+      if (this.active.size === 0) { this.cb.onAgentLevel?.(0); this.cb.onPlaybackDrained?.() }
+    }
   }
 
-  // Barge-in: stop everything queued/playing immediately.
+  // True while agent audio is queued or playing — the store debounces the drain
+  // signal against this, so a chunk arriving late doesn't read as end-of-turn.
+  get isPlaying(): boolean { return this.active.size > 0 }
+
+  // Barge-in: stop everything queued/playing immediately. `onended` still fires for
+  // each stopped node, so the drain callback lands through the normal path.
   flushPlayback(): void {
     for (const n of this.active) { try { n.stop() } catch { /* already stopped */ } }
     this.active.clear()
