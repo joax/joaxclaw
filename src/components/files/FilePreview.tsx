@@ -109,7 +109,11 @@ export function FilePreview({
         </div>
       )}
 
-      <div className="flex-1 min-h-0 overflow-y-auto" style={{ padding: mode === 'markdown' ? '14px 18px' : 12 }}>
+      {/* `text-sm` matches the chat bubble exactly. Without it the preview inherited
+          `body`, which the <768px rules raise to 15px while `text-sm` stays at
+          0.875rem — so file text rendered noticeably larger than the same markdown in
+          a chat message. */}
+      <div className="flex-1 min-h-0 overflow-y-auto text-sm" style={{ padding: mode === 'markdown' ? '14px 18px' : 12 }}>
         {loading ? (
           <div className="flex items-center gap-2 text-xs" style={{ color: 'var(--text-secondary)' }}>
             <Loader2 size={13} className="animate-spin" /> Reading from the gateway host…
@@ -151,7 +155,9 @@ function Body({ mode, path, label, file }: { mode: ReturnType<typeof previewMode
         : (
           <pre
             style={{
-              margin: 0, fontSize: 12, fontFamily: 'monospace', lineHeight: 1.55,
+              // Relative, like the code blocks in chat — so it tracks the app's font
+              // size and UI zoom instead of pinning itself to 12px.
+              margin: 0, fontSize: '0.85em', fontFamily: 'monospace', lineHeight: 1.55,
               color: 'var(--text-primary)', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
             }}
           >{text}</pre>
