@@ -539,21 +539,28 @@ export function ChatView({ solo }: { solo?: string } = {}) {
               className="flex items-center gap-3 px-4 py-2 shrink-0 text-sm"
               style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-surface)' }}
             >
-              <span>🤖</span>
-              <span className="font-medium" style={{ color: 'var(--text-primary)' }}>
+              <span style={{ flexShrink: 0 }}>🤖</span>
+              {/* The title is the only element allowed to shrink: with the Files drawer
+                  open the header has ~380px less room, and without this the controls
+                  overflowed the main column and painted over the drawer. */}
+              <span
+                className="font-medium"
+                style={{ color: 'var(--text-primary)', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                title={convDisplayName(activeConv)}
+              >
                 {convDisplayName(activeConv)}
               </span>
               {activeConv.sessionKey && (
-                <span className="text-xs font-mono px-2 py-0.5 rounded" style={{ background: 'var(--bg-elevated)', color: 'var(--text-secondary)' }}>
+                <span className="text-xs font-mono px-2 py-0.5 rounded shrink-0" style={{ background: 'var(--bg-elevated)', color: 'var(--text-secondary)' }}>
                   {activeConv.sessionKey.slice(0, 16)}
                 </span>
               )}
               {activeConv.sessionKey?.includes(':heartbeat') && (
-                <Heart size={12} title="Heartbeat session" style={{ color: 'var(--accent)', opacity: 0.8 }} />
+                <Heart size={12} title="Heartbeat session" style={{ color: 'var(--accent)', opacity: 0.8, flexShrink: 0 }} />
               )}
 
               {/* Per-chat model + thinking overrides (independent of the agent's config) */}
-              <div className="flex items-center gap-1.5 ml-2">
+              <div className="flex items-center gap-1.5 ml-2 shrink-0">
                 <ModelSelect
                   value={activeConv.modelOverride}
                   agentDefault={agents.find(a => a.id === activeConv.agentId)?.model?.primary}
@@ -565,7 +572,7 @@ export function ChatView({ solo }: { solo?: string } = {}) {
                 />
               </div>
 
-              <div className="ml-auto flex items-center gap-1.5">
+              <div className="ml-auto flex items-center gap-1.5 shrink-0">
                 {/* Files the agents wrote — the same panel artifact cards open. Hidden in
                     a pop-out, where the drawer isn't mounted (App owns it). */}
                 {!solo && (
