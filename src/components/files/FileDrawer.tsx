@@ -43,7 +43,12 @@ export function FileDrawer({ onOpenChat }: { onOpenChat?: () => void }) {
         flexShrink: 0,
         borderLeft: narrow || expanded ? 'none' : '1px solid var(--border)',
         background: 'var(--bg-primary)',
-        ...(narrow ? { position: 'fixed', inset: 0, zIndex: 40 } : {}),
+        // <main>'s inner wrapper carries z-[1], so a static sibling paints *under* it —
+        // anything overflowing the chat column would bleed over this panel. Give the
+        // drawer its own stacking context above it.
+        ...(narrow
+          ? { position: 'fixed' as const, inset: 0, zIndex: 40 }
+          : { position: 'relative' as const, zIndex: 2 }),
       }}
     >
       {children}
