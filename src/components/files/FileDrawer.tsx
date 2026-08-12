@@ -35,12 +35,23 @@ export function FileDrawer({ onOpenChat }: { onOpenChat?: () => void }) {
   const fresh = newSince(entries, seenAtMs)
   const freshPaths = new Set(fresh.map(f => f.path))
 
+  // Three sizings, and the difference matters: the drawer is a flex sibling of the nav
+  // rail, so an EXPANDED panel must *flex* into the space left over. Asking for
+  // `width: 100%` with `flexShrink: 0` made it demand the whole row next to a ~60px
+  // rail, pushing its right edge off the window.
+  //
+  // <main>'s inner wrapper carries z-[1], so a static sibling paints under it — anything
+  // overflowing the chat column would bleed over this panel. Hence the stacking context.
+  const sizing: React.CSSProperties = narrow
+    ? { position: 'fixed', inset: 0, width: '100%', zIndex: 40 }
+    : expanded
+      ? { flex: 1, minWidth: 0, position: 'relative', zIndex: 2 }
+      : { width: WIDTH, flexShrink: 0, position: 'relative', zIndex: 2 }
+
   const shell = (children: React.ReactNode) => (
     <aside
       className="flex flex-col min-h-0"
       style={{
-        width: narrow || expanded ? '100%' : WIDTH,
-        flexShrink: 0,
         borderLeft: narrow || expanded ? 'none' : '1px solid var(--border)',
         background: 'var(--bg-primary)',
         // Lift the panel off the chat column — left edge only. The negative spread is
@@ -49,12 +60,7 @@ export function FileDrawer({ onOpenChat }: { onOpenChat?: () => void }) {
         // while the -20px offset still leaves ~20px of shadow to the left. Pointless as
         // a full-screen overlay, where there's nothing beside it to separate from.
         ...(narrow ? {} : { boxShadow: '-20px 0 24px -12px rgba(0,0,0,0.45)' }),
-        // <main>'s inner wrapper carries z-[1], so a static sibling paints *under* it —
-        // anything overflowing the chat column would bleed over this panel. Give the
-        // drawer its own stacking context above it.
-        ...(narrow
-          ? { position: 'fixed' as const, inset: 0, zIndex: 40 }
-          : { position: 'relative' as const, zIndex: 2 }),
+        ...sizing,
       }}
     >
       {children}
