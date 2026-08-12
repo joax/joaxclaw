@@ -18,7 +18,7 @@ const WIDTH = 380
 
 export function FileDrawer({ onOpenChat }: { onOpenChat?: () => void }) {
   const {
-    open, expanded, selected, roots, rootId, entries, loading, error, supported, seenAtMs,
+    open, expanded, selected, roots, rootId, subdir, entries, loading, error, supported, seenAtMs,
     closeDrawer, clearSelection, toggleExpand, loadRoots, selectRoot, refresh,
   } = useFilesStore()
   const status = useConnectionStore(s => s.status)
