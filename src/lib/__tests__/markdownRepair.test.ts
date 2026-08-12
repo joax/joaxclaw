@@ -101,7 +101,7 @@ describe('repairDetachedTableRows', () => {
 
 const parse = (md: string) => {
   const proc = unified().use(remarkParse).use(remarkGfm)
-  const tree = proc.runSync(proc.parse(md)) as { children: Array<{ type: string; children?: unknown[] }> }
+  const tree = proc.runSync(proc.parse(md)) as unknown as { children: Array<{ type: string; children?: unknown[] }> }
   return tree.children.map(n => n.type === 'table' ? `table(${n.children?.length ?? 0})` : n.type)
 }
 
