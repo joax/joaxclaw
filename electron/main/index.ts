@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell, Tray, Menu, nativeImage, session } from 'electron'
+import { app, BrowserWindow, ipcMain, shell, Tray, Menu, nativeImage, session, dialog } from 'electron'
 import { join, dirname } from 'path'
 import { readFile, writeFile, mkdir, readdir, unlink, rm } from 'fs/promises'
 import { existsSync, statSync, createReadStream, watch, type FSWatcher } from 'fs'
@@ -226,6 +226,46 @@ function createChatWindow(sessionKey: string): void {
   broadcastPoppedOut()
 }
 
+// ── Pop-out file windows ──────────────────────────────────────────────────────
+// A file the gateway's agents wrote can be opened in its own window — same trick as
+// a popped-out chat: the same renderer, deep-linked by path, connecting to the gateway
+// on its own socket so it can re-read the file from the host. The path is the entire
+// state, so the window survives a reload. Unlike chats, nothing is "moved" out of the
+// main window, so there's no hide/restore bookkeeping. See docs/files-drawer.md.
+
+const fileWindows = new Map<string, BrowserWindow>()
+
+function createFileWindow(filePath: string, name?: string): void {
+  const existing = fileWindows.get(filePath)
+  if (existing && !existing.isDestroyed()) { existing.show(); existing.focus(); return }
+
+  const win = new BrowserWindow({
+    width: 760,
+    height: 820,
+    minWidth: 420,
+    minHeight: 320,
+    frame: false,
+    roundedCorners: true,
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.js'),
+      sandbox: false,
+      contextIsolation: true,
+    },
+    backgroundColor: '#0f1117',
+    show: false,
+  })
+  fileWindows.set(filePath, win)
+  wireMaximizeEvents(win)
+
+  win.webContents.setWindowOpenHandler(({ url }) => { shell.openExternal(url); return { action: 'deny' } })
+  win.on('ready-to-show', () => win.show())
+  win.webContents.on('destroyed', () => cleanupSocket(win.webContents.id))
+  win.on('closed', () => { if (fileWindows.get(filePath) === win) fileWindows.delete(filePath) })
+
+  const query = `?popout=file&path=${encodeURIComponent(filePath)}${name ? `&name=${encodeURIComponent(name)}` : ''}`
+  loadRenderer(win, query)
+}
+
 // ── About window ──────────────────────────────────────────────────────────────
 function createAboutWindow(): void {
   if (aboutWindow && !aboutWindow.isDestroyed()) { aboutWindow.show(); aboutWindow.focus(); return }
@@ -343,6 +383,11 @@ ipcMain.handle('chat:returnToMain', (_e, sessionKey: string) => {
   if (w && !w.isDestroyed()) w.close()
   return { ok: true }
 })
+// Open a host file in its own window (Files: artifact cards + drawer).
+ipcMain.handle('file:popOut', (_e, filePath: string, name?: string) => {
+  if (filePath) createFileWindow(String(filePath), name ? String(name) : undefined)
+  return { ok: true }
+})
 // A pop-out window asks for its bootstrap info (the active gateway connection).
 ipcMain.handle('chat:popoutInfo', () => ({ connection: lastConnection }))
 // The main window asks which chats are currently popped out (on (re)load).
@@ -444,6 +489,23 @@ ipcMain.handle('file:listdir', async (_event, dirPath: string, ext?: string) => 
     return { ok: true, files }
   } catch (e: unknown) {
     return { ok: false, error: String(e), files: [] }
+  }
+})
+
+// ── IPC: Save a copy of a host file to the user's machine ────────────────────
+// The renderer has already read the bytes (from local fs or over the WS from a remote
+// gateway) and hands them over base64-encoded; this only picks a destination and
+// writes. Keeping the read in the renderer means one code path for local and remote.
+ipcMain.handle('file:saveAs', async (event, name: string, base64: string) => {
+  try {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    const opts = { defaultPath: join(app.getPath('downloads'), name || 'download') }
+    const res = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts)
+    if (res.canceled || !res.filePath) return { ok: false, canceled: true }
+    await writeFile(res.filePath, Buffer.from(base64, 'base64'))
+    return { ok: true, path: res.filePath }
+  } catch (e: unknown) {
+    return { ok: false, error: String(e) }
   }
 })
 

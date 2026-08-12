@@ -50,6 +50,8 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.invoke('window:setTitleBarOverlay', color, symbolColor),
     // Pop-out chat windows
     popOutChat: (sessionKey: string) => ipcRenderer.invoke('chat:popOut', sessionKey),
+    // Pop-out file viewer window (Files — artifact cards + drawer)
+    popOutFile: (filePath: string, name?: string) => ipcRenderer.invoke('file:popOut', filePath, name),
     returnChat: (sessionKey: string) => ipcRenderer.invoke('chat:returnToMain', sessionKey),
     popoutInfo: (): Promise<{ connection: { url: string; token: string } | null }> => ipcRenderer.invoke('chat:popoutInfo'),
     listPoppedOut: (): Promise<string[]> => ipcRenderer.invoke('chat:listPoppedOut'),
@@ -94,7 +96,9 @@ contextBridge.exposeInMainWorld('api', {
     delete:  (filePath: string)                   => ipcRenderer.invoke('file:delete', filePath),
     find:    (filename: string)                   => ipcRenderer.invoke('file:find', filename),
     listdir: (dirPath: string, ext?: string)      => ipcRenderer.invoke('file:listdir', dirPath, ext),
-    readBinary: (filePath: string)                => ipcRenderer.invoke('file:readBinary', filePath)
+    readBinary: (filePath: string)                => ipcRenderer.invoke('file:readBinary', filePath),
+    // Save a copy of a host file (bytes come from the renderer, base64-encoded)
+    saveAs:  (name: string, base64: string)       => ipcRenderer.invoke('file:saveAs', name, base64)
   },
 
   // Theme packages (.joaxtheme zips) + background-image picking
