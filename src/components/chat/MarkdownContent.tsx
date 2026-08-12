@@ -4,6 +4,7 @@ import type { Components } from 'react-markdown'
 import { AudioPlayer } from './AudioPlayer'
 import { WorkspaceImage, VideoPlayer, IMAGE_EXT, VIDEO_EXT, toFileUrl } from './WorkspaceMedia'
 import { DiffView } from './DiffView'
+import { repairDetachedTableRows } from '../../lib/markdownRepair'
 
 const AUDIO_EXT = /\.(mp3|ogg|wav|m4a|aac|opus|webm|flac)(\?[^\s]*)?$/i
 const LOCAL_PATH = /^(\/|~\/|file:\/\/)/
@@ -137,9 +138,12 @@ const components: Components = {
   },
 
   // Tables (GFM)
+  // `width: max-content` + `minWidth: 100%` lets a wide table (a 7-column test plan in
+  // a 380px Files drawer) size to its content and scroll inside the wrapper, instead of
+  // being squeezed to the pane and clipping its last columns.
   table: ({ children }) => (
-    <div style={{ overflowX: 'auto', margin: '0.75em 0', borderRadius: 'var(--radius)', border: '1px solid var(--border)' }}>
-      <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: '0.9em' }}>
+    <div style={{ overflowX: 'auto', maxWidth: '100%', margin: '0.75em 0', borderRadius: 'var(--radius)', border: '1px solid var(--border)' }}>
+      <table style={{ borderCollapse: 'collapse', width: 'max-content', minWidth: '100%', fontSize: '0.9em' }}>
         {children}
       </table>
     </div>
@@ -202,13 +206,17 @@ const components: Components = {
 }
 
 export function MarkdownContent({ text, streaming }: Props) {
+  // Models write long tables as one header plus detached per-section runs of rows,
+  // which GFM parses as a paragraph of pipes. Re-attach them before rendering — a
+  // no-op for every well-formed document. See lib/markdownRepair.ts.
+  const source = repairDetachedTableRows(text)
   return (
     <div
       className={streaming ? 'streaming-cursor' : ''}
       style={{ lineHeight: 1.7, wordBreak: 'break-word', minWidth: 0 }}
     >
       <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
-        {text}
+        {source}
       </ReactMarkdown>
     </div>
   )

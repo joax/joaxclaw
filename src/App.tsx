@@ -23,6 +23,8 @@ import { GatewayUpdateBanner } from './components/layout/GatewayUpdateBanner'
 import { ScopeWarningBanner } from './components/layout/ScopeWarningBanner'
 import { WelcomeModal } from './components/layout/WelcomeModal'
 import { BottomNav } from './components/layout/BottomNav'
+import { FileDrawer } from './components/files/FileDrawer'
+import { PanelErrorBoundary } from './components/common/PanelErrorBoundary'
 import { useIsNarrow } from './lib/useIsNarrow'
 import { useNotificationsWatcher } from './lib/useNotificationsWatcher'
 import { useChatStore } from './store/chat'
@@ -36,12 +38,15 @@ import { useProcessesStore } from './store/processes'
 import { useSessionsStore } from './store/sessions'
 import { useTeamsStore } from './store/teams'
 import { useSkillsStore } from './store/skills'
+import { useFilesStore, resetFilesForConnection } from './store/files'
 
 export type NavSection = 'dashboard' | 'chat' | 'talk' | 'agents' | 'processes' | 'teams' | 'crons' | 'obsidian' | 'gateway' | 'themes' | 'settings'
 
 export default function App() {
   const [section, setSection] = useState<NavSection>('dashboard')
   const narrow = useIsNarrow()
+  // An expanded file takes over the content area (the drawer is a sibling of <main>).
+  const filesExpanded = useFilesStore(s => s.open && s.expanded)
   useNotificationsWatcher()
   const { status, connection, reconnecting } = useConnectionStore()
   const { start: startMetrics, stop: stopMetrics } = useMetricsStore()
@@ -58,6 +63,10 @@ export default function App() {
     restoreConnectionsFromBackup()
     return () => stopMetrics()
   }, [])
+
+  // A different gateway host has different files — and may not have the plugin at all.
+  // Drop the per-connection Files state so nothing from the previous host lingers.
+  useEffect(() => { resetFilesForConnection() }, [connection?.url])
 
   // Whole-app zoom: Ctrl/Cmd and +/- to scale text & UI, Ctrl/Cmd+0 to reset.
   // Persisted in settings; re-applied here once the preload bridge is available.
@@ -176,7 +185,12 @@ export default function App() {
         {/* Persistent side rail on desktop; a bottom tab bar on narrow (mobile) screens
             (rendered below, as a sibling of the status bar so it sits in the thumb zone). */}
         {!narrow && <NavRail section={section} onNavigate={setSection} disabledSections={disabledSections} />}
-        <main className="flex-1 min-w-0 flex flex-col relative" style={{ background: 'var(--bg-primary)' }}>
+        {/* The Files drawer is a real side panel, so an expanded file gets the whole
+            content area rather than covering the chat with an overlay. */}
+        <main
+          className="flex-1 min-w-0 flex flex-col relative"
+          style={{ background: 'var(--bg-primary)', ...(filesExpanded ? { display: 'none' } : {}) }}
+        >
           <ThemeBackground slot="app" />
           <div className="relative z-[1] flex-1 min-w-0 min-h-0 flex flex-col">
           {reconnecting ? (
@@ -201,6 +215,11 @@ export default function App() {
           {monitorVisible && <SystemMonitorHUD />}
           </div>
         </main>
+        {!showConnect && !reconnecting && (
+          <PanelErrorBoundary label="Files">
+            <FileDrawer onOpenChat={() => setSection('chat')} />
+          </PanelErrorBoundary>
+        )}
       </div>
       <StatusBar />
       {/* Mobile primary navigation lives at the very bottom (thumb zone), just under the

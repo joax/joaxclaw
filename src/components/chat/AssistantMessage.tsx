@@ -23,6 +23,8 @@ import { MessageReactions } from './MessageReactions'
 import { parseReactAction } from '../../lib/reactionActions'
 import { ScriptJobCard } from './ScriptJobCard'
 import { parseJobId } from '../../lib/scriptJobs'
+import { ArtifactStrip } from './ArtifactStrip'
+import { extractArtifacts } from '../../lib/artifacts'
 
 
 // Strip gateway protocol wrapper tags from content.
@@ -306,6 +308,8 @@ export function AssistantMessage({ message, showTools = true, showReasoning = tr
   // sessions_spawn is represented as an inline thread, not a raw tool card.
   const visibleToolCalls = (message.toolCalls ?? []).filter(c => c.name !== 'sessions_spawn')
   const hasTools = visibleToolCalls.length > 0
+  // Files this turn wrote, lifted out of the tool calls (see lib/artifacts.ts).
+  const artifacts = extractArtifacts(message.toolCalls)
   const threads = message.threads ?? []
   const hasThreads = threads.length > 0
 
@@ -386,6 +390,9 @@ export function AssistantMessage({ message, showTools = true, showReasoning = tr
               ))}
             </div>
           )}
+
+          {/* Files this turn wrote — shown in Basic mode too: the report IS the answer. */}
+          {artifacts.length > 0 && <div className="mt-2"><ArtifactStrip artifacts={artifacts} /></div>}
 
           {/* Structured questions the model asked — interactive option buttons */}
           {hasQuestions && (
@@ -528,6 +535,10 @@ export function AssistantMessage({ message, showTools = true, showReasoning = tr
             ))}
           </div>
         )}
+
+        {/* Files this turn wrote — independent of showTools, so they survive Basic mode
+            and a collapsed tool trail. */}
+        {artifacts.length > 0 && <div className="mt-2"><ArtifactStrip artifacts={artifacts} /></div>}
 
         {/* Structured questions the model asked — interactive option buttons */}
         {hasQuestions && (

@@ -1,11 +1,12 @@
 import { useState, useEffect, type ReactNode, type MouseEvent as ReactMouseEvent } from 'react'
-import { Plus, Search, Trash2, MessageSquare, Radio, Heart, ExternalLink, ArrowLeftToLine, ArrowLeft, ChevronDown, Pencil, Clock } from 'lucide-react'
+import { Plus, Search, Trash2, MessageSquare, Radio, Heart, ExternalLink, ArrowLeftToLine, ArrowLeft, ChevronDown, Pencil, Clock, FolderOpen } from 'lucide-react'
 import { useIsNarrow } from '../../lib/useIsNarrow'
 import { ModelIcon } from '../ui/ModelIcon'
 import { useChatStore } from '../../store/chat'
 import { useAgentsStore } from '../../store/agents'
 import { useSessionsStore } from '../../store/sessions'
 import { useCronsStore } from '../../store/crons'
+import { useFilesStore } from '../../store/files'
 import { cronJobForSession } from '../../lib/reminders'
 import { useModelsStore } from '../../store/models'
 import { useSettingsStore } from '../../store/settings'
@@ -46,6 +47,9 @@ export function ChatView({ solo }: { solo?: string } = {}) {
   const { conversations, activeConvId, newConversation, selectConversation, deleteConversation, loadSessionMessages, watchSession, setModelOverride, setThinkingLevel } = useChatStore()
   const { agents, defaultId, fetch: fetchAgents } = useAgentsStore()
   const { sessions, customLabels, derivedNames, rename: renameSession, fetch: fetchSessions, delete: deleteSession } = useSessionsStore()
+  const filesOpen = useFilesStore(s => s.open)
+  const openFiles = useFilesStore(s => s.openDrawer)
+  const closeFiles = useFilesStore(s => s.closeDrawer)
   const cronJobs = useCronsStore(s => s.jobs)
   const cronSessions = useCronsStore(s => s.cronSessions)
   const fetchCrons = useCronsStore(s => s.fetch)
@@ -498,6 +502,17 @@ export function ChatView({ solo }: { solo?: string } = {}) {
                   {activeConv.sessionKey?.includes(':heartbeat') && (
                     <Heart size={14} title="Heartbeat session" style={{ color: 'var(--accent)', opacity: 0.8, flexShrink: 0 }} />
                   )}
+                  {/* Files the agents wrote — the same panel artifact cards open. */}
+                  {!solo && (
+                    <button
+                      onClick={() => filesOpen ? closeFiles() : openFiles()}
+                      title="Files your agents wrote"
+                      aria-label="Files"
+                      style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 30, height: 30, borderRadius: 'var(--radius)', border: 'none', background: 'transparent', color: filesOpen ? 'var(--accent)' : 'var(--text-secondary)', cursor: 'pointer', flexShrink: 0 }}
+                    >
+                      <FolderOpen size={16} />
+                    </button>
+                  )}
                   <DisplayMenu
                     mode={chatMode}
                     setMode={setChatMode}
@@ -524,21 +539,28 @@ export function ChatView({ solo }: { solo?: string } = {}) {
               className="flex items-center gap-3 px-4 py-2 shrink-0 text-sm"
               style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-surface)' }}
             >
-              <span>🤖</span>
-              <span className="font-medium" style={{ color: 'var(--text-primary)' }}>
+              <span style={{ flexShrink: 0 }}>🤖</span>
+              {/* The title is the only element allowed to shrink: with the Files drawer
+                  open the header has ~380px less room, and without this the controls
+                  overflowed the main column and painted over the drawer. */}
+              <span
+                className="font-medium"
+                style={{ color: 'var(--text-primary)', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                title={convDisplayName(activeConv)}
+              >
                 {convDisplayName(activeConv)}
               </span>
               {activeConv.sessionKey && (
-                <span className="text-xs font-mono px-2 py-0.5 rounded" style={{ background: 'var(--bg-elevated)', color: 'var(--text-secondary)' }}>
+                <span className="text-xs font-mono px-2 py-0.5 rounded shrink-0" style={{ background: 'var(--bg-elevated)', color: 'var(--text-secondary)' }}>
                   {activeConv.sessionKey.slice(0, 16)}
                 </span>
               )}
               {activeConv.sessionKey?.includes(':heartbeat') && (
-                <Heart size={12} title="Heartbeat session" style={{ color: 'var(--accent)', opacity: 0.8 }} />
+                <Heart size={12} title="Heartbeat session" style={{ color: 'var(--accent)', opacity: 0.8, flexShrink: 0 }} />
               )}
 
               {/* Per-chat model + thinking overrides (independent of the agent's config) */}
-              <div className="flex items-center gap-1.5 ml-2">
+              <div className="flex items-center gap-1.5 ml-2 shrink-0">
                 <ModelSelect
                   value={activeConv.modelOverride}
                   agentDefault={agents.find(a => a.id === activeConv.agentId)?.model?.primary}
@@ -550,7 +572,20 @@ export function ChatView({ solo }: { solo?: string } = {}) {
                 />
               </div>
 
-              <div className="ml-auto flex items-center gap-1.5">
+              <div className="ml-auto flex items-center gap-1.5 shrink-0">
+                {/* Files the agents wrote — the same panel artifact cards open. Hidden in
+                    a pop-out, where the drawer isn't mounted (App owns it). */}
+                {!solo && (
+                  <button
+                    onClick={() => filesOpen ? closeFiles() : openFiles()}
+                    title="Files your agents wrote"
+                    aria-label="Files"
+                    className="flex items-center justify-center px-1.5 py-1 rounded transition-colors"
+                    style={{ border: '1px solid var(--border)', background: filesOpen ? 'color-mix(in srgb, var(--accent) 12%, transparent)' : 'transparent', color: filesOpen ? 'var(--accent)' : 'var(--text-secondary)', cursor: 'pointer' }}
+                  >
+                    <FolderOpen size={13} />
+                  </button>
+                )}
                 {/* Presentation mode + Advanced multi-select toggles, collapsed into a
                     single popover so the header stays compact (esp. in the pop-out). */}
                 <DisplayMenu
