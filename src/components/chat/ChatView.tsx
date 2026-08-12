@@ -566,6 +566,19 @@ export function ChatView({ solo }: { solo?: string } = {}) {
               </div>
 
               <div className="ml-auto flex items-center gap-1.5">
+                {/* Files the agents wrote — the same panel artifact cards open. Hidden in
+                    a pop-out, where the drawer isn't mounted (App owns it). */}
+                {!solo && (
+                  <button
+                    onClick={() => filesOpen ? closeFiles() : openFiles()}
+                    title="Files your agents wrote"
+                    aria-label="Files"
+                    className="flex items-center justify-center px-1.5 py-1 rounded transition-colors"
+                    style={{ border: '1px solid var(--border)', background: filesOpen ? 'color-mix(in srgb, var(--accent) 12%, transparent)' : 'transparent', color: filesOpen ? 'var(--accent)' : 'var(--text-secondary)', cursor: 'pointer' }}
+                  >
+                    <FolderOpen size={13} />
+                  </button>
+                )}
                 {/* Presentation mode + Advanced multi-select toggles, collapsed into a
                     single popover so the header stays compact (esp. in the pop-out). */}
                 <DisplayMenu
