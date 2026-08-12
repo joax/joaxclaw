@@ -24,6 +24,7 @@ import { ScopeWarningBanner } from './components/layout/ScopeWarningBanner'
 import { WelcomeModal } from './components/layout/WelcomeModal'
 import { BottomNav } from './components/layout/BottomNav'
 import { FileDrawer } from './components/files/FileDrawer'
+import { PanelErrorBoundary } from './components/common/PanelErrorBoundary'
 import { useIsNarrow } from './lib/useIsNarrow'
 import { useNotificationsWatcher } from './lib/useNotificationsWatcher'
 import { useChatStore } from './store/chat'
@@ -214,7 +215,11 @@ export default function App() {
           {monitorVisible && <SystemMonitorHUD />}
           </div>
         </main>
-        {!showConnect && !reconnecting && <FileDrawer onOpenChat={() => setSection('chat')} />}
+        {!showConnect && !reconnecting && (
+          <PanelErrorBoundary label="Files">
+            <FileDrawer onOpenChat={() => setSection('chat')} />
+          </PanelErrorBoundary>
+        )}
       </div>
       <StatusBar />
       {/* Mobile primary navigation lives at the very bottom (thumb zone), just under the

@@ -84,7 +84,10 @@ export const useFilesStore = create<FilesState>()(
       },
 
       openDrawer() {
-        set({ open: true })
+        // The Files button opens the *panel*; only a card opens a specific file. Without
+        // clearing this, reopening jumped straight back into whatever was last previewed
+        // — including a file that has since been deleted.
+        set({ open: true, selected: null })
         void get().loadRoots()
       },
 
