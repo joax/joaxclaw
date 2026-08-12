@@ -96,6 +96,32 @@ machine, so that action must be Save-As-then-open. Label it that way rather than
 behaving differently depending on where the gateway runs — the recurring
 [remote-gateway](./remote-gateway.md) trap.
 
+## The markdown models actually write
+
+GFM only recognises a table when the delimiter row directly follows the header. Models
+routinely write a long table as **one header up top, then per-section runs of rows**:
+
+```markdown
+| Test ID | Test case | Priority |
+| --- | --- | --- |
+
+## Global chrome (19 tests)
+
+| GC-01 | Logo returns home | P0 |
+```
+
+Parsed strictly — by remark-gfm, and by GitHub — that's a header-only table followed by
+a *paragraph of pipes*, so a 19-row test plan renders as one run-on line. The document is
+what's malformed, but this app exists to read documents models wrote, so
+`lib/markdownRepair.ts` re-attaches an orphan run to the last header whose **column count
+it matches**, dropping the now-empty header table it borrowed from. It's conservative:
+fenced code is untouched, a column-count mismatch is left alone, and a well-formed
+document parses identically before and after (asserted in the tests by running the same
+parser `MarkdownContent` uses).
+
+It lives in `MarkdownContent`, so chat gets the same repair — models write these tables
+into replies too.
+
 ## Read-only, and why
 
 The viewer does not write back. Editing would need a `host.files.write` RPC — a
