@@ -25,6 +25,10 @@ import { ScriptJobCard } from './ScriptJobCard'
 import { parseJobId } from '../../lib/scriptJobs'
 import { ArtifactStrip } from './ArtifactStrip'
 import { extractArtifacts } from '../../lib/artifacts'
+import {
+  toolResultView, resultFields, argSummary, commandSummary, commandLineCount, tryPrettyJson,
+  type ResultField,
+} from '../../lib/toolCall'
 
 
 // Strip gateway protocol wrapper tags from content.
@@ -699,7 +703,9 @@ type ToolKind = 'bash' | 'file-write' | 'file-read' | 'file-search' | 'web' | 'g
 
 function detectKind(name: string): ToolKind {
   const n = name.toLowerCase()
-  if (/\bbash\b|shell|run_command|execute_command|run_bash|terminal/.test(n)) return 'bash'
+  // `exec` belongs here: without it a shell script fell through to the generic branch
+  // and rendered as a JSON-escaped one-liner instead of as code.
+  if (/\bbash\b|shell|run_command|execute_command|run_bash|terminal|\bexec\b/.test(n)) return 'bash'
   if (/write_file|create_file|overwrite|str_replace_editor|patch_file|edit_file|\bwrite\b|\bedit\b/.test(n)) return 'file-write'
   if (/read_file|view_file|cat_file|\bread\b|\bview\b|\bopen\b/.test(n)) return 'file-read'
   if (/search_files|find_files|\bgrep\b|\bfind\b|\bglob\b|list_files|ls_files/.test(n)) return 'file-search'
@@ -731,8 +737,9 @@ function toolSummary(kind: ToolKind, args?: string): string {
   const str = (v: unknown) => (typeof v === 'string' ? v : '')
 
   if (kind === 'bash') {
-    const cmd = str(a.command ?? a.cmd ?? a.script ?? a.raw)
-    return cmd.replace(/\s*\n\s*/g, ' → ').replace(/\s{2,}/g, ' ')
+    // The first line that actually does something — not the shebang, the licence
+    // comment, or `set -e`, which is what a generated script leads with.
+    return commandSummary(str(a.command ?? a.cmd ?? a.script ?? a.raw))
   }
   if (kind === 'file-write') {
     const path = str(a.path ?? a.file_path ?? a.filename ?? a.target_file)
@@ -752,14 +759,13 @@ function toolSummary(kind: ToolKind, args?: string): string {
   if (kind === 'web') {
     return str(a.url ?? a.query ?? a.raw)
   }
-  if (kind === 'gateway') {
-    const keys = Object.keys(a).filter(k => k !== 'raw')
-    return keys.length ? `Updating ${keys.join(', ')}` : 'Config update'
-  }
   if (kind === 'agent') {
     return str(a.agentId ?? a.agent_id ?? a.sessionKey ?? a.session_key ?? a.message ?? a.raw)
   }
-  return args ? truncate(args, 80) : ''
+  // Gateway calls and anything unrecognised: name the VALUE that says what happened
+  // ("restart"), never the argument keys ("Updating action, note, reason") and never a
+  // raw JSON dump — both of which told the reader nothing about the event.
+  return argSummary(a)
 }
 
 function toolDisplayName(name: string, kind: ToolKind): string {
@@ -873,12 +879,16 @@ function ToolCallsBlock({ calls }: { calls: ToolCall[] }) {
               <span className="font-semibold text-xs" style={{ color: 'var(--text-primary)', flexShrink: 0 }}>
                 {displayName}
               </span>
-              <span
-                className="text-xs px-1.5 py-0.5 rounded font-mono"
-                style={{ background: 'var(--bg-elevated)', color: 'var(--text-secondary)', flexShrink: 0, fontSize: 10 }}
-              >
-                {call.name}
-              </span>
+              {/* The raw tool name, but only when it adds something. "Gateway gateway"
+                  and "Exec exec" spent header width saying the same word twice. */}
+              {call.name.toLowerCase().replace(/[_\-\s]/g, '') !== displayName.toLowerCase().replace(/\s/g, '') && (
+                <span
+                  className="text-xs px-1.5 py-0.5 rounded font-mono"
+                  style={{ background: 'var(--bg-elevated)', color: 'var(--text-secondary)', flexShrink: 0, fontSize: 10 }}
+                >
+                  {call.name}
+                </span>
+              )}
               {plugin && (
                 <span
                   className="flex items-center gap-1 text-xs px-1.5 py-0.5 rounded"
@@ -944,12 +954,13 @@ function ToolDetail({ kind, name, args, rawArgs, result, error }: {
 
   if (kind === 'bash') {
     const cmd = str(args.command ?? args.cmd ?? args.script)
-    const env = args.env
+    const lines = cmd ? commandLineCount(cmd) : 0
+    // A script is code. It used to arrive as one JSON string with literal \n escapes,
+    // which is unreadable the moment a command spans more than a line.
     inputSection = cmd ? (
-      <div>
-        {env && <p className="px-3 pt-2 pb-1 font-medium" style={{ color: 'var(--text-secondary)' }}>Command</p>}
+      <Section label="Command" hint={lines > 1 ? `${lines} lines` : undefined}>
         {codeBlock(cmd, '$ ')}
-      </div>
+      </Section>
     ) : null
 
   } else if (kind === 'file-write') {
@@ -991,25 +1002,27 @@ function ToolDetail({ kind, name, args, rawArgs, result, error }: {
     const url = str(args.url ?? args.query)
     inputSection = url ? <p className="px-3 py-2 text-xs font-mono" style={{ color: 'var(--accent)', wordBreak: 'break-all' }}>{url}</p> : null
 
-  } else if (kind === 'gateway') {
-    inputSection = rawArgs ? codeBlock(tryPrettyJson(rawArgs)) : null
-
   } else {
-    // Generic: show pretty-printed args
-    inputSection = rawArgs ? (
-      <div>
-        <p className="px-3 pt-2 pb-1 font-medium" style={{ color: 'var(--text-secondary)' }}>Input</p>
-        {codeBlock(tryPrettyJson(rawArgs))}
-      </div>
-    ) : null
+    // Gateway + anything unrecognised. Arguments are overwhelmingly flat key/values, so
+    // render them as fields — a JSON blob made the reader parse punctuation to find
+    // three strings. Nested structure still falls through to JSON below.
+    const fields = resultFields(args)
+    const nested = Object.fromEntries(
+      Object.entries(args).filter(([k, v]) =>
+        k !== 'raw' && !fields.some(f => f.label === k) && v !== null && v !== undefined && v !== ''))
+    inputSection = (fields.length || Object.keys(nested).length) ? (
+      <Section label="Request">
+        {fields.length > 0 && <FieldChips fields={fields} />}
+        {Object.keys(nested).length > 0 && codeBlock(JSON.stringify(nested, null, 2))}
+      </Section>
+    ) : rawArgs ? <Section label="Request">{codeBlock(tryPrettyJson(rawArgs))}</Section> : null
   }
 
   // Result section
   if (error) {
     resultSection = (
       <div style={{ borderTop: '1px solid var(--border)' }}>
-        <p className="px-3 pt-2 pb-1 font-medium" style={{ color: 'var(--danger)' }}>Error</p>
-        {codeBlock(error)}
+        <Section label="Error" tone="var(--danger)">{codeBlock(error)}</Section>
       </div>
     )
   } else if (result) {
@@ -1023,16 +1036,23 @@ function ToolDetail({ kind, name, args, rawArgs, result, error }: {
         </div>
       )
     } else {
-      const pretty = tryPrettyJson(result)
-      const lines = pretty.split('\n').length
+      // Unwrap the tool-result envelope and whatever JSON was encoded inside its text,
+      // then lead with the facts. What used to be 19 lines of `{content:[{type:"text",
+      // text:"{\n \"ok\": true…"}}]}` is now: ✓ ok · pid 504495 · SIGUSR1.
+      const view = toolResultView(result)
       resultSection = (
         <div style={{ borderTop: '1px solid var(--border)' }}>
-          <p className="px-3 pt-2 pb-1 font-medium" style={{ color: 'var(--text-secondary)' }}>
-            Output {lines > 1 ? `(${lines} lines)` : ''}
-          </p>
-          <div style={{ maxHeight: 240, overflowY: 'auto' }}>
-            {codeBlock(pretty)}
-          </div>
+          <Section label="Result">
+            {view.fields.length > 0 && <FieldChips fields={view.fields} />}
+            {view.text && (
+              <p className="px-3 pb-2" style={{ color: 'var(--text-primary)', lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>
+                {view.text}
+              </p>
+            )}
+            {view.json && (
+              <div style={{ maxHeight: 240, overflowY: 'auto' }}>{codeBlock(view.json)}</div>
+            )}
+          </Section>
         </div>
       )
     }
@@ -1040,6 +1060,48 @@ function ToolDetail({ kind, name, args, rawArgs, result, error }: {
 
   if (!inputSection && !resultSection) return null
   return <>{inputSection}{resultSection}</>
+}
+
+// A labelled band inside an expanded pill. Every pill uses the same two — what was
+// asked, then what came back — so the anatomy is learned once and holds across every
+// tool, whatever shape its payload takes.
+function Section({ label, hint, tone, children }: {
+  label: string; hint?: string; tone?: string; children: React.ReactNode
+}) {
+  return (
+    <div>
+      <div className="flex items-center gap-1.5 px-3 pt-2 pb-1">
+        <span className="font-medium" style={{ color: tone ?? 'var(--text-secondary)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+          {label}
+        </span>
+        {hint && <span style={{ color: 'var(--text-secondary)', opacity: 0.7, fontSize: 10 }}>{hint}</span>}
+      </div>
+      {children}
+    </div>
+  )
+}
+
+// The facts of a call as chips: `ok yes`, `pid 504495`, `exit 1`. Reading a value out of
+// a JSON blob meant scanning punctuation; here the eye lands on the value, and success
+// or failure is carried by colour rather than by the reader parsing `"ok": true`.
+function FieldChips({ fields }: { fields: ResultField[] }) {
+  const colour = (tone: ResultField['tone']) =>
+    tone === 'ok' ? 'var(--success)' : tone === 'bad' ? 'var(--danger)' : 'var(--text-primary)'
+  return (
+    <div className="flex flex-wrap gap-1 px-3 pb-2">
+      {fields.map(f => (
+        <span
+          key={f.label}
+          className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded"
+          style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)', maxWidth: '100%' }}
+          title={`${f.label}: ${f.value}`}
+        >
+          <span style={{ color: 'var(--text-secondary)', fontSize: 10 }}>{f.label}</span>
+          <span className="truncate font-mono" style={{ color: colour(f.tone), fontSize: 11 }}>{f.value}</span>
+        </span>
+      ))}
+    </div>
+  )
 }
 
 function ToolStatusIcon({ status }: { status: ToolCall['status'] }) {
@@ -1204,6 +1266,3 @@ function OverflowBlock({ overflow }: { overflow: ContextOverflowInfo }) {
 }
 
 function truncate(s: string, n: number) { return s.length > n ? s.slice(0, n) + '…' : s }
-function tryPrettyJson(s: string) {
-  try { return JSON.stringify(JSON.parse(s), null, 2) } catch { return s }
-}
