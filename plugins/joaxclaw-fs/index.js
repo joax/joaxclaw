@@ -477,6 +477,62 @@ async function findMediaOnHost(filename) {
   return ''
 }
 
+// ── host.files.* : the files agents write, listed and read from the host ────────
+// Listing is confined to ROOTS this module computes (the workspaces the gateway's
+// agents actually write into, plus the media dir). The client picks a root by id and
+// can only walk downward from it, so it can never point the listing at, say, ~/.ssh.
+
+const FILES_MAX_ENTRIES = 500
+const FILES_READ_MAX = 4 * 1024 * 1024  // 4 MB per chunk — keeps a WS frame sane
+
+// Files that hold credentials are never readable through this API, root or not. An
+// operator.read grant is for operating the gateway, not for exfiltrating its secrets.
+const DENY_NAME_RE = /^(openclaw\.json(\..*)?|credentials.*|auth\.json|\.env(\..*)?|.*\.pem|.*\.key|id_rsa.*|id_ed25519.*)$/i
+
+function isDeniedName(name) { return DENY_NAME_RE.test(String(name ?? '')) }
+function isDeniedPath(abs) {
+  const p = String(abs ?? '')
+  if (isDeniedName(path.basename(p))) return true
+  // Whole trees that are nothing but keys/tokens.
+  return /(^|\/)(\.ssh|\.gnupg|\.aws|\.config\/gcloud)(\/|$)/.test(p)
+}
+
+/** True when `child` is `parent` or sits underneath it (both already absolute). */
+function isInside(child, parent) {
+  const rel = path.relative(parent, child)
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel))
+}
+
+async function isDir(p) {
+  try { return (await fs.stat(p)).isDirectory() } catch { return false }
+}
+
+// The gateway's own workspace, each isolated agent's workspace, and the media dir the
+// image/video tools write into. Only the ones that actually exist are offered.
+async function fileRoots() {
+  const state = resolveStateDir()
+  const roots = []
+
+  const main = path.join(state, 'workspace')
+  if (await isDir(main)) roots.push({ id: 'workspace', label: 'Workspace', path: main })
+
+  const agentsDir = path.join(state, 'agents')
+  let agentEntries = []
+  try { agentEntries = await fs.readdir(agentsDir, { withFileTypes: true }) } catch { /* no isolated agents */ }
+  for (const d of agentEntries) {
+    if (!d.isDirectory() || d.name.startsWith('.')) continue
+    // Isolated agents keep their workspace under <stateDir>/agents/<id>/workspace when
+    // they have one of their own; agents sharing the main workspace have no such dir.
+    const ws = path.join(agentsDir, d.name, 'workspace')
+    if (await isDir(ws)) roots.push({ id: `agent:${d.name}`, label: d.name, path: ws, agentId: d.name })
+  }
+
+  const media = path.join(state, 'media')
+  if (await isDir(media)) roots.push({ id: 'media', label: 'Media', path: media })
+
+  return roots
+}
+
 // ── host.metrics : the gateway host's CPU / RAM / GPU ────────────────────────────
 // The desktop app's local metrics (`window.api.metrics.get`) describe the CLIENT
 // machine, so on a REMOTE gateway the dashboard showed the wrong host. This reports
@@ -894,6 +950,125 @@ export default definePluginEntry({
         const mediaType = MEDIA_MIME[ext] ?? 'application/octet-stream'
         const data = await fs.readFile(abs)
         respond(true, { ok: true, path: abs, mediaType, size: stat.size, dataUrl: `data:${mediaType};base64,${data.toString('base64')}` })
+      } catch (err) { failed(respond, err) }
+    }, { scope: READ_SCOPE })
+
+    // ── host.files.* : browse + read the files agents write ─────────────────────
+    // The desktop app can't see the gateway host's disk on a remote gateway, so a
+    // report an agent "saved to ~/report.md" is a dead end. These make that content
+    // reachable over the WS. READ-ONLY on purpose: the models author these documents,
+    // the app views them. See docs/files-drawer.md.
+
+    // Directories worth listing. Computed HERE rather than accepted from the client,
+    // so listing can't be pointed at an arbitrary directory on the host.
+    api.registerGatewayMethod('host.files.roots', async ({ respond }) => {
+      try {
+        respond(true, { roots: await fileRoots() })
+      } catch (err) { failed(respond, err) }
+    }, { scope: READ_SCOPE })
+
+    // List one root (optionally a subdirectory of it). `root` is an id from
+    // host.files.roots and `subdir` is resolved against it and re-checked, so a
+    // "../.." can't walk out.
+    api.registerGatewayMethod('host.files.list', async ({ params, respond }) => {
+      try {
+        const roots = await fileRoots()
+        const root = roots.find(r => r.id === params?.root)
+        if (!root) {
+          return respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, `host.files.list: unknown root ${JSON.stringify(params?.root)}`))
+        }
+        const dir = path.resolve(root.path, String(params?.subdir ?? ''))
+        if (!isInside(dir, root.path)) {
+          return respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, 'host.files.list: subdir escapes the root'))
+        }
+
+        let dirents = []
+        try { dirents = await fs.readdir(dir, { withFileTypes: true }) } catch { dirents = [] }
+
+        const entries = []
+        for (const d of dirents) {
+          if (d.name.startsWith('.')) continue           // dotfiles are plumbing, not output
+          if (isDeniedName(d.name)) continue
+          const abs = path.join(dir, d.name)
+          let stat
+          try { stat = await fs.stat(abs) } catch { continue }  // broken symlink / vanished
+          // stat() follows symlinks, so a link pointing outside the root would expose
+          // whatever it targets. Judge the RESOLVED path.
+          let real = abs
+          try { real = await fs.realpath(abs) } catch { /* keep abs */ }
+          if (!isInside(real, root.path)) continue
+          entries.push({
+            name: d.name,
+            path: abs,
+            size: stat.isDirectory() ? 0 : stat.size,
+            mtimeMs: Math.round(stat.mtimeMs),
+            isDir: stat.isDirectory(),
+          })
+          if (entries.length >= FILES_MAX_ENTRIES) break
+        }
+
+        // Directories first, then newest file first — the thing an agent just wrote is
+        // what the user came looking for.
+        entries.sort((a, b) => (a.isDir === b.isDir) ? (a.isDir ? a.name.localeCompare(b.name) : b.mtimeMs - a.mtimeMs) : (a.isDir ? -1 : 1))
+        respond(true, { entries, dir, truncated: entries.length >= FILES_MAX_ENTRIES })
+      } catch (err) { failed(respond, err) }
+    }, { scope: READ_SCOPE })
+
+    // Read a file, in chunks. Unlike list, this accepts any absolute path: the app
+    // opens files an agent named in chat, which legitimately live outside the roots
+    // (a repo, /tmp, …) — and host.readMedia has always read arbitrary paths, so
+    // constraining this one would break the feature without removing the capability.
+    // The denylist below is a real tightening over readMedia.
+    api.registerGatewayMethod('host.files.read', async ({ params, respond }) => {
+      try {
+        const raw = typeof params?.path === 'string' ? params.path.trim() : ''
+        if (!raw) {
+          return respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, 'host.files.read requires path'))
+        }
+        const abs = path.resolve(expandHome(raw.replace(/^file:\/\//, '')))
+        if (isDeniedPath(abs)) {
+          return respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, 'host.files.read: that file holds credentials and is not readable through this API'))
+        }
+
+        let stat
+        try { stat = await fs.stat(abs) } catch {
+          return respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, `host.files.read: not found: ${abs}`))
+        }
+        if (!stat.isFile()) {
+          return respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, `host.files.read: not a file: ${abs}`))
+        }
+
+        const encoding = params?.encoding === 'base64' ? 'base64' : 'utf8'
+        const offset = Number.isFinite(params?.offset) ? Math.max(0, Math.floor(params.offset)) : 0
+        const wanted = Number.isFinite(params?.length) ? Math.floor(params.length) : FILES_READ_MAX
+        const length = Math.min(Math.max(0, wanted), FILES_READ_MAX)
+
+        const handle = await fs.open(abs, 'r')
+        let buf, read
+        try {
+          buf = Buffer.alloc(Math.min(length, Math.max(0, stat.size - offset)))
+          ;({ bytesRead: read } = await handle.read(buf, 0, buf.length, offset))
+        } finally {
+          await handle.close()
+        }
+        const slice = buf.subarray(0, read)
+        const ext = (abs.split('.').pop() ?? '').toLowerCase()
+        respond(true, {
+          path: abs,
+          size: stat.size,
+          mediaType: MEDIA_MIME[ext] ?? 'application/octet-stream',
+          encoding,
+          // A capped read can land mid-character, and Buffer.toString('utf8') would
+          // turn that split sequence into a replacement char. Decoding with
+          // stream:true withholds the incomplete tail instead — the preview just
+          // ends one character earlier, which is what a truncated preview means.
+          content: encoding === 'base64'
+            ? slice.toString('base64')
+            : new TextDecoder('utf-8').decode(slice, { stream: true }),
+          // Whether this response reached the end of the file — the app shows a
+          // "showing the first N" note (and Save As pulls the rest) when it didn't.
+          eof: offset + read >= stat.size,
+        })
       } catch (err) { failed(respond, err) }
     }, { scope: READ_SCOPE })
 

@@ -46,6 +46,9 @@ gateway RPC methods that read/write those directories on the host.
 | `memory.read` | read | `{ providerId, config, id }` | `{ content }` |
 | `memory.graph` | read | `{ providerId, config }` | `{ graph: { nodes, edges } }` (Obsidian backlink graph) |
 | `host.metrics` | read | — | `{ ok, cpu, ramUsed, ramTotal, gpu: [{ model, utilizationGpu, memUsed, memTotal, temperatureGpu }] }` (gateway host CPU %/RAM bytes/GPU MB) |
+| `host.files.roots` | read | — | `{ roots: [{ id, label, path, agentId? }] }` (listable dirs: workspaces + media) |
+| `host.files.list` | read | `{ root, subdir? }` | `{ entries: [{ name, path, size, mtimeMs, isDir }], dir, truncated }` |
+| `host.files.read` | read | `{ path, encoding?, offset?, length? }` | `{ path, size, mediaType, encoding, content, eof }` (chunked) |
 | `jobs.list` | read | — | `{ jobs: [{ id, command, running, done, exitCode, percent, startedAt, elapsedMs, sessionKey }] }` (background script jobs) |
 | `jobs.get` | read | `{ jobId }` | `{ id, command, running, done, exitCode, error, percent, elapsedMs, output, outputTruncated, sessionKey }` (live tail) |
 | `jobs.stop` | write | `{ jobId }` | `{ ok }` (SIGTERM the job) |
@@ -68,6 +71,21 @@ design: it only records the request as `<id>.runrequest.json` (with a one-shot `
 the JoaxClaw app polls for it, builds the launch prompt, optionally auto-launches when
 `autorun` is set, and clears the request. The app owns prompt compilation and the live
 run monitor, so the plugin never starts a run itself.
+
+`host.files.*` back the app's **Files** panel — the documents agents write live on the
+gateway host, so on a remote gateway they're otherwise unreachable. **Read-only:** the
+models author these files, the app views them. Listing is confined to roots the plugin
+computes itself (`<stateDir>/workspace`, each `<stateDir>/agents/<id>/workspace`, and
+`<stateDir>/media`) — the client picks a root by id and can only walk downward, so it
+can't aim the listing at an arbitrary directory; dotfiles are skipped and a symlink
+pointing out of its root is dropped. `host.files.read` does accept any absolute path,
+because the app opens files an agent named in chat that legitimately sit outside those
+roots (a repo, `/tmp`) — and `host.readMedia` has always read arbitrary paths, so
+restricting it here would break the feature without removing the capability. What it
+adds is a denylist: credential files (`openclaw.json`, `credentials*`, `.env`, `*.pem`,
+`*.key`, ssh/gnupg/aws/gcloud trees) are never readable through this API. Reads are
+chunked (`offset`/`length`, 4 MiB per call, `eof` tells the app whether more remains),
+which is what lets the viewer preview a large file and Save As pull the whole thing.
 
 `engines.probe` / `engines.fetch` GET a local LLM engine's health/model URL **from
 the gateway host** — that's how the app checks liveness and lists models for engines
