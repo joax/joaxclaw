@@ -1,8 +1,8 @@
 import { useEffect } from 'react'
-import { ChevronLeft, FolderOpen, RefreshCw, X, Loader2, AlertCircle, Folder } from 'lucide-react'
+import { ChevronLeft, ChevronRight, FolderOpen, RefreshCw, X, Loader2, AlertCircle, Folder } from 'lucide-react'
 import { FilePreview, FileGlyph } from './FilePreview'
 import { RemotePluginNotice } from '../common/RemotePluginNotice'
-import { useFilesStore, newSince, type FileEntry } from '../../store/files'
+import { useFilesStore, newSince, breadcrumbFor, type FileEntry } from '../../store/files'
 import { useConnectionStore } from '../../store/connection'
 import { fmtBytes } from '../../lib/artifacts'
 import { useIsNarrow } from '../../lib/useIsNarrow'
@@ -129,6 +129,35 @@ export function FileDrawer({ onOpenChat }: { onOpenChat?: () => void }) {
             </div>
           )}
 
+          {subdir && (
+            <div
+              className="flex items-center gap-0.5 px-2 py-1.5 shrink-0"
+              style={{ overflowX: 'auto', borderBottom: '1px solid var(--border)' }}
+            >
+              {breadcrumbFor(roots.find(r => r.id === rootId)?.label ?? 'Files', subdir).map((crumb, i, all) => {
+                const isLast = i === all.length - 1
+                return (
+                  <span key={crumb.subdir} className="flex items-center gap-0.5 shrink-0">
+                    {i > 0 && <ChevronRight size={11} style={{ color: 'var(--text-secondary)', opacity: 0.5 }} />}
+                    <button
+                      onClick={() => { if (!isLast && rootId) void selectRoot(rootId, crumb.subdir) }}
+                      disabled={isLast}
+                      className="text-xs px-1 py-0.5"
+                      style={{
+                        border: 'none', background: 'none', borderRadius: 4,
+                        color: isLast ? 'var(--text-primary)' : 'var(--accent)',
+                        cursor: isLast ? 'default' : 'pointer',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {crumb.label}
+                    </button>
+                  </span>
+                )
+              })}
+            </div>
+          )}
+
           <div className="flex-1 min-h-0 overflow-y-auto px-2 py-2">
             {loading && !entries.length ? (
               <div className="flex items-center gap-2 text-xs px-1" style={{ color: 'var(--text-secondary)' }}>
@@ -157,7 +186,8 @@ export function FileDrawer({ onOpenChat }: { onOpenChat?: () => void }) {
 function Row({ entry, isNew }: { entry: FileEntry; isNew: boolean }) {
   const openFile = useFilesStore(s => s.openFile)
   const selectRoot = useFilesStore(s => s.selectRoot)
-  const { rootId, subdir } = useFilesStore.getState()
+  const rootId = useFilesStore(s => s.rootId)
+  const subdir = useFilesStore(s => s.subdir)
 
   const onClick = () => {
     if (entry.isDir) {

@@ -146,6 +146,21 @@ export const useFilesStore = create<FilesState>()(
   ),
 )
 
+export interface Crumb { label: string; subdir: string }
+
+/**
+ * Trail from a root down to the current subdirectory. The first crumb is the root
+ * itself (`subdir: ''`), which is what gets the user back out — without it, walking
+ * into a folder is a one-way trip on a gateway with a single root.
+ */
+export function breadcrumbFor(rootLabel: string, subdir: string): Crumb[] {
+  const parts = subdir.split('/').filter(Boolean)
+  return [
+    { label: rootLabel, subdir: '' },
+    ...parts.map((name, i) => ({ label: name, subdir: parts.slice(0, i + 1).join('/') })),
+  ]
+}
+
 /** Files newer than the last drawer visit — drives the "new" dot and the nav badge. */
 export function newSince(entries: FileEntry[], seenAtMs: number): FileEntry[] {
   if (!seenAtMs) return []
