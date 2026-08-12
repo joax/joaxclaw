@@ -43,6 +43,9 @@ export function FileDrawer({ onOpenChat }: { onOpenChat?: () => void }) {
         flexShrink: 0,
         borderLeft: narrow || expanded ? 'none' : '1px solid var(--border)',
         background: 'var(--bg-primary)',
+        // Lift the panel off the chat column. Pointless as a full-screen overlay, where
+        // there's nothing beside it to separate from.
+        ...(narrow ? {} : { boxShadow: '-8px 0 24px rgba(0,0,0,0.35)' }),
         // <main>'s inner wrapper carries z-[1], so a static sibling paints *under* it —
         // anything overflowing the chat column would bleed over this panel. Give the
         // drawer its own stacking context above it.
