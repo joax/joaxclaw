@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { b64ToBytes, bytesToB64, guessMediaType, stripFileUrl } from '../fileContent'
 import { filePopoutQuery } from '../filePopout'
-import { newSince, type FileEntry } from '../../store/files'
+import { newSince, breadcrumbFor, type FileEntry } from '../../store/files'
 
 // The base64 round-trip is load-bearing: on a remote gateway every byte of a shared
 // file crosses the WS base64-encoded, and the workspace markdown these agents write is
@@ -79,5 +79,31 @@ describe('newSince', () => {
 
   it('marks nothing on a first visit, so an existing workspace does not all light up', () => {
     expect(newSince([entry({ mtimeMs: 200 })], 0)).toEqual([])
+  })
+})
+
+describe('breadcrumbFor', () => {
+  // Without a crumb back to the root, walking into a folder was a one-way trip on a
+  // gateway with a single root (the root tabs only render when there are several).
+  it('always offers a way back to the root', () => {
+    expect(breadcrumbFor('Workspace', 'reports/2026')[0]).toEqual({ label: 'Workspace', subdir: '' })
+  })
+
+  it('builds a cumulative trail', () => {
+    expect(breadcrumbFor('Workspace', 'reports/2026/q3')).toEqual([
+      { label: 'Workspace', subdir: '' },
+      { label: 'reports', subdir: 'reports' },
+      { label: '2026', subdir: 'reports/2026' },
+      { label: 'q3', subdir: 'reports/2026/q3' },
+    ])
+  })
+
+  it('is just the root at the top level', () => {
+    expect(breadcrumbFor('Workspace', '')).toEqual([{ label: 'Workspace', subdir: '' }])
+  })
+
+  it('ignores stray slashes', () => {
+    expect(breadcrumbFor('Workspace', '/reports//2026/').map(c => c.subdir))
+      .toEqual(['', 'reports', 'reports/2026'])
   })
 })
