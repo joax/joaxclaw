@@ -1,11 +1,12 @@
 import { useState, useEffect, type ReactNode, type MouseEvent as ReactMouseEvent } from 'react'
-import { Plus, Search, Trash2, MessageSquare, Radio, Heart, ExternalLink, ArrowLeftToLine, ArrowLeft, ChevronDown, Pencil, Clock } from 'lucide-react'
+import { Plus, Search, Trash2, MessageSquare, Radio, Heart, ExternalLink, ArrowLeftToLine, ArrowLeft, ChevronDown, Pencil, Clock, FolderOpen } from 'lucide-react'
 import { useIsNarrow } from '../../lib/useIsNarrow'
 import { ModelIcon } from '../ui/ModelIcon'
 import { useChatStore } from '../../store/chat'
 import { useAgentsStore } from '../../store/agents'
 import { useSessionsStore } from '../../store/sessions'
 import { useCronsStore } from '../../store/crons'
+import { useFilesStore } from '../../store/files'
 import { cronJobForSession } from '../../lib/reminders'
 import { useModelsStore } from '../../store/models'
 import { useSettingsStore } from '../../store/settings'
@@ -46,6 +47,9 @@ export function ChatView({ solo }: { solo?: string } = {}) {
   const { conversations, activeConvId, newConversation, selectConversation, deleteConversation, loadSessionMessages, watchSession, setModelOverride, setThinkingLevel } = useChatStore()
   const { agents, defaultId, fetch: fetchAgents } = useAgentsStore()
   const { sessions, customLabels, derivedNames, rename: renameSession, fetch: fetchSessions, delete: deleteSession } = useSessionsStore()
+  const filesOpen = useFilesStore(s => s.open)
+  const openFiles = useFilesStore(s => s.openDrawer)
+  const closeFiles = useFilesStore(s => s.closeDrawer)
   const cronJobs = useCronsStore(s => s.jobs)
   const cronSessions = useCronsStore(s => s.cronSessions)
   const fetchCrons = useCronsStore(s => s.fetch)
@@ -497,6 +501,17 @@ export function ChatView({ solo }: { solo?: string } = {}) {
                   </span>
                   {activeConv.sessionKey?.includes(':heartbeat') && (
                     <Heart size={14} title="Heartbeat session" style={{ color: 'var(--accent)', opacity: 0.8, flexShrink: 0 }} />
+                  )}
+                  {/* Files the agents wrote — the same panel artifact cards open. */}
+                  {!solo && (
+                    <button
+                      onClick={() => filesOpen ? closeFiles() : openFiles()}
+                      title="Files your agents wrote"
+                      aria-label="Files"
+                      style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 30, height: 30, borderRadius: 'var(--radius)', border: 'none', background: 'transparent', color: filesOpen ? 'var(--accent)' : 'var(--text-secondary)', cursor: 'pointer', flexShrink: 0 }}
+                    >
+                      <FolderOpen size={16} />
+                    </button>
                   )}
                   <DisplayMenu
                     mode={chatMode}

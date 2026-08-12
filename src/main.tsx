@@ -2,6 +2,7 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App'
 import { ChatPopout } from './components/chat/ChatPopout'
+import { FilePopout } from './components/files/FilePopout'
 import { AboutWindow } from './components/layout/AboutWindow'
 import './index.css'
 import { DEFAULT_THEME } from './lib/presetThemes'
@@ -46,15 +47,18 @@ window.api?.window?.onMaximized?.(max => {
 })
 
 // Secondary windows reuse this renderer via a ?popout=… query: a chat deep-linked to
-// one session, or the About window. Otherwise render the full app.
+// one session, a file deep-linked by host path, or the About window. Otherwise render
+// the full app.
 const params = new URLSearchParams(window.location.search)
 const popout = params.get('popout')
 const popoutSession = popout === 'chat' ? (params.get('session') ?? '') : ''
+const popoutPath = popout === 'file' ? (params.get('path') ?? '') : ''
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     {popout === 'about' ? <AboutWindow />
       : popoutSession ? <ChatPopout sessionKey={popoutSession} />
+      : popoutPath ? <FilePopout path={popoutPath} name={params.get('name') ?? undefined} />
       : <App />}
   </React.StrictMode>
 )
