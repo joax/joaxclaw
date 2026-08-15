@@ -14,6 +14,7 @@ import { ProcessesView } from './components/processes/ProcessesView'
 import { TeamsView } from './components/teams/TeamsView'
 import { MemoryView } from './components/memory/MemoryView'
 import { DashboardView } from './components/dashboard/DashboardView'
+import { BillingView } from './components/billing/BillingView'
 import { SystemMonitorHUD } from './components/monitor/SystemMonitorHUD'
 import { ConnectScreen } from './components/layout/ConnectScreen'
 import { ReconnectOverlay } from './components/layout/ReconnectOverlay'
@@ -40,7 +41,7 @@ import { useTeamsStore } from './store/teams'
 import { useSkillsStore } from './store/skills'
 import { useFilesStore, resetFilesForConnection } from './store/files'
 
-export type NavSection = 'dashboard' | 'chat' | 'talk' | 'agents' | 'processes' | 'teams' | 'crons' | 'obsidian' | 'gateway' | 'themes' | 'settings'
+export type NavSection = 'dashboard' | 'chat' | 'talk' | 'agents' | 'processes' | 'teams' | 'crons' | 'obsidian' | 'billing' | 'gateway' | 'themes' | 'settings'
 
 export default function App() {
   const [section, setSection] = useState<NavSection>('dashboard')
@@ -158,7 +159,7 @@ export default function App() {
   }, [status, connection?.url])
 
   const notConnected = status !== 'connected'
-  const ALL_GATEWAY_SECTIONS: NavSection[] = ['dashboard', 'chat', 'talk', 'agents', 'processes', 'teams', 'crons', 'obsidian', 'gateway']
+  const ALL_GATEWAY_SECTIONS: NavSection[] = ['dashboard', 'chat', 'talk', 'agents', 'processes', 'teams', 'crons', 'obsidian', 'billing', 'gateway']
   const disabledSections: NavSection[] = notConnected
     // Keep Dashboard clickable while disconnected so it routes back to the connect
     // screen — otherwise, opening the Theme editor (the one non-gateway view) would
@@ -207,6 +208,7 @@ export default function App() {
               {section === 'teams' && <TeamsView onOpenChat={() => setSection('chat')} />}
               {section === 'crons' && <CronsView onOpenChat={() => setSection('chat')} />}
               {section === 'obsidian' && <MemoryView onOpenChat={() => setSection('chat')} />}
+              {section === 'billing' && <BillingView />}
               {section === 'gateway' && <GatewayView onOpenChat={() => setSection('chat')} />}
               {section === 'themes' && <ThemesView />}
               {section === 'settings' && <SettingsView />}
