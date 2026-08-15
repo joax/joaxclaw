@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import {
   LayoutDashboard, MessageSquare, Bot, Mic, MoreHorizontal,
-  Brain, GitBranch, UsersRound, Timer, Server, Palette, Settings, HelpCircle,
+  Brain, GitBranch, UsersRound, Timer, Server, Palette, Settings, HelpCircle, Wallet,
   type LucideIcon,
 } from 'lucide-react'
 import type { NavSection } from '../../App'
@@ -33,6 +33,7 @@ const MORE_GROUPS: { heading: string; items: NavItem[] }[] = [
     { id: 'obsidian',  Icon: Brain,      label: 'Memory' },
   ] },
   { heading: 'Configuration', items: [
+    { id: 'billing',   Icon: Wallet,     label: 'Billing' },
     { id: 'gateway',   Icon: Server,     label: 'Gateway' },
     { id: 'themes',    Icon: Palette,    label: 'Themes' },
     { id: 'settings',  Icon: Settings,   label: 'Settings' },
