@@ -361,9 +361,15 @@ function attachChatStream(
       activeStreams.delete(convId)
       unsub()
     } else if (p.state === 'error' || p.state === 'incomplete') {
-      // Resolve error text from errorMessage, or fall back to p.message text (gateway may use either)
+      // Resolve error text from errorMessage, or fall back to p.message text (gateway may use either).
+      // The embedded-run lifecycle path emits a bare `{ state: 'error' }` with neither field
+      // when it has no error object to hand — most often the LLM idle watchdog killing a slow
+      // local model. "Unknown error" left nowhere to go, so name the likely cause and where
+      // the real message lives.
       const errText = (p.errorMessage ?? extractText(p.message))
-        || (p.state === 'incomplete' ? 'Incomplete turn — the agent stopped without producing a response' : 'Unknown error')
+        || (p.state === 'incomplete'
+          ? 'Incomplete turn — the agent stopped without producing a response'
+          : 'The run ended with an error and the gateway sent no detail — often the model-silence watchdog on a slow local model. Check the gateway log for the reason.')
       if (handleInitConflict(errText)) return
       update(m => ({
         ...m,
