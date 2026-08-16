@@ -718,9 +718,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   async abortStream(convId) {
     const entry = activeStreams.get(convId)
-    if (!entry) return
-    activeStreams.delete(convId)
-    entry.unsub()
+    // A run can outlive its local stream (socket drop, turn finalized while the agent
+    // kept working). There's no entry to unsubscribe then, but the gateway run is real
+    // and still abortable — fall back to the conversation's own session key.
+    const sessionKey = entry?.sessionKey ?? get().conversations.find(c => c.id === convId)?.sessionKey
+    if (entry) {
+      activeStreams.delete(convId)
+      entry.unsub()
+    }
     set(s => ({
       conversations: s.conversations.map(c =>
         c.id !== convId ? c : {
@@ -729,7 +734,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
         }
       )
     }))
-    await gatewayClient.request('sessions.abort', { key: entry.sessionKey }).catch(() => {})
+    if (!sessionKey) return
+    await gatewayClient.request('sessions.abort', { key: sessionKey }).catch(() => {})
   },
 
   async compact(convId) {
