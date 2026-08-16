@@ -19,6 +19,7 @@ import { useLogoUrl } from '../../lib/logo'
 import { ModelSelect, ThinkingSelect, DisplayMenu } from './ChatHeaderControls'
 import { formatRelativeDate } from '../../lib/dateUtils'
 import type { Session } from '../../lib/types'
+import { isSessionRunning } from '../../lib/sessionRunning'
 import { agentIdFromSessionKey as sessionAgentId, isAutoKeyTitle, isCronSessionKey } from '../../lib/sessionName'
 
 // A single row in the unified chat list — an opened conversation or a running-but-
@@ -115,18 +116,9 @@ export function ChatView({ solo }: { solo?: string } = {}) {
 
   const conversationSessionKeys = new Set(conversations.map(c => c.sessionKey).filter(Boolean))
 
-  const TERMINAL = new Set(['idle', 'done', 'failed', 'killed', 'timeout'])
-  const isRunning = (s: Session) => {
-    // A controller that has yielded to a running sub-agent shows hasActiveRun:false /
-    // status:'done' itself, but is still live — its worker is running. Treat that as
-    // running so we keep watching it and re-attach on reconnect.
-    if (s.hasActiveSubagentRun) return true
-    if (s.status && TERMINAL.has(s.status)) return false
-    // hasActiveRun: false overrides stale stored 'running' status
-    if (s.hasActiveRun === false) return false
-    if (s.status === 'running') return true
-    return s.hasActiveRun ?? false
-  }
+  // Shared with the chat pane and composer, so a live row can't sit next to a
+  // transcript that looks finished — see lib/sessionRunning.ts.
+  const isRunning = isSessionRunning
 
   // Sessions that are running but not yet opened as conversations (and not popped out)
   const activeSessions = sessions.filter(s =>
