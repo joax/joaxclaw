@@ -1,6 +1,8 @@
+import { useEffect } from 'react'
 import { Heart, X, Cpu, Monitor, Server } from 'lucide-react'
 import { useConnectionStore, useIsRemoteGateway } from '../../store/connection'
 import { useMetricsStore } from '../../store/metrics'
+import { useModelsStore } from '../../store/models'
 import { useSettingsStore } from '../../store/settings'
 import { formatBytes } from '../../lib/ollama'
 import { gatewayHost } from '../../lib/ollamaHealth'
@@ -10,9 +12,20 @@ export function SystemMonitorHUD() {
   const { status, heartbeats, lastHeartbeat, uptimeStart } = useConnectionStore()
   const remoteGateway = useIsRemoteGateway()
   const gwHost = useConnectionStore(s => gatewayHost(s.connection?.url))
-  const { metrics, ollamaModels } = useMetricsStore()
+  const { metrics, engineModels } = useMetricsStore()
   const { toggleMonitor } = useSettingsStore()
   const narrow = useIsNarrow()
+
+  // Engine instances come from the models config; load it if this is the first surface
+  // opened, otherwise a second (cron) engine stays invisible until another view does.
+  const providers = useModelsStore(s => s.providers)
+  const loadModels = useModelsStore(s => s.load)
+  useEffect(() => {
+    if (Object.keys(providers).length === 0) loadModels()
+  }, [])   // eslint-disable-line react-hooks/exhaustive-deps
+
+  const multiEngine = engineModels.length > 1
+  const loadedTotal = engineModels.reduce((n, e) => n + e.models.filter(m => m.loaded).length, 0)
 
   const gpu = metrics?.gpu?.[0]
   const hbAgo = lastHeartbeat ? Math.round((Date.now() - lastHeartbeat) / 1000) : null
@@ -94,23 +107,39 @@ export function SystemMonitorHUD() {
             Hardware on gateway host <b style={{ color: 'var(--text-primary)', fontFamily: 'monospace' }}>{gwHost}</b>
           </p>
         )}
-        {/* Loaded models — read from THIS client's Ollama, so local-gateway only. */}
-        {!remoteGateway && (
+        {/* Loaded models — read from whichever machine runs the gateway (via the plugin
+            when remote), and from EVERY configured local instance. A gateway commonly
+            runs a second isolated engine for cron work that loads its own copy of a
+            model into the same GPU; showing only the interactive one understates what
+            is actually resident. Instances are labelled only when there is more than
+            one, so the single-engine case stays as plain as before. */}
         <Section label="Models in VRAM">
-          {ollamaModels.filter(m => m.loaded).length === 0 ? (
+          {loadedTotal === 0 ? (
             <p className="text-xs font-mono" style={{ color: 'var(--text-secondary)' }}>None loaded</p>
           ) : (
-            ollamaModels.filter(m => m.loaded).map(m => (
-              <div key={m.name} className="mb-2 last:mb-0">
-                <p className="text-xs font-mono truncate" style={{ color: 'var(--text-primary)' }}>{m.name}</p>
-                <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
-                  {m.vramUsed ? `${formatBytes(m.vramUsed)} VRAM` : formatBytes(m.size)}
-                </p>
-              </div>
-            ))
+            engineModels.map(engine => {
+              const loaded = engine.models.filter(m => m.loaded)
+              if (loaded.length === 0) return null
+              return (
+                <div key={engine.key} className="mb-2 last:mb-0">
+                  {multiEngine && (
+                    <p className="text-xs mb-0.5" style={{ color: 'var(--text-secondary)', opacity: 0.7 }}>
+                      {engine.label}{engine.isCron ? ' · cron' : ''}
+                    </p>
+                  )}
+                  {loaded.map(m => (
+                    <div key={m.name} className="mb-1 last:mb-0">
+                      <p className="text-xs font-mono truncate" style={{ color: 'var(--text-primary)' }}>{m.name}</p>
+                      <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+                        {m.vramUsed ? `${formatBytes(m.vramUsed)} VRAM` : formatBytes(m.size)}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              )
+            })
           )}
         </Section>
-        )}
 
         {/* GPU hardware details */}
         {gpu && (
