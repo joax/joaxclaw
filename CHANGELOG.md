@@ -5,6 +5,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.21.1] - 2026-08-17
+
+### Fixed
+
+- **Opening a channel from the Agents view no longer blanks the app.** The channel drawer read a value that was never defined, so selecting a channel threw and took the whole window down with it — the app appeared to simply vanish, with the reason visible only in DevTools.
+- **Scheduled jobs that deliver to WhatsApp now ask for the recipient up front.** WhatsApp can't infer where to post, so a job saved without one failed on its first run with *"Delivering to WhatsApp requires target"* — hours later, and nowhere near the form that caused it. The editor now asks for the recipient the channel actually needs (a phone number in E.164, a group JID, or a newsletter JID), explains the format, and won't save a job that can't deliver. Channels that *can* reply where the conversation last happened — Slack, Telegram, Discord — stay optional. If you leave the channel blank and the agent is bound to exactly one, that channel's rules apply.
+
+---
+
 ## [0.21.0] - 2026-08-12
 
 ### Added
