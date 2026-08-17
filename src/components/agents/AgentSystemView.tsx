@@ -449,6 +449,10 @@ function ChannelPanel({ channel, boundAgent, onClose }: {
   boundAgent?: Agent
   onClose: () => void
 }) {
+  // The drawer sizes itself differently on a phone. This was referenced below without
+  // ever being read, so opening a channel threw a ReferenceError — and with no error
+  // boundary on this view, that blanked the whole app.
+  const narrow = useIsNarrow()
   const color = CHANNEL_COLORS[channel.id] ?? 'var(--accent)'
   const model = boundAgent?.model?.primary ?? boundAgent?.agentRuntime?.id ?? ''
 
