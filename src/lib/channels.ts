@@ -255,6 +255,97 @@ export function fieldLiteral(raw: Record<string, unknown>, key: string): string 
   return typeof v === 'string' ? v : ''
 }
 
+// ── Delivery targets ──────────────────────────────────────────────────────────
+//
+// A scheduled job that announces to a channel needs to know WHERE. Some channels can
+// infer it (post back to the last-used conversation); others cannot, and the gateway
+// rejects the run: "Delivering to WhatsApp requires target <E.164|group JID|newsletter
+// JID>". That rejection used to arrive hours later, on the first scheduled run, because
+// the target was presented as optional for every channel.
+//
+// So the rule lives here, next to the channel it belongs to, and the form asks for what
+// the channel actually needs at the moment you pick it.
+
+export interface DeliveryTargetSpec {
+  /** The gateway refuses to deliver without one. */
+  required: boolean
+  label: string
+  placeholder: string
+  hint: string
+  /** Returns an error message, or null when the value is acceptable. */
+  validate?: (value: string) => string | null
+}
+
+// WhatsApp addresses are a phone number in E.164, a group JID, or a newsletter JID —
+// which is exactly what the gateway's own error message lists.
+const E164 = /^\+[1-9]\d{6,14}$/
+const JID = /^[^@\s]+@(g\.us|s\.whatsapp\.net|newsletter|broadcast)$/i
+
+const whatsappTarget: DeliveryTargetSpec = {
+  required: true,
+  label: 'Deliver to',
+  placeholder: '+34600123456  ·  1203…@g.us  ·  120…@newsletter',
+  hint: 'WhatsApp needs an explicit recipient: a phone number in E.164 (+ country code), a group JID (…@g.us), or a newsletter JID. Run `openclaw directory` on the gateway host to look up group ids.',
+  validate: v => {
+    const t = v.trim()
+    if (!t) return 'WhatsApp needs a recipient — it can’t infer one.'
+    if (E164.test(t) || JID.test(t)) return null
+    if (/^\d/.test(t)) return 'Phone numbers need the country code and a leading +, e.g. +34600123456.'
+    return 'Expected a phone number (+34600123456), a group JID (…@g.us), or a newsletter JID.'
+  },
+}
+
+const smsTarget: DeliveryTargetSpec = {
+  required: true,
+  label: 'Deliver to',
+  placeholder: '+34600123456',
+  hint: 'SMS needs a phone number in E.164 (+ country code).',
+  validate: v => (E164.test(v.trim()) ? null : 'Expected a phone number in E.164, e.g. +34600123456.'),
+}
+
+const DELIVERY_TARGETS: Record<string, DeliveryTargetSpec> = {
+  whatsapp: whatsappTarget,
+  sms: smsTarget,
+  telegram: {
+    required: false,
+    label: 'Deliver to (optional)',
+    placeholder: '@username or -1001234567890',
+    hint: 'A @username or numeric chat id. Leave blank to reply in the last-used chat.',
+  },
+  slack: {
+    required: false,
+    label: 'Deliver to (optional)',
+    placeholder: '#general or C0123ABCD',
+    hint: 'A channel name or id. Leave blank to reply in the last-used conversation.',
+  },
+  discord: {
+    required: false,
+    label: 'Deliver to (optional)',
+    placeholder: '123456789012345678',
+    hint: 'A channel id. Leave blank to reply in the last-used channel.',
+  },
+}
+
+const DEFAULT_TARGET: DeliveryTargetSpec = {
+  required: false,
+  label: 'Deliver to (optional)',
+  placeholder: '+1234567890 or @username',
+  hint: 'Specific recipient or thread within the channel. Leave blank to reply where the conversation last happened.',
+}
+
+/** What this channel needs in the delivery "to" field — and whether it can do without. */
+export function deliveryTargetSpec(channelId: string | undefined): DeliveryTargetSpec {
+  return DELIVERY_TARGETS[(channelId ?? '').trim().toLowerCase()] ?? DEFAULT_TARGET
+}
+
+/** Validation for a delivery pair, used to block a save that could never deliver. */
+export function validateDeliveryTarget(channelId: string | undefined, to: string): string | null {
+  const spec = deliveryTargetSpec(channelId)
+  const value = to.trim()
+  if (!value) return spec.required ? spec.validate?.('') ?? `${channelId} needs an explicit recipient.` : null
+  return spec.validate?.(value) ?? null
+}
+
 // ── config ↔ store helpers ────────────────────────────────────────────────────
 
 interface RawChannelsCfg {
