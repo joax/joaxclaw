@@ -8,6 +8,11 @@ import { useTeamsStore } from '../../store/teams'
 import { compileProcessToJob, buildLaunchPrompt, launchPromptProcessId } from '../../lib/processCompiler'
 import { Btn } from '../ui/Btn'
 import { ModelPicker } from '../ui/ModelPicker'
+import { useChannelsStore } from '../../store/channels'
+import { deliveryTargetSpec, validateDeliveryTarget, CHANNELS } from '../../lib/channels'
+
+const channelLabel = (id: string): string =>
+  CHANNELS.find(c => c.id === id)?.label ?? id
 
 // A team-launch cron is a normal agentTurn whose message is the Team Lead launch
 // prompt; the team id is recoverable from the prompt header, so an existing job can
@@ -200,6 +205,23 @@ export function CronEditor({ job, onClose }: Props) {
   const [deliveryChannel, setDeliveryChannel] = useState(job.delivery?.channel ?? '')
   const [deliveryTo, setDeliveryTo] = useState(job.delivery?.to ?? '')
 
+  // What the chosen channel needs in the "to" field — WhatsApp and SMS can't infer a
+  // recipient, and the gateway rejects the run rather than the save, so the requirement
+  // has to surface here. See lib/channels.ts.
+  const configuredChannels = useChannelsStore(s => s.channels)
+  const fetchChannels = useChannelsStore(s => s.fetch)
+  // Blank channel means "wherever this agent talks". When the agent is bound to exactly
+  // one channel, that's the channel the gateway will resolve — so its requirements are
+  // the ones that apply, and leaving the field blank shouldn't hide them.
+  const inferredChannel = !deliveryChannel.trim() && agentId.trim()
+    ? configuredChannels.filter(c => c.boundAgentIds.includes(agentId.trim())).map(c => c.id)
+    : []
+  const effectiveChannel = deliveryChannel.trim() || (inferredChannel.length === 1 ? inferredChannel[0] : '')
+  const targetSpec = deliveryTargetSpec(effectiveChannel)
+  const targetError = deliveryMode === 'announce' ? validateDeliveryTarget(effectiveChannel, deliveryTo) : null
+
+  useEffect(() => { if (!configuredChannels.length) void fetchChannels() }, [])
+
   // Derived: is sessionTarget a custom "session:..." value?
   const isCustomSession = sessionTarget === '__custom__' || (sessionTarget.startsWith('session:') && !['main', 'isolated', 'current'].includes(sessionTarget))
   const sessionTargetSelect = isCustomSession ? '__custom__' : sessionTarget
@@ -256,6 +278,9 @@ export function CronEditor({ job, onClose }: Props) {
       if (!controller) { setError('This team has no controller agent set.'); setSaving(false); return }
       effectiveAgentId = controller
     }
+    // A delivery the gateway will refuse is worth catching here rather than on the first
+    // scheduled run, hours later, as a red "1 consecutive error" on the job.
+    if (targetError) { setError(targetError); setSaving(false); return }
     const resolvedSessionTarget = sessionTargetSelect === '__custom__' ? customSessionTarget.trim() : sessionTarget
     const patch: Record<string, unknown> = {
       name: name.trim(),
@@ -499,21 +524,45 @@ export function CronEditor({ job, onClose }: Props) {
                 </SelectInput>
               </Field>
 
-              {(deliveryMode === 'announce' || deliveryMode === 'webhook') && (
-                <Field label="Channel / destination" hint={deliveryMode === 'webhook' ? 'Webhook URL to POST the response to.' : 'Channel name (e.g. slack, whatsapp). Leave blank for last-used channel.'}>
-                  <TextInput
-                    value={deliveryMode === 'webhook' ? deliveryTo : deliveryChannel}
-                    onChange={deliveryMode === 'webhook' ? setDeliveryTo : setDeliveryChannel}
-                    placeholder={deliveryMode === 'webhook' ? 'https://…' : 'slack'}
-                    mono={deliveryMode === 'webhook'}
-                  />
+              {deliveryMode === 'webhook' && (
+                <Field label="Webhook URL" hint="Webhook URL to POST the response to.">
+                  <TextInput value={deliveryTo} onChange={setDeliveryTo} placeholder="https://…" mono />
                 </Field>
               )}
 
               {deliveryMode === 'announce' && (
-                <Field label="To (optional)" hint="Specific recipient/thread within the channel.">
-                  <TextInput value={deliveryTo} onChange={setDeliveryTo} placeholder="+1234567890 or @username" />
-                </Field>
+                <>
+                  {/* Configured channels only. A free-text box let you name a channel
+                      that isn't set up, which failed the same silent way. */}
+                  <Field label="Channel" hint={configuredChannels.length ? 'Where to post. Leave blank to use the last-used channel.' : 'No channels configured yet — set one up under Settings → Channels.'}>
+                    <SelectInput value={deliveryChannel} onChange={setDeliveryChannel}>
+                      <option value="">Last-used channel</option>
+                      {configuredChannels.map(c => (
+                        <option key={c.id} value={c.id}>{channelLabel(c.id)}</option>
+                      ))}
+                      {/* An id already on the job that is no longer configured stays
+                          selectable, so opening an old job doesn't silently retarget it. */}
+                      {deliveryChannel && !configuredChannels.some(c => c.id === deliveryChannel) && (
+                        <option value={deliveryChannel}>{channelLabel(deliveryChannel)} (not configured)</option>
+                      )}
+                    </SelectInput>
+                  </Field>
+
+                  <Field
+                    label={targetSpec.label}
+                    hint={effectiveChannel && !deliveryChannel.trim()
+                      ? `This agent posts to ${channelLabel(effectiveChannel)}. ${targetSpec.hint}`
+                      : targetSpec.hint}
+                  >
+                    <TextInput value={deliveryTo} onChange={setDeliveryTo} placeholder={targetSpec.placeholder} />
+                    {targetError && (
+                      <p className="flex items-start gap-1.5 mt-1.5 text-xs" style={{ color: 'var(--danger)', lineHeight: 1.5 }}>
+                        <AlertCircle size={12} style={{ flexShrink: 0, marginTop: 1 }} />
+                        {targetError}
+                      </p>
+                    )}
+                  </Field>
+                </>
               )}
             </>
           )}
