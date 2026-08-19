@@ -125,7 +125,7 @@ async function probeStatus(url: string, viaGateway: boolean): Promise<EngineStat
 // Fetch the model URL's raw body. Local → main-process fetch (not CORS-bound,
 // reaches localhost); remote → engines.fetch on the gateway host. null on failure
 // or when the remote plugin is absent.
-async function fetchBody(url: string, viaGateway: boolean): Promise<string | null> {
+export async function fetchBody(url: string, viaGateway: boolean): Promise<string | null> {
   if (viaGateway) {
     try {
       const r = await gatewayClient.request<{ ok: boolean; body?: string }>('engines.fetch', { url })

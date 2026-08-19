@@ -88,6 +88,8 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
           if (typeof full.inputTokens  === 'number') tokenPatch.inputTokens  = full.inputTokens
           if (typeof full.outputTokens === 'number') tokenPatch.outputTokens = full.outputTokens
           if (typeof full.totalTokens  === 'number') tokenPatch.totalTokens  = full.totalTokens
+          if (typeof full.totalTokensFresh === 'boolean') tokenPatch.totalTokensFresh = full.totalTokensFresh
+          if (typeof full.contextTokens === 'number') tokenPatch.contextTokens = full.contextTokens
           if (typeof full.estimatedCostUsd === 'number') tokenPatch.estimatedCostUsd = full.estimatedCostUsd
           set(s => ({
             sessions: s.sessions.map(sess =>
@@ -101,6 +103,8 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
           if (typeof full.inputTokens  === 'number') mid.inputTokens  = full.inputTokens
           if (typeof full.outputTokens === 'number') mid.outputTokens = full.outputTokens
           if (typeof full.totalTokens  === 'number') mid.totalTokens  = full.totalTokens
+          if (typeof full.totalTokensFresh === 'boolean') mid.totalTokensFresh = full.totalTokensFresh
+          if (typeof full.contextTokens === 'number') mid.contextTokens = full.contextTokens
           if (typeof full.estimatedCostUsd === 'number') mid.estimatedCostUsd = full.estimatedCostUsd
           set(s => {
             const exists = s.sessions.some(sess => sess.key === sessionKey)

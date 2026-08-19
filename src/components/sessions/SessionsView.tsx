@@ -343,8 +343,9 @@ function CostCell({ session }: { session: Session }) {
   if (inp == null && out == null && (cost == null || cost === 0)) {
     return <span style={{ color: 'var(--text-secondary)', opacity: 0.3, fontSize: 11 }}>—</span>
   }
+  // Billed over every model call in the last run — not the context size.
   const tip = (inp != null || out != null)
-    ? `${fmtTokens(inp ?? 0)} tokens in · ${fmtTokens(out ?? 0)} out`
+    ? `${fmtTokens(inp ?? 0)} tokens in · ${fmtTokens(out ?? 0)} out (billed across all model calls in the last run)`
     : undefined
   return (
     <span

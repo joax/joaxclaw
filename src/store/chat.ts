@@ -361,9 +361,15 @@ function attachChatStream(
       activeStreams.delete(convId)
       unsub()
     } else if (p.state === 'error' || p.state === 'incomplete') {
-      // Resolve error text from errorMessage, or fall back to p.message text (gateway may use either)
+      // Resolve error text from errorMessage, or fall back to p.message text (gateway may use either).
+      // The embedded-run lifecycle path emits a bare `{ state: 'error' }` with neither field
+      // when it has no error object to hand — most often the LLM idle watchdog killing a slow
+      // local model. "Unknown error" left nowhere to go, so name the likely cause and where
+      // the real message lives.
       const errText = (p.errorMessage ?? extractText(p.message))
-        || (p.state === 'incomplete' ? 'Incomplete turn — the agent stopped without producing a response' : 'Unknown error')
+        || (p.state === 'incomplete'
+          ? 'Incomplete turn — the agent stopped without producing a response'
+          : 'The run ended with an error and the gateway sent no detail — often the model-silence watchdog on a slow local model. Check the gateway log for the reason.')
       if (handleInitConflict(errText)) return
       update(m => ({
         ...m,
@@ -718,9 +724,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   async abortStream(convId) {
     const entry = activeStreams.get(convId)
-    if (!entry) return
-    activeStreams.delete(convId)
-    entry.unsub()
+    // A run can outlive its local stream (socket drop, turn finalized while the agent
+    // kept working). There's no entry to unsubscribe then, but the gateway run is real
+    // and still abortable — fall back to the conversation's own session key.
+    const sessionKey = entry?.sessionKey ?? get().conversations.find(c => c.id === convId)?.sessionKey
+    if (entry) {
+      activeStreams.delete(convId)
+      entry.unsub()
+    }
     set(s => ({
       conversations: s.conversations.map(c =>
         c.id !== convId ? c : {
@@ -729,7 +740,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
         }
       )
     }))
-    await gatewayClient.request('sessions.abort', { key: entry.sessionKey }).catch(() => {})
+    if (!sessionKey) return
+    await gatewayClient.request('sessions.abort', { key: sessionKey }).catch(() => {})
   },
 
   async compact(convId) {
