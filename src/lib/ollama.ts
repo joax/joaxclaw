@@ -1,12 +1,20 @@
 import type { OllamaModel } from './types'
+import { fetchBody, type EngineInstance } from './localEngines'
 
 const BASE = 'http://localhost:11434'
 
-export async function listOllamaModels(): Promise<OllamaModel[]> {
+// One Ollama instance's models. `viaGateway` routes the reads through the gateway
+// HOST (joaxclaw-fs plugin) — on a remote gateway the engine is loopback-bound there
+// and unreachable from this client, and its models are the ones the agents actually use.
+async function fetchInstanceModels(baseUrl: string, viaGateway: boolean): Promise<OllamaModel[]> {
   try {
+    const parse = (body: string | null): { models?: { name: string; size: number; size_vram?: number }[] } => {
+      if (!body) return { models: [] }
+      try { return JSON.parse(body) } catch { return { models: [] } }
+    }
     const [tagsRes, psRes] = await Promise.all([
-      fetch(`${BASE}/api/tags`).then(r => r.json()).catch(() => ({ models: [] })),
-      fetch(`${BASE}/api/ps`).then(r => r.json()).catch(() => ({ models: [] }))
+      fetchBody(`${baseUrl}/api/tags`, viaGateway).then(parse).catch(() => ({ models: [] })),
+      fetchBody(`${baseUrl}/api/ps`, viaGateway).then(parse).catch(() => ({ models: [] }))
     ])
 
     const running: Record<string, number> = {}
@@ -14,7 +22,7 @@ export async function listOllamaModels(): Promise<OllamaModel[]> {
       running[m.name] = m.size_vram ?? 0
     }
 
-    return (tagsRes.models ?? []).map((m: { name: string; size: number }) => ({
+    return (tagsRes.models ?? []).map((m) => ({
       name: m.name,
       size: m.size,
       loaded: m.name in running,
@@ -23,6 +31,44 @@ export async function listOllamaModels(): Promise<OllamaModel[]> {
   } catch {
     return []
   }
+}
+
+export async function listOllamaModels(viaGateway = false): Promise<OllamaModel[]> {
+  return fetchInstanceModels(BASE, viaGateway)
+}
+
+/** Loaded models for one local engine instance, kept separate per instance. */
+export interface EngineModels {
+  key: string        // provider id, e.g. "ollama" / "ollama-cron"
+  label: string      // "Ollama"
+  isCron: boolean    // the isolated background instance
+  baseUrl: string
+  models: OllamaModel[]
+}
+
+// Every configured local Ollama instance, not just the default port. A gateway
+// commonly runs a second isolated instance for cron/background work (the
+// :11434 → :11435 convention); it loads its own copy of a model into the SAME
+// GPU, so reporting only the first instance understates what is actually resident.
+// Non-Ollama engines are skipped: /api/ps has no OpenAI-compatible equivalent, so
+// there is no loaded-vs-available distinction to show.
+export async function listEngineModels(
+  instances: EngineInstance[],
+  viaGateway = false,
+): Promise<EngineModels[]> {
+  const ollama = instances.filter(i => i.api === 'ollama')
+  if (ollama.length === 0) {
+    return [{ key: 'ollama', label: 'Ollama', isCron: false, baseUrl: BASE, models: await listOllamaModels(viaGateway) }]
+  }
+  return Promise.all(
+    ollama.map(async inst => ({
+      key: inst.key,
+      label: inst.label,
+      isCron: inst.isCron,
+      baseUrl: inst.baseUrl,
+      models: await fetchInstanceModels(inst.baseUrl.replace(/\/+$/, ''), viaGateway),
+    })),
+  )
 }
 
 export function formatBytes(bytes: number): string {

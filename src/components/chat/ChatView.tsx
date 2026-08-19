@@ -19,6 +19,7 @@ import { useLogoUrl } from '../../lib/logo'
 import { ModelSelect, ThinkingSelect, DisplayMenu } from './ChatHeaderControls'
 import { formatRelativeDate } from '../../lib/dateUtils'
 import type { Session } from '../../lib/types'
+import { isSessionRunning } from '../../lib/sessionRunning'
 import { agentIdFromSessionKey as sessionAgentId, isAutoKeyTitle, isCronSessionKey } from '../../lib/sessionName'
 
 // A single row in the unified chat list — an opened conversation or a running-but-
@@ -115,18 +116,9 @@ export function ChatView({ solo }: { solo?: string } = {}) {
 
   const conversationSessionKeys = new Set(conversations.map(c => c.sessionKey).filter(Boolean))
 
-  const TERMINAL = new Set(['idle', 'done', 'failed', 'killed', 'timeout'])
-  const isRunning = (s: Session) => {
-    // A controller that has yielded to a running sub-agent shows hasActiveRun:false /
-    // status:'done' itself, but is still live — its worker is running. Treat that as
-    // running so we keep watching it and re-attach on reconnect.
-    if (s.hasActiveSubagentRun) return true
-    if (s.status && TERMINAL.has(s.status)) return false
-    // hasActiveRun: false overrides stale stored 'running' status
-    if (s.hasActiveRun === false) return false
-    if (s.status === 'running') return true
-    return s.hasActiveRun ?? false
-  }
+  // Shared with the chat pane and composer, so a live row can't sit next to a
+  // transcript that looks finished — see lib/sessionRunning.ts.
+  const isRunning = isSessionRunning
 
   // Sessions that are running but not yet opened as conversations (and not popped out)
   const activeSessions = sessions.filter(s =>
@@ -664,15 +656,21 @@ function ContextBar({ sessionKey }: { sessionKey: string }) {
     return providers[providerId ?? '']?.models.find(m => m.id === modelId)
   })()
 
-  const contextWindow = modelDef?.contextWindow ?? session?.contextTokens
+  // Prefer the window the gateway actually loaded the model with (local models are
+  // loaded with a per-run context length); fall back to the configured model def.
+  const contextWindow = session?.contextTokens ?? modelDef?.contextWindow
 
-  // inputTokens = tokens in the model's last input (the context it actually saw).
-  // totalTokens = inputTokens + outputTokens for the last run.
-  // We prefer inputTokens for the fill bar because it matches what the model itself
-  // would report when asked "how many tokens are in my context".
+  // totalTokens = prompt tokens of the *last* model call — the context the model
+  // actually saw. This is the only field that maps to "how full is the context".
+  //
+  // inputTokens/outputTokens are billing counters: the gateway sums them over every
+  // model call in the run, so an agentic run with N tool round-trips counts the same
+  // prompt N times. Cloud models hide this (cached prompt tokens are excluded from
+  // `input`), but local models have no cache, so summing them produced context
+  // readings several times the window. Keep them for cost only.
   const inp = session?.inputTokens
   const out = session?.outputTokens
-  const contextSize = inp ?? session?.totalTokens   // input-only is more accurate
+  const contextSize = session?.totalTokensFresh === false ? undefined : session?.totalTokens
 
   const fillPct = contextSize != null && contextWindow
     ? Math.min((contextSize / contextWindow) * 100, 100)
@@ -726,10 +724,15 @@ function ContextBar({ sessionKey }: { sessionKey: string }) {
         </div>
       )}
 
-      {/* Output tokens — size of the last response */}
-      {out != null && (
-        <span className="font-mono" title="Output tokens (last response)" style={{ color: 'var(--text-secondary)' }}>
-          +{out.toLocaleString()} out
+      {/* Run usage — billed tokens across every model call in the last run */}
+      {(inp != null || out != null) && (
+        <span
+          className="font-mono"
+          title="Tokens billed for the last run, summed over all model calls (not the context size)"
+          style={{ color: 'var(--text-secondary)' }}
+        >
+          {inp != null && `↑${inp.toLocaleString()}`}{inp != null && out != null && ' '}
+          {out != null && `↓${out.toLocaleString()}`}
         </span>
       )}
 

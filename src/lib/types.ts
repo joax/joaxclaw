@@ -59,9 +59,14 @@ export interface Session {
   hasActiveSubagentRun?: boolean
   isHeartbeat?: boolean
   contextTokens?: number   // context window limit (max capacity), not current usage
-  inputTokens?: number    // cumulative input tokens across all runs in the session
-  outputTokens?: number   // cumulative output tokens across all runs
-  totalTokens?: number    // last-run input+output; best approximation of current context size
+  // Billing counters: the gateway sums these over *every* model call in the last run,
+  // so an agentic run with N tool round-trips counts the prompt N times. Never use
+  // them as "how full is the context" — they can exceed the context window many times.
+  inputTokens?: number    // input tokens billed across the last run (sum of all calls)
+  outputTokens?: number   // output tokens billed across the last run
+  // Context snapshot: prompt tokens of the *last* model call — the real context size.
+  totalTokens?: number
+  totalTokensFresh?: boolean  // false = snapshot is stale (e.g. after compaction), don't trust it
   estimatedCostUsd?: number  // gateway-computed cost estimate when available
   lastMessage?: string
 }

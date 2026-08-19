@@ -4,6 +4,7 @@ import { useChatStore } from '../../store/chat'
 import { useSettingsStore } from '../../store/settings'
 import { profileIsEmpty } from '../../lib/userProfile'
 import { useStreamStatus } from './useStreamStatus'
+import { useSessionRunning } from './useSessionRunning'
 import { useDraftsStore } from '../../store/drafts'
 import type { PendingAttachment } from '../../store/drafts'
 import type { MediaAttachment } from '../../lib/types'
@@ -89,6 +90,10 @@ export function MessageInput({ convId }: Props) {
   const showProfileChip = isNewChat && !profileIsEmpty(userProfile)
   const isStreaming = conv?.messages.some(m => m.streaming) ?? false
   const streamingMsg = conv?.messages.findLast(m => m.streaming)
+  // The run can outlive its local stream (socket drop, turn finalized while the agent
+  // keeps working). The chat list already knows; the composer needs to as well.
+  const sessionRunning = useSessionRunning(conv?.sessionKey)
+  const runningWithoutStream = sessionRunning && !isStreaming
 
   // Phase-aware liveness: distinguishes model-load / first-token latency, healthy
   // streaming, a real stall, and a dropped connection (see lib/streamStatus.ts).
@@ -314,6 +319,19 @@ export function MessageInput({ convId }: Props) {
           >
             <UserRound size={11} />
             {effectiveShare ? 'Sharing your profile' : 'Profile not shared'}
+          </button>
+        </div>
+      )}
+
+      {/* The gateway is still working on this session even though nothing is streaming
+          here — keep a Stop available instead of leaving the turn looking finished. */}
+      {runningWithoutStream && (
+        <div className="flex items-center gap-2 mb-2 px-1">
+          <span className="text-xs" style={{ color: 'var(--text-secondary)', opacity: 0.85 }}>
+            Agent still running on the gateway…
+          </span>
+          <button onClick={handleStop} style={{ fontSize: 11, padding: '2px 8px', borderRadius: 'var(--radius)', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer' }}>
+            Stop
           </button>
         </div>
       )}
