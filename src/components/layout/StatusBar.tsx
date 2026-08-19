@@ -10,11 +10,13 @@ import { useChatStore } from '../../store/chat'
 import { useModelsStore } from '../../store/models'
 import { useHelpStore } from '../../store/help'
 import { formatBytes } from '../../lib/ollama'
+import { gatewayHost } from '../../lib/ollamaHealth'
 import { useIsNarrow } from '../../lib/useIsNarrow'
 
 export function StatusBar() {
   const { status, lastHeartbeat, heartbeats, uptimeStart } = useConnectionStore()
   const remoteGateway = useIsRemoteGateway()
+  const gwHost = useConnectionStore(s => gatewayHost(s.connection?.url))
   const signal = useConnectionSignal()
   const openHelp = useHelpStore(s => s.openHelp)
   const { metrics, ollamaModels, activeModel } = useMetricsStore()
@@ -75,6 +77,11 @@ export function StatusBar() {
     : (sessionModel ?? activeModel ?? ollamaModels[0]?.name ?? '—')
   const hbLate = hbAgo !== null && hbAgo > 40
   const gpu = metrics?.gpu?.[0]
+  // The meters sit beside the Local/Remote chip, so which machine they describe is
+  // implied rather than stated. Name it on hover — the Monitor HUD does the same.
+  const hardwareLabel = remoteGateway
+    ? `Hardware on the gateway host${gwHost ? ` (${gwHost})` : ''}`
+    : 'Hardware on this machine'
 
   const statusColor = status === 'connected' ? 'var(--success)' : status === 'connecting' ? 'var(--warning)' : 'var(--danger)'
 
@@ -169,10 +176,12 @@ export function StatusBar() {
         </>
       )}
 
-      {/* GPU — hidden when the gateway is remote (these are the client's stats) */}
-      {showGpu && gpu && !remoteGateway && (
+      {/* GPU. On a remote gateway these are the HOST's numbers, fetched over
+          host.metrics — the store clears the value rather than let a client-sourced
+          reading show under a host label, so whatever is here is safe to display. */}
+      {showGpu && gpu && (
         <>
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-1.5" title={hardwareLabel}>
             <Cpu size={11} />
             <MiniMeter value={gpu.utilizationGpu} color="var(--accent)" />
             <span>{gpu.utilizationGpu}%</span>
@@ -186,10 +195,10 @@ export function StatusBar() {
         </>
       )}
 
-      {/* RAM — hidden when the gateway is remote (these are the client's stats) */}
-      {showRam && metrics && !remoteGateway && (
+      {/* RAM — same: the host's when remote, this machine's when local. */}
+      {showRam && metrics && (
         <>
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-1.5" title={hardwareLabel}>
             <MemoryStick size={11} />
             <MiniMeter
               value={Math.round((metrics.ramUsed / metrics.ramTotal) * 100)}
