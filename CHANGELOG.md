@@ -5,6 +5,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.22.0] - 2026-08-19
+
+### Added
+
+- **Billing — what you're actually spending, priced with your own rates.** A new **Billing** section (nav rail, and the mobile More sheet) answers "what are we spending per hour / day / week". Tokens come from the gateway's usage report, which reads every session transcript and buckets by day, model and agent — a real history rather than the last-run counters the Models → Usage tab aggregates. Dollars are recomputed from the prices you set on the Models page, because the gateway's built-in rates are mostly unset: its own estimate priced a 125M-token week at **$0.000018**. That figure is still shown, as a footnote, so the two can be compared.
+
+### Fixed
+
+- **Stop works on a run that's still going.** If a run outlived its stream — the turn finalized while the agent kept working, or the socket dropped mid-run — the chat list showed a live dot next to a transcript that looked finished, with an empty assistant bubble and no way to intervene. **Stop was a no-op in exactly that state.** The list and the transcript now answer "is this running?" from one shared source; when the session is live but nothing is streaming here, the thread says so, offers a Stop that actually aborts, and re-attaches to the run so new output arrives.
+- **"Unknown error" now names the likely cause.** The gateway can end a run with an error carrying no message at all, which rendered as a bare *"⚠ Unknown error"* pointing nowhere. In practice it's almost always the LLM idle watchdog killing a slow local model — the turn now says so and sends you to the gateway log, where the real line is.
+- **The System Monitor reports the machine your agents actually run on.** GPU could vanish entirely on a *local* gateway (the client-side probe only understands nvidia-smi, so an AMD box reported nothing) — host metrics are now used on every tick, local included, so one path serves both and they can't disagree. "Models in VRAM" also read a hardcoded default engine, missing the second isolated instance a gateway commonly runs for cron work: residency could read as half of reality while the meters above it moved for no visible reason. It's now listed per engine, and on a remote gateway it reads the host's engines rather than yours.
+- **RAM and GPU appear on a remote gateway.** The status bar hid both meters whenever the gateway was remote — a guard from before the app could read the host's hardware at all. They now show the host's numbers, with a hover label naming whose machine you're looking at.
+- **Context size is the real context**, not the summed billing counter.
+
+---
+
 ## [0.21.1] - 2026-08-17
 
 ### Fixed
