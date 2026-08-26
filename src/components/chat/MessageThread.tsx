@@ -5,6 +5,7 @@ import { UserMessage } from './UserMessage'
 import { AssistantMessage } from './AssistantMessage'
 import { useSessionRunning } from './useSessionRunning'
 import { useChatStore } from '../../store/chat'
+import { useConnectionStore } from '../../store/connection'
 
 interface Props { conv: Conversation; showTools: boolean; showReasoning: boolean }
 
@@ -15,9 +16,16 @@ export function MessageThread({ conv, showTools, showReasoning }: Props) {
   // The gateway can still be working on a turn that no longer has a local stream
   // (the run outlived it, or the socket dropped mid-turn). Without this the pane
   // looks finished while the chat list still shows a live dot.
+  // Only while the socket is actually up. A drop is precisely when this condition would
+  // otherwise fire: the reconnect sweep clears `streaming` on every message, while the
+  // session stays `hasActiveRun` (only a final/error frame clears that, and none can
+  // arrive while disconnected). Re-attaching then subscribes to a dead socket and leaves
+  // a placeholder behind, so each blip stacked another blank turn — and a placeholder
+  // that never receives a frame keeps the composer in "model working" for good.
+  const connected = useConnectionStore(s => s.status === 'connected')
   const sessionRunning = useSessionRunning(conv.sessionKey)
   const streamingHere = conv.messages.some(m => m.streaming)
-  const runningWithoutStream = sessionRunning && !streamingHere && conv.messages.length > 0
+  const runningWithoutStream = connected && sessionRunning && !streamingHere && conv.messages.length > 0
 
   // Re-attach to the live run, so the notice below is a promise we keep. The event
   // subscription is torn down on final/error/abort and by the reconnect sweep, and
