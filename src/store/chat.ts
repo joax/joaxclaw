@@ -3,6 +3,7 @@ import { nanoid } from '../lib/nanoid'
 import type { Conversation, ChatMessage, ContextOverflowInfo, ToolCall, SubThread, MediaAttachment, ThinkingLevel } from '../lib/types'
 import { gatewayClient } from '../lib/gateway'
 import { agentIdFromSessionKey as agentIdFromKey } from '../lib/sessionName'
+import { hasProduced } from '../lib/streamStatus'
 import { useExtensionsStore } from './extensions'
 import { useConnectionStore } from './connection'
 import { useSettingsStore } from './settings'
@@ -695,11 +696,32 @@ export const useChatStore = create<ChatState>((set, get) => ({
     // reconstruction added it for running yields on reconnect) so the live stream and the
     // reconstructed threads share one turn. Otherwise add a fresh streaming placeholder so
     // the user sees activity even between tool calls.
+    //
+    // An EMPTY trailing turn counts as reusable too, even when it is no longer streaming:
+    // that is a placeholder from an earlier attach whose connection dropped before any
+    // frame arrived. Without this, every drop stacked one more blank assistant bubble —
+    // the reconnect sweep clears `streaming` while the session stays `hasActiveRun`, so
+    // the pane re-attached on each blip and appended again.
     const conv = get().conversations.find(c => c.id === convId)
     const last = conv?.messages[conv.messages.length - 1]
+    const reusable = !!last && last.role === 'assistant' && (last.streaming || !hasProduced(last))
     let msgId: string
-    if (last && last.role === 'assistant' && last.streaming) {
+    if (reusable && last) {
       msgId = last.id
+      // The delta handler never sets `streaming` itself, so a reused finished placeholder
+      // has to be reopened here or the turn would take content while looking idle.
+      if (!last.streaming) {
+        set(s => ({
+          conversations: s.conversations.map(c =>
+            c.id !== convId ? c : {
+              ...c,
+              messages: c.messages.map(m =>
+                m.id === last.id ? { ...m, streaming: true, interrupted: undefined } : m
+              ),
+            }
+          ),
+        }))
+      }
     } else {
       msgId = nanoid()
       const placeholder: ChatMessage = {
