@@ -93,3 +93,31 @@ describe('langFromPath', () => {
     expect(langFromPath(undefined)).toBeUndefined()
   })
 })
+
+describe('file-viewer language coverage', () => {
+  it('maps the formats the viewer opens most', () => {
+    expect(langFromPath('a/b/main.py')).toBe('python')
+    expect(langFromPath('src/store/chat.ts')).toBe('typescript')
+    expect(langFromPath('src/App.tsx')).toBe('typescript')
+    expect(langFromPath('vite.config.mjs')).toBe('javascript')
+    expect(langFromPath('package.json')).toBe('json')
+    expect(langFromPath('config.yaml')).toBe('yaml')
+    expect(langFromPath('pyproject.toml')).toBe('toml')
+    expect(langFromPath('settings.ini')).toBe('ini')
+    expect(langFromPath('fix.patch')).toBe('diff')
+    expect(langFromPath('app.lua')).toBe('lua')
+  })
+
+  it('recognises files named for their language, not extended', () => {
+    expect(langFromPath('Dockerfile')).toBe('docker')
+    expect(langFromPath('deploy/Makefile')).toBe('makefile')
+    expect(langFromPath('.env')).toBe('bash')
+    expect(langFromPath('Gemfile')).toBe('ruby')
+  })
+
+  it('stays undefined for things with no grammar', () => {
+    expect(langFromPath('notes.txt')).toBeUndefined()
+    expect(langFromPath('photo.png')).toBeUndefined()
+    expect(langFromPath()).toBeUndefined()
+  })
+})
