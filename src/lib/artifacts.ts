@@ -10,6 +10,7 @@
 // can be reused by the drawer, the cards, and the pop-out window alike.
 
 import type { ToolCall } from './types'
+import { langFromFilename } from './diffModel'
 import { classifyKind, type AttachmentKind } from './attachments'
 
 export interface Artifact {
@@ -128,9 +129,12 @@ export type PreviewMode = 'markdown' | 'code' | 'text' | 'image' | 'video' | 'au
 const MARKDOWN_EXT = new Set(['md', 'markdown', 'mdx'])
 const TEXT_EXT = new Set(['txt', 'log', 'csv', 'tsv', 'rst', 'org', 'text'])
 const CODE_EXT = new Set([
-  'json', 'xml', 'yaml', 'yml', 'toml', 'ini', 'js', 'jsx', 'ts', 'tsx', 'py', 'rb', 'go',
-  'rs', 'java', 'kt', 'c', 'h', 'cpp', 'cc', 'cs', 'php', 'swift', 'sh', 'bash', 'zsh',
-  'sql', 'html', 'htm', 'css', 'scss', 'vue', 'svelte', 'diff', 'patch',
+  'json', 'jsonc', 'xml', 'yaml', 'yml', 'toml', 'ini', 'cfg', 'conf', 'env', 'properties',
+  'js', 'jsx', 'mjs', 'cjs', 'ts', 'tsx', 'mts', 'cts', 'py', 'rb', 'go',
+  'rs', 'java', 'kt', 'scala', 'groovy', 'gradle', 'c', 'h', 'cpp', 'cc', 'cxx', 'hpp',
+  'cs', 'php', 'swift', 'sh', 'bash', 'zsh', 'lua', 'pl', 'r', 'dart', 'ex', 'exs',
+  'sql', 'html', 'htm', 'css', 'scss', 'less', 'vue', 'svelte', 'astro',
+  'graphql', 'gql', 'diff', 'patch',
 ])
 
 export function extOf(p: string): string {
@@ -141,6 +145,10 @@ export function extOf(p: string): string {
 
 export function previewMode(p: string): PreviewMode {
   const ext = extOf(p)
+  // Files that carry their language in the name rather than an extension (Dockerfile,
+  // Makefile, .env) have no ext at all, so they used to fall through to `binary` and
+  // offered no preview — despite being plain text worth reading.
+  if (langFromFilename(p)) return 'code'
   if (MARKDOWN_EXT.has(ext)) return 'markdown'
   if (CODE_EXT.has(ext)) return 'code'
   if (TEXT_EXT.has(ext)) return 'text'

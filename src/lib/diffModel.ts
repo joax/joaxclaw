@@ -93,6 +93,27 @@ const EXT_LANG: Record<string, string> = {
   json: 'json', yaml: 'yaml', yml: 'yaml', toml: 'toml', xml: 'xml', svg: 'xml',
   html: 'markup', htm: 'markup', vue: 'markup', css: 'css', scss: 'scss', less: 'less',
   sql: 'sql', md: 'markdown', markdown: 'markdown', graphql: 'graphql', gql: 'graphql',
+  // Config / data formats the file viewer opens as often as source files.
+  ini: 'ini', cfg: 'ini', conf: 'ini', properties: 'ini', env: 'bash',
+  diff: 'diff', patch: 'diff', svelte: 'markup', astro: 'markup',
+  gradle: 'java', groovy: 'java', lua: 'lua', pl: 'perl', r: 'r', dart: 'dart', ex: 'elixir', exs: 'elixir',
+}
+
+// Files that carry their language in the NAME, not an extension. `previewMode` keys off
+// the extension alone, so without these a Dockerfile or Makefile fell through to
+// "binary" and offered no preview at all.
+const NAMED_FILES: Record<string, string> = {
+  dockerfile: 'docker', makefile: 'makefile', rakefile: 'ruby', gemfile: 'ruby',
+  procfile: 'bash', justfile: 'bash', vagrantfile: 'ruby',
+  '.env': 'bash', '.gitignore': 'bash', '.dockerignore': 'bash',
+  '.bashrc': 'bash', '.zshrc': 'bash', '.profile': 'bash',
+}
+
+/** The language for a file whose NAME identifies it (Dockerfile, Makefile, .env, …). */
+export function langFromFilename(path?: string): string | undefined {
+  if (!path) return undefined
+  const base = (path.split('/').pop() ?? path).toLowerCase()
+  return NAMED_FILES[base]
 }
 
 // True for a string that's actually a unified diff (has a hunk/header marker), so we
@@ -120,6 +141,8 @@ export function langFromPath(path?: string): string | undefined {
   if (!path) return undefined
   const base = (path.split('/').pop() ?? path).toLowerCase()
   if (base === 'dockerfile' || base.endsWith('.dockerfile')) return 'docker'
+  const named = langFromFilename(path)
+  if (named) return named
   const ext = base.includes('.') ? base.slice(base.lastIndexOf('.') + 1) : ''
   return EXT_LANG[ext]
 }

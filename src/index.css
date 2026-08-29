@@ -144,38 +144,60 @@ pre, code {
   font-size: 0.875em;
 }
 
-/* Syntax token colors inside the chat diff view (refractor / Prism classes).
-   Tuned for the dark surface; the +/- row tints sit behind these at low alpha. */
-.diffview .token.comment,
-.diffview .token.prolog,
-.diffview .token.cdata { color: #8b949e; font-style: italic; }
-.diffview .token.punctuation { color: #c9d1d9; }
-.diffview .token.keyword,
-.diffview .token.tag,
-.diffview .token.selector,
-.diffview .token.important,
-.diffview .token.atrule,
-.diffview .token.deleted { color: #ff7b72; }
-.diffview .token.function,
-.diffview .token.function-name,
-.diffview .token.class-name { color: #d2a8ff; }
-.diffview .token.string,
-.diffview .token.char,
-.diffview .token.attr-value,
-.diffview .token.regex,
-.diffview .token.url { color: #a5d6ff; }
-.diffview .token.number,
-.diffview .token.boolean,
-.diffview .token.constant,
-.diffview .token.symbol,
-.diffview .token.builtin,
-.diffview .token.property,
-.diffview .token.variable,
-.diffview .token.attr-name,
-.diffview .token.inserted { color: #79c0ff; }
-.diffview .token.operator,
-.diffview .token.entity { color: #c9d1d9; }
-.diffview .token.namespace { opacity: 0.7; }
+/* Syntax token colours (refractor / Prism classes), shared by the chat diff view and
+   the file viewer's code mode so a file reads the same in both places.
+
+   The palette is variable-driven because these used to be hardcoded to a dark surface:
+   on a light theme the punctuation colour (#c9d1d9) was near-invisible on white. Light
+   values are the default; `html.dark` (set by applyTheme) restores the original dark
+   set unchanged. */
+:root {
+  --syn-comment:  #6e7781;
+  --syn-punct:    #24292f;
+  --syn-keyword:  #cf222e;
+  --syn-function: #8250df;
+  --syn-string:   #0a3069;
+  --syn-number:   #0550ae;
+}
+html.dark {
+  --syn-comment:  #8b949e;
+  --syn-punct:    #c9d1d9;
+  --syn-keyword:  #ff7b72;
+  --syn-function: #d2a8ff;
+  --syn-string:   #a5d6ff;
+  --syn-number:   #79c0ff;
+}
+
+:is(.diffview, .codeview) .token.comment,
+:is(.diffview, .codeview) .token.prolog,
+:is(.diffview, .codeview) .token.cdata { color: var(--syn-comment); font-style: italic; }
+:is(.diffview, .codeview) .token.punctuation { color: var(--syn-punct); }
+:is(.diffview, .codeview) .token.keyword,
+:is(.diffview, .codeview) .token.tag,
+:is(.diffview, .codeview) .token.selector,
+:is(.diffview, .codeview) .token.important,
+:is(.diffview, .codeview) .token.atrule,
+:is(.diffview, .codeview) .token.deleted { color: var(--syn-keyword); }
+:is(.diffview, .codeview) .token.function,
+:is(.diffview, .codeview) .token.function-name,
+:is(.diffview, .codeview) .token.class-name { color: var(--syn-function); }
+:is(.diffview, .codeview) .token.string,
+:is(.diffview, .codeview) .token.char,
+:is(.diffview, .codeview) .token.attr-value,
+:is(.diffview, .codeview) .token.regex,
+:is(.diffview, .codeview) .token.url { color: var(--syn-string); }
+:is(.diffview, .codeview) .token.number,
+:is(.diffview, .codeview) .token.boolean,
+:is(.diffview, .codeview) .token.constant,
+:is(.diffview, .codeview) .token.symbol,
+:is(.diffview, .codeview) .token.builtin,
+:is(.diffview, .codeview) .token.property,
+:is(.diffview, .codeview) .token.variable,
+:is(.diffview, .codeview) .token.attr-name,
+:is(.diffview, .codeview) .token.inserted { color: var(--syn-number); }
+:is(.diffview, .codeview) .token.operator,
+:is(.diffview, .codeview) .token.entity { color: var(--syn-punct); }
+:is(.diffview, .codeview) .token.namespace { opacity: 0.7; }
 
 pre {
   background: var(--bg-primary);
