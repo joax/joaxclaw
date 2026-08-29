@@ -3,6 +3,7 @@ import {
   Download, Copy, Check, Maximize2, Minimize2, ExternalLink, X, Loader2, AlertCircle, FileWarning,
 } from 'lucide-react'
 import { MarkdownContent } from '../chat/MarkdownContent'
+import { CodeView } from './CodeView'
 import { WorkspaceImage, VideoPlayer } from '../chat/WorkspaceMedia'
 import { AudioPlayer } from '../chat/AudioPlayer'
 import { fileDescriptor } from '../../lib/attachments'
@@ -152,16 +153,18 @@ function Body({ mode, path, label, file }: { mode: ReturnType<typeof previewMode
     <>
       {mode === 'markdown'
         ? <MarkdownContent text={text} />
-        : (
-          <pre
-            style={{
-              // Relative, like the code blocks in chat — so it tracks the app's font
-              // size and UI zoom instead of pinning itself to 12px.
-              margin: 0, fontSize: '0.85em', fontFamily: 'monospace', lineHeight: 1.55,
-              color: 'var(--text-primary)', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-            }}
-          >{text}</pre>
-        )}
+        : mode === 'code'
+          ? <CodeView text={text} path={path} />
+          : (
+            <pre
+              style={{
+                // Relative, like the code blocks in chat — so it tracks the app's font
+                // size and UI zoom instead of pinning itself to 12px.
+                margin: 0, fontSize: '0.85em', fontFamily: 'monospace', lineHeight: 1.55,
+                color: 'var(--text-primary)', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+              }}
+            >{text}</pre>
+          )}
       {file?.truncated && (
         <div className="text-xs" style={{ color: 'var(--text-secondary)', marginTop: 12, opacity: 0.8 }}>
           Showing the first {fmtBytes(new Blob([text]).size)} — save a copy for the whole file.
