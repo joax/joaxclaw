@@ -16,6 +16,7 @@ import { useMetricsStore } from '../../store/metrics'
 import { listJobs, stopJob, type ScriptJob } from '../../lib/scriptJobs'
 import { useIsNarrow } from '../../lib/useIsNarrow'
 import { reminderBySession, fmtCountdown, isReminderJob } from '../../lib/reminders'
+import { isManagedJob } from '../../lib/managedJobs'
 import { formatRelativeDate } from '../../lib/dateUtils'
 import type { NavSection } from '../../App'
 
@@ -507,7 +508,7 @@ function CronsSection({ onNavigate, narrow }: { onNavigate: (s: NavSection) => v
 
   const visible = jobs
     // Reminders are one-shot session-turn crons — shown in their own Reminders section.
-    .filter(j => j.enabled && !isReminderJob(j))
+    .filter(j => j.enabled && !isReminderJob(j) && !isManagedJob(j))
     .sort((a, b) => {
       const aRunning = runningNow.has(a.id) || Boolean(a.state?.runningAtMs)
       const bRunning = runningNow.has(b.id) || Boolean(b.state?.runningAtMs)

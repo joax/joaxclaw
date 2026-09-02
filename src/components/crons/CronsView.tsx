@@ -8,6 +8,7 @@ import type { CronJob, CronRunEntry, CronSchedule } from '../../lib/types'
 import { Btn } from '../ui/Btn'
 import { CronEditor } from './CronEditor'
 import { LocalEnginesPanel } from './LocalEnginesPanel'
+import { isManagedJob } from '../../lib/managedJobs'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -582,21 +583,31 @@ export function CronsView({ onOpenChat }: { onOpenChat?: () => void }) {
   const { jobs, loadingJobs, error, fetch } = useCronsStore()
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [search, setSearch] = useState('')
+  const [showManaged, setShowManaged] = useState(false)
   const narrow = useIsNarrow()
 
   useEffect(() => { fetch() }, [])
 
+  // Gateway-declared automations (skill reviews, heartbeats) are hidden by default —
+  // there is one per agent, so they drown out the user's own. Everything below works
+  // off `listed`, so the count, auto-select and empty state all agree with the list.
+  const managedCount = jobs.filter(isManagedJob).length
+  const listed = showManaged ? jobs : jobs.filter(j => !isManagedJob(j))
+
   // Auto-select the first job on desktop (side-by-side). On mobile, land on the LIST
   // first — a master-detail view — so we don't jump straight into a job's detail.
   useEffect(() => {
-    if (!narrow && !selectedId && jobs.length > 0) setSelectedId(jobs[0].id)
-  }, [jobs.length, narrow])
+    if (!narrow && !selectedId && listed.length > 0) setSelectedId(listed[0].id)
+  }, [listed.length, narrow])
 
-  const filtered = jobs.filter(j =>
+  const filtered = listed.filter(j =>
     !search || j.name.toLowerCase().includes(search.toLowerCase()) || j.agentId?.includes(search)
   )
 
-  const selectedJob = jobs.find(j => j.id === selectedId)
+  // Resolved against the visible list, not all jobs: hiding the managed ones while one
+  // is open closes its detail panel (and on mobile returns to the list) without needing
+  // to clear the selection, so it comes back if they are shown again.
+  const selectedJob = listed.find(j => j.id === selectedId)
   const showList = !narrow || !selectedJob
   const showDetail = !narrow || !!selectedJob
 
@@ -617,7 +628,7 @@ export function CronsView({ onOpenChat }: { onOpenChat?: () => void }) {
             Automations
           </span>
           <span className="text-xs px-1.5 py-0.5 rounded" style={{ background: 'var(--bg-elevated)', color: 'var(--text-secondary)' }}>
-            {jobs.length}
+            {listed.length}
           </span>
           <Btn
             size="sm"
@@ -642,6 +653,23 @@ export function CronsView({ onOpenChat }: { onOpenChat?: () => void }) {
           />
         </div>
 
+        {/* Gateway-declared automations — hidden by default, one line to bring them back */}
+        {managedCount > 0 && (
+          <div className="px-3 pb-2 shrink-0 flex items-center gap-1.5" style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+            <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {showManaged
+                ? `Including ${managedCount} gateway-managed`
+                : `${managedCount} gateway-managed hidden`}
+            </span>
+            <button
+              onClick={() => setShowManaged(v => !v)}
+              style={{ border: 'none', background: 'transparent', color: 'var(--accent)', cursor: 'pointer', fontSize: 11, padding: 0, flexShrink: 0 }}
+            >
+              {showManaged ? 'Hide' : 'Show'}
+            </button>
+          </div>
+        )}
+
         {/* Error */}
         {error && (
           <div className="mx-3 mb-2 px-3 py-2 rounded text-xs" style={{ background: 'color-mix(in srgb, var(--danger) 10%, transparent)', color: 'var(--danger)', border: '1px solid color-mix(in srgb, var(--danger) 30%, transparent)' }}>
@@ -655,7 +683,9 @@ export function CronsView({ onOpenChat }: { onOpenChat?: () => void }) {
             <div className="flex flex-col items-center justify-center h-32 gap-2">
               <Clock size={22} style={{ color: 'var(--text-secondary)', opacity: 0.4 }} />
               <p className="text-xs text-center" style={{ color: 'var(--text-secondary)' }}>
-                {search ? 'No jobs match' : 'No automations configured'}
+                {search ? 'No jobs match'
+                  : managedCount > 0 ? 'No automations of your own'
+                  : 'No automations configured'}
               </p>
             </div>
           )}
