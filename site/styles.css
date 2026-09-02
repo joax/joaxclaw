@@ -278,3 +278,63 @@ footer {
 footer p { margin: 6px 0; }
 footer a { color: var(--muted); }
 footer a:hover { color: var(--accent); }
+
+/* ── Mobile ──────────────────────────────────────────────────────────────── */
+/* The layout was desktop-only — the single media query in this file was the colour
+   scheme. On a phone the header wrapped six nav links into two ragged rows below a
+   lone brand, spending ~120px before any content, and the two download buttons sized
+   themselves to their labels so they disagreed on width. */
+
+@media (max-width: 640px) {
+  .nav {
+    gap: 10px;
+    padding: 14px 16px 0;
+  }
+
+  .brand { font-size: 16px; }
+
+  /* One line that scrolls, rather than a wrapped block: it reads as a tab strip, and
+     the last item peeking past the edge is its own scroll affordance. */
+  .nav nav {
+    margin-left: 0;
+    width: 100%;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    gap: 18px;
+    font-size: 14px;
+    padding-bottom: 12px;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+  .nav nav::-webkit-scrollbar { display: none; }
+  .nav nav a {
+    white-space: nowrap;
+    padding: 2px 0;
+  }
+
+  main { padding: 0 16px; }
+  section { padding: 40px 0; }
+  section > h2 { font-size: 23px; margin-bottom: 20px; }
+
+  .hero { padding: 32px 0 40px; }
+  .hero-logo { margin-bottom: 16px; }
+  /* 6vw never reaches the 32px floor on a phone, so the heading stayed desktop-sized
+     and broke across three lines. */
+  .hero h1 { font-size: clamp(27px, 8vw, 34px); margin-bottom: 14px; }
+  .lede { font-size: 16px; margin-bottom: 26px; }
+
+  /* Full-width, equal-width buttons — sized to their labels they disagreed, which read
+     as a mistake rather than a hierarchy. */
+  .cta { flex-direction: column; align-items: stretch; gap: 10px; }
+  .cta .btn { justify-content: center; padding: 13px 18px; }
+
+  .grid, .grid.two, .shots { grid-template-columns: 1fr; gap: 14px; }
+  .grid article { padding: 18px; }
+
+  .doc { padding: 28px 0 48px; }
+  .doc h1 { font-size: 27px; margin-bottom: 20px; }
+  .doc h2 { font-size: 20px; margin-top: 32px; }
+
+  .card { padding: 18px; margin: 20px 0 26px; }
+  footer { padding: 26px 16px 36px; }
+}
