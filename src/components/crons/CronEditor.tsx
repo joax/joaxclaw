@@ -357,7 +357,7 @@ export function CronEditor({ job, onClose }: Props) {
           {tab === 'general' && (
             <>
               <Field label="Name">
-                <TextInput value={name} onChange={setName} placeholder="My cron job" />
+                <TextInput value={name} onChange={setName} placeholder="My automation" />
               </Field>
               <Field label="Description">
                 <TextInput value={description} onChange={setDescription} placeholder="Optional description" />
