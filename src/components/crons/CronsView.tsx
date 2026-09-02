@@ -408,7 +408,7 @@ function JobDetail({ job, onOpenChat, onBack }: { job: CronJob; onOpenChat?: () 
           {onBack && (
             <button
               onClick={onBack}
-              aria-label="Back to cron jobs"
+              aria-label="Back to automations"
               style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 32, height: 32, marginLeft: -6, borderRadius: 'var(--radius)', border: 'none', background: 'transparent', color: 'var(--text-primary)', cursor: 'pointer', flexShrink: 0 }}
             >
               <ArrowLeft size={18} />
@@ -614,7 +614,7 @@ export function CronsView({ onOpenChat }: { onOpenChat?: () => void }) {
           style={{ borderBottom: '1px solid var(--border)' }}
         >
           <span className="flex-1 text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>
-            Cron Jobs
+            Automations
           </span>
           <span className="text-xs px-1.5 py-0.5 rounded" style={{ background: 'var(--bg-elevated)', color: 'var(--text-secondary)' }}>
             {jobs.length}
@@ -655,7 +655,7 @@ export function CronsView({ onOpenChat }: { onOpenChat?: () => void }) {
             <div className="flex flex-col items-center justify-center h-32 gap-2">
               <Clock size={22} style={{ color: 'var(--text-secondary)', opacity: 0.4 }} />
               <p className="text-xs text-center" style={{ color: 'var(--text-secondary)' }}>
-                {search ? 'No jobs match' : 'No cron jobs configured'}
+                {search ? 'No jobs match' : 'No automations configured'}
               </p>
             </div>
           )}

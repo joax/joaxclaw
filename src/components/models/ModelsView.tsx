@@ -538,7 +538,7 @@ function UsageTab() {
             <tr style={{ background: 'var(--bg-surface)', borderBottom: '1px solid var(--border)', position: 'sticky', top: 0, zIndex: 1 }}>
               <th style={{ ...thStyle, textAlign: 'left' }}>Model</th>
               <th style={{ ...thStyle, textAlign: 'right' }}>Sessions</th>
-              <th style={{ ...thStyle, textAlign: 'right' }}>Cron runs</th>
+              <th style={{ ...thStyle, textAlign: 'right' }}>Automation runs</th>
               <th style={{ ...thStyle, textAlign: 'right' }}>Input tokens</th>
               <th style={{ ...thStyle, textAlign: 'right' }}>Output tokens</th>
               <th style={{ ...thStyle, textAlign: 'right' }}>Est. cost</th>

@@ -103,7 +103,7 @@ function GettingStarted() {
         <b> model</b> and <b>thinking level</b> for that conversation only — without changing the agent's config.
       </Step>
       <Step n={4} title="Explore">
-        <b>Sessions</b> shows live and past runs, <b>Models</b> manages providers, <b>Crons</b> schedules agent
+        <b>Sessions</b> shows live and past runs, <b>Models</b> manages providers, <b>Automations</b> schedule agent
         turns, and <b>Gateway</b> controls the gateway connection.
       </Step>
     </Section>
@@ -211,7 +211,7 @@ function Gateways() {
     <Section title="Local vs Remote Gateways">
       <p className="text-sm" style={{ color: 'var(--text-secondary)', lineHeight: 1.6 }}>
         JoaxClaw talks to the Openclaw Gateway over a WebSocket. Chats, sessions, agents,
-        models, and crons all work the same whether the gateway is on this machine or
+        models, and automations all work the same whether the gateway is on this machine or
         elsewhere. The difference is anything that touches the gateway <b>host's</b> filesystem,
         local services, or loopback ports — those only work when the gateway is <b>local</b>.
       </p>
@@ -235,7 +235,7 @@ function Gateways() {
           Runs on another host (e.g. a server reached over a VPN). Only its WebSocket port is
           reachable from here, so host-local operations must go <b>through the gateway</b>.
         </p>
-        <Cap ok>Chat, sessions, agents, models, crons — everything over the WebSocket</Cap>
+        <Cap ok>Chat, sessions, agents, models, automations — everything over the WebSocket</Cap>
         <Cap>Config file editing &amp; restart/stop controls act on <i>your</i> machine, not the server</Cap>
         <Cap>Local engines on the server's loopback can't be probed — shown as <b>unknown</b> instead of offline</Cap>
         <Cap>App-native skills are uploaded over the gateway (see below) instead of written to disk</Cap>
@@ -260,7 +260,7 @@ function Gateways() {
           <br />Or, without changing the bind, run <Code>tailscale serve 11434</Code> to proxy it over the tailnet.
         </Step>
         <Step n={3} title="Point JoaxClaw at the tailnet URL">
-          In <b>Settings → Ollama</b> (Ollama Endpoints) — or the per-chat / Crons engine controls — set the
+          In <b>Settings → Ollama</b> (Ollama Endpoints) — or the per-chat / Automations engine controls — set the
           engine URL to the host's tailnet address, e.g. <Code>{'http://<host>.<tailnet>.ts.net:11434'}</Code>.
           Health checks run from the app's main process (not the browser), so they reach the tailnet directly.
         </Step>
@@ -368,9 +368,9 @@ function Troubleshooting() {
         configured providers; a green dot means the model is currently loaded in Ollama.
       </Issue>
       <Issue q="Why are there two Ollama services (:11434 and :11435)?">
-        Ollama runs one request at a time per model, so a scheduled CRON job sharing a single Ollama can
+        Ollama runs one request at a time per model, so a scheduled automation sharing a single Ollama can
         interrupt your live chat. A second isolated instance keeps them apart: <b>:11434</b> for
-        interactive chats/agents, <b>:11435</b> for background CRON jobs (jobs use the
+        interactive chats/agents, <b>:11435</b> for background automations (they use the
         <Code>ollama-cron/</Code> model prefix). Configure each instance's URL in <b>Settings → Ollama
         Endpoints</b> — needed when the gateway runs on a remote host.
       </Issue>

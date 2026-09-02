@@ -16,7 +16,7 @@ const GROUP_2: NavItem[] = [
   { id: 'agents',     Icon: Bot,        label: 'Agents' },
   { id: 'processes',  Icon: GitBranch,  label: 'Processes' },
   { id: 'teams',      Icon: UsersRound, label: 'Teams' },
-  { id: 'crons',      Icon: Timer,      label: 'Crons' },
+  { id: 'crons',      Icon: Timer,      label: 'Automations' },
 ]
 
 const GROUP_3: NavItem[] = [
