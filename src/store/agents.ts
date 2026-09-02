@@ -5,19 +5,35 @@ import { gatewayClient } from '../lib/gateway'
 // ── config.get / config.patch helpers ────────────────────────────────────────
 
 type SubagentEntry = { allowAgents?: string[]; instructions?: Record<string, string>; [k: string]: unknown }
-type ConfigEntry   = { id: string; subagents?: SubagentEntry; [k: string]: unknown }
-type ConfigShape   = { agents?: { list?: ConfigEntry[]; [k: string]: unknown }; [k: string]: unknown }
+type ConfigEntry   = { subagents?: SubagentEntry; [k: string]: unknown }
+// OpenClaw 2026.8 renamed `agents.list` (an array of entries, each carrying its own
+// `id`) to `agents.entries` (a map keyed by agent id). Sending the old shape is now a
+// hard INVALID_REQUEST — "Unrecognized key: list" — which is what broke saving
+// subagents. `list` is read as a fallback so an un-migrated gateway still loads.
+type AgentsSection = { entries?: Record<string, ConfigEntry>; list?: (ConfigEntry & { id?: string })[]; [k: string]: unknown }
+type ConfigShape   = { agents?: AgentsSection; [k: string]: unknown }
 // config.get returns "config" (materialized runtime) AND "parsed" (raw JSON5).
-// The raw agents.list with subagents fields lives in "parsed", not "config".
+// The raw entries with subagents fields live in "parsed", not "config".
 interface ConfigSnapshot { hash?: string; config?: ConfigShape; parsed?: ConfigShape }
 
 async function getConfig(): Promise<ConfigSnapshot> {
   return gatewayClient.request<ConfigSnapshot>('config.get')
 }
 
-function rawList(snapshot: ConfigSnapshot): ConfigEntry[] | null {
-  const list = (snapshot.parsed ?? snapshot.config)?.agents?.list
-  return Array.isArray(list) ? list : null
+// Agent config entries keyed by id, from either config shape.
+export function agentEntries(snapshot: ConfigSnapshot): Map<string, ConfigEntry> {
+  const agents = (snapshot.parsed ?? snapshot.config)?.agents
+  const out = new Map<string, ConfigEntry>()
+  if (agents?.entries && typeof agents.entries === 'object') {
+    for (const [id, entry] of Object.entries(agents.entries)) {
+      if (entry && typeof entry === 'object') out.set(id, entry)
+    }
+    return out
+  }
+  for (const entry of agents?.list ?? []) {
+    if (entry?.id) out.set(entry.id, entry)
+  }
+  return out
 }
 
 // Mirrors the gateway's normalizeAgentId — the agent id is derived from the name.
@@ -46,8 +62,16 @@ async function patchAgentField(
   subagentsPatch: Record<string, unknown>,
   baseHash?: string
 ): Promise<void> {
+  // A map keyed by id merges cleanly under RFC 7396 — only this agent's entry is
+  // touched. `allowAgents` is an array, and the gateway refuses to SHRINK an array in a
+  // merge patch unless its exact path is named in replacePaths, so removing a permitted
+  // sub-agent silently kept the old, longer list without this.
+  const replacePaths = Array.isArray(subagentsPatch.allowAgents)
+    ? [`agents.entries.${agentId}.subagents.allowAgents`]
+    : []
   await gatewayClient.request('config.patch', {
-    raw: JSON.stringify({ agents: { list: [{ id: agentId, subagents: subagentsPatch }] } }),
+    raw: JSON.stringify({ agents: { entries: { [agentId]: { subagents: subagentsPatch } } } }),
+    ...(replacePaths.length ? { replacePaths } : {}),
     ...(baseHash ? { baseHash } : {}),
   })
 }
@@ -118,10 +142,7 @@ export const useAgentsStore = create<AgentsState>((set) => ({
         getConfig().catch(() => ({} as ConfigSnapshot)),
       ])
 
-      const configById = new Map<string, ConfigEntry>()
-      for (const entry of rawList(snapshot) ?? []) {
-        if (entry.id) configById.set(entry.id, entry)
-      }
+      const configById = agentEntries(snapshot)
 
       const agents = (res.agents ?? []).map(a => {
         const cfgEntry = configById.get(a.id)
@@ -227,7 +248,7 @@ export const useAgentsStore = create<AgentsState>((set) => ({
   async readRelationship(fromId, toId) {
     try {
       const snapshot = await getConfig()
-      const entry = rawList(snapshot)?.find(a => a.id === fromId)
+      const entry = agentEntries(snapshot).get(fromId)
       return entry?.subagents?.instructions?.[toId] ?? ''
     } catch {
       return ''

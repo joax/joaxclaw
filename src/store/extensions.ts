@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { gatewayClient } from '../lib/gateway'
 import { pluginKeyStatus, type PluginKeyStatus } from '../lib/pluginConfig'
 import { isRemoteGatewayState } from './connection'
+import { useAgentsStore } from './agents'
 
 export interface Plugin {
   id: string
@@ -152,7 +153,17 @@ export const useExtensionsStore = create<ExtensionsState>((set, get) => ({
       let skillStatusMap: Record<string, SkillStatusEntry> = {}
       let skillStatusList: SkillStatusEntry[] = []
       try {
-        const statusRes = await gatewayClient.request<{ skills?: SkillStatusEntry[] }>('skills.status', {})
+        // 2026.8 gateways refuse an unscoped skills.status when several agents are
+        // configured ("skills workspace has no explicit owner. Pass agentId"), which
+        // silently cost every skill its description and hid discovered ones. Scope the
+        // call to the default agent; single-agent gateways ignore the extra param.
+        let agentId = useAgentsStore.getState().defaultId
+        if (!agentId) {
+          agentId = await gatewayClient.request<{ defaultId?: string }>('agents.list')
+            .then(r => r.defaultId ?? null).catch(() => null)
+        }
+        const statusRes = await gatewayClient.request<{ skills?: SkillStatusEntry[] }>(
+          'skills.status', agentId ? { agentId } : {})
         skillStatusList = statusRes?.skills ?? []
         for (const s of skillStatusList) {
           if (s.skillKey) skillStatusMap[s.skillKey] = s
