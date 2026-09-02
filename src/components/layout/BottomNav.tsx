@@ -27,7 +27,7 @@ const MORE_GROUPS: { heading: string; items: NavItem[] }[] = [
   { heading: 'Agent system', items: [
     { id: 'processes', Icon: GitBranch,  label: 'Processes' },
     { id: 'teams',     Icon: UsersRound, label: 'Teams' },
-    { id: 'crons',     Icon: Timer,      label: 'Crons' },
+    { id: 'crons',     Icon: Timer,      label: 'Automations' },
   ] },
   { heading: 'Workspace', items: [
     { id: 'obsidian',  Icon: Brain,      label: 'Memory' },

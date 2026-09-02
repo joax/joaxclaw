@@ -824,7 +824,7 @@ function ChatRow({ item }: { item: ChatItem }) {
             {item.name}
           </p>
         )}
-        {item.cron && !editing && <Clock size={11} title="Scheduled run (cron job)" style={{ color: 'var(--text-secondary)', flexShrink: 0 }} />}
+        {item.cron && !editing && <Clock size={11} title="Scheduled run (automation)" style={{ color: 'var(--text-secondary)', flexShrink: 0 }} />}
         {item.heartbeat && !editing && <Heart size={11} title="Heartbeat session" style={{ color: 'var(--accent)', opacity: 0.8, flexShrink: 0 }} />}
         {!editing && !hovered && item.time && <span className="text-xs shrink-0" style={{ color: 'var(--text-secondary)' }}>{item.time}</span>}
       </div>

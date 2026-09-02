@@ -520,7 +520,7 @@ function CronsSection({ onNavigate, narrow }: { onNavigate: (s: NavSection) => v
 
   const content = (
     <>
-      <SectionHead Icon={Timer} label="Crons" narrow action={<SeeAll narrow={narrow} onClick={() => onNavigate('crons')} />} />
+      <SectionHead Icon={Timer} label="Automations" narrow action={<SeeAll narrow={narrow} onClick={() => onNavigate('crons')} />} />
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: narrow ? 2 : 4 }}>
         {visible.map(job => {
