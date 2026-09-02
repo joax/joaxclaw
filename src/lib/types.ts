@@ -281,6 +281,10 @@ export interface CronJob {
   name: string
   description?: string
   agentId?: string
+  // Set by the gateway on automations it declares itself from config (skill
+  // collection reviews, heartbeats, memory-core dreaming). See lib/managedJobs.
+  declarationKey?: string
+  displayName?: string
   sessionKey?: string
   enabled: boolean
   deleteAfterRun?: boolean
