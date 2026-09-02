@@ -936,7 +936,7 @@ function buildZip(files: { name: string; data: Buffer }[]): Buffer {
 const NATIVE_SKILLS: { slug: string; version: number; lines: string[] }[] = [
   {
     slug: 'ask-user',
-    version: 2,
+    version: 3,
     lines: [
       '---',
       'name: ask-user',
@@ -947,7 +947,9 @@ const NATIVE_SKILLS: { slug: string; version: number; lines: string[] }[] = [
       '',
       'When you are genuinely blocked on a decision only the user can make — which of several approaches to take, whether to proceed with something irreversible, or a missing preference you cannot infer — ask with a structured question instead of a paragraph. JoaxClaw renders it as tappable buttons; the user\'s choice comes back as their next message.',
       '',
-      '**Asking is just writing text.** To ask, you simply output an `<ask>` block directly in your reply — nothing more. Do NOT call the `skill_workshop` tool, do not try to create, apply, or save a skill, and do not invoke any other tool to ask a question. There is no tool for this; the block itself IS the mechanism. Reaching for a tool here will stall the turn.',
+      '**Two ways to ask, both fine.** Writing an `<ask>` block in your reply always works and needs no tool — the block itself IS the mechanism. If your toolset also has an **`ask_user`** tool, calling it works too: JoaxClaw renders either one as the same card. Do NOT reach for `skill_workshop` or try to create, apply or save a skill to ask something — that stalls the turn.',
+      '',
+      'If you do call `ask_user`, pass its arguments as real JSON — `questions` must be an actual array, not an array serialised into a string. A call the tool rejects asks the user nothing, and you will be left waiting for an answer that cannot come. When in doubt, use the `<ask>` block: it cannot fail validation.',
       '',
       'Emit an `<ask>` block whose body is a JSON object. You may write normal prose before it (e.g. a one-line lead-in); the block itself is lifted out of the transcript and shown as an interactive card.',
       '',
@@ -984,7 +986,7 @@ const NATIVE_SKILLS: { slug: string; version: number; lines: string[] }[] = [
       '```',
       '',
       '## Rules',
-      '- Emit the `<ask>` block inline in your reply — never route it through the `skill_workshop` tool or any other tool. Writing the block is the whole action.',
+      '- Emit the `<ask>` block inline in your reply, or call `ask_user` if you have it — never route a question through `skill_workshop`.',
       '- The body must be valid JSON. A malformed block is dropped silently — the user sees nothing — so double-check quoting.',
       '- Keep options to a handful of meaningful, mutually-distinct choices. The user can always type a different answer instead of tapping.',
       '- Ask only when you are actually blocked. Do not use this for questions you can answer yourself, or to confirm things the user already told you to do.',

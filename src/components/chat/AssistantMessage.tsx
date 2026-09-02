@@ -14,6 +14,7 @@ import { extractResultDiff } from '../../lib/diffModel'
 import { MarkdownContent } from './MarkdownContent'
 import { QuestionsBlock } from './QuestionCard'
 import { parseAskBlocks } from '../../lib/askQuestion'
+import { questionsFromToolCalls, renderedAsQuestionCard } from '../../lib/askUserTool'
 import { useChatStore } from '../../store/chat'
 import { DiffView } from './DiffView'
 import { AudioPlayer } from './AudioPlayer'
@@ -299,7 +300,11 @@ export function AssistantMessage({ message, showTools = true, showReasoning = tr
   const { thinking: inlineThinking, text: afterThink } = extractThinkTags(noActions)
   // Structured questions the model asked (Claude-Code-style). Lifted out of the
   // transcript and rendered as interactive option buttons below the answer.
-  const { questions, text: cleanContent } = parseAskBlocks(afterThink, { streaming: message.streaming })
+  const { questions: askedInText, text: cleanContent } = parseAskBlocks(afterThink, { streaming: message.streaming })
+  // The gateway also exposes a real `ask_user` TOOL for this, and a model given both
+  // reaches for the tool. Those calls used to render as a generic pill, so the buttons
+  // never appeared and the feature looked dead. Both routes now land on this card.
+  const questions = [...askedInText, ...questionsFromToolCalls(message.toolCalls)]
   const hasQuestions = questions.length > 0
   // A question is answerable only while it's the tail of the conversation and the
   // turn has finished; sending the answer is just the user's next chat message.
@@ -310,7 +315,11 @@ export function AssistantMessage({ message, showTools = true, showReasoning = tr
   const allReasoning = [message.reasoning, inlineThinking].filter(Boolean).join('\n\n')
   const hasReasoning = !!allReasoning
   // sessions_spawn is represented as an inline thread, not a raw tool card.
-  const visibleToolCalls = (message.toolCalls ?? []).filter(c => c.name !== 'sessions_spawn')
+  const visibleToolCalls = (message.toolCalls ?? [])
+    .filter(c => c.name !== 'sessions_spawn')
+    // An ask_user call renders as the question card below; a pill beside it would be
+    // the same thing said twice. A FAILED one keeps its pill, where the error shows.
+    .filter(c => !renderedAsQuestionCard(c))
   const hasTools = visibleToolCalls.length > 0
   // Files this turn wrote, lifted out of the tool calls (see lib/artifacts.ts).
   const artifacts = extractArtifacts(message.toolCalls)
