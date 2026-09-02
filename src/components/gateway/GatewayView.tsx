@@ -45,7 +45,7 @@ const SETTINGS_TABS: { id: SettingsTab; label: string; icon: React.ReactNode }[]
 export function GatewayView({ onOpenChat }: { onOpenChat?: () => void } = {}) {
   const { status, connection, connect, disconnect } = useConnectionStore()
   const remote = useIsRemoteGateway()
-  const { ollamaModels } = useMetricsStore()
+  const { engineModels } = useMetricsStore()
 
   const [configText, setConfigText] = useState('')
   const [configPath, setConfigPath] = useState('')
@@ -434,25 +434,41 @@ export function GatewayView({ onOpenChat }: { onOpenChat?: () => void } = {}) {
             <LocalEnginesCard gatewayUrl={connection?.url} />
             {!remote && (
               <Card title="Ollama Models (local)">
-                <div className="space-y-2">
-                  {ollamaModels.length === 0 && (
+                <div className="space-y-3">
+                  {engineModels.length === 0 && (
                     <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>No models found. Is Ollama running?</p>
                   )}
-                  {ollamaModels.map(model => (
-                    <div key={model.name} className="text-xs">
-                      <div className="flex items-center gap-2">
-                        <div className="w-1.5 h-1.5 rounded-full" style={{ background: model.loaded ? 'var(--success)' : 'var(--border)', flexShrink: 0 }} />
-                        <span className="flex-1 truncate font-mono" style={{ color: 'var(--text-primary)' }}>{model.name}</span>
-                        <span style={{ color: 'var(--text-secondary)' }}>{formatBytes(model.size)}</span>
-                      </div>
-                      {model.loaded && model.vramUsed && (
-                        <div className="ml-3.5 mt-1">
-                          <div className="meter">
-                            <div className="meter-fill" style={{ width: '60%', background: 'var(--accent)' }} />
-                          </div>
-                          <p className="mt-0.5" style={{ color: 'var(--text-secondary)' }}>VRAM {formatBytes(model.vramUsed)} loaded</p>
+                  {/* One block per configured instance — the isolated cron engine holds its
+                      own residency, so folding them together hid whatever it had loaded. */}
+                  {engineModels.map(engine => (
+                    <div key={engine.key} className="space-y-2">
+                      {engineModels.length > 1 && (
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-xs font-mono font-semibold" style={{ color: 'var(--text-primary)' }}>{engine.key}</span>
+                          {engine.isCron && <span style={{ fontSize: 9, fontWeight: 600, letterSpacing: 0.3, color: 'var(--warning)', background: 'color-mix(in srgb, var(--warning) 14%, transparent)', padding: '0 5px', borderRadius: 999 }}>CRON</span>}
+                          <span className="text-xs font-mono" style={{ color: 'var(--text-secondary)', opacity: 0.8 }}>{engine.baseUrl}</span>
                         </div>
                       )}
+                      {engine.models.length === 0 && (
+                        <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>Unreachable or no models.</p>
+                      )}
+                      {engine.models.map(model => (
+                        <div key={model.name} className="text-xs">
+                          <div className="flex items-center gap-2">
+                            <div className="w-1.5 h-1.5 rounded-full" style={{ background: model.loaded ? 'var(--success)' : 'var(--border)', flexShrink: 0 }} />
+                            <span className="flex-1 truncate font-mono" style={{ color: 'var(--text-primary)' }}>{model.name}</span>
+                            <span style={{ color: 'var(--text-secondary)' }}>{formatBytes(model.size)}</span>
+                          </div>
+                          {model.loaded && model.vramUsed && (
+                            <div className="ml-3.5 mt-1">
+                              <div className="meter">
+                                <div className="meter-fill" style={{ width: '60%', background: 'var(--accent)' }} />
+                              </div>
+                              <p className="mt-0.5" style={{ color: 'var(--text-secondary)' }}>VRAM {formatBytes(model.vramUsed)} loaded</p>
+                            </div>
+                          )}
+                        </div>
+                      ))}
                     </div>
                   ))}
                 </div>
