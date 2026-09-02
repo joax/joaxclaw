@@ -71,6 +71,35 @@ export async function listEngineModels(
   )
 }
 
+// Provider-qualified ids ("<provider>/<model>") of every model resident on ANY
+// configured local instance. The prefix is the PROVIDER key, not a hardcoded "ollama/":
+// the isolated cron instance loads its own copy into the same GPU, so
+// `ollama-cron/<name>` and `ollama/<name>` are separate residencies and either one can
+// be loaded without the other. Pickers key off this to draw the "loaded" dot.
+export function loadedModelIds(engines: EngineModels[]): Set<string> {
+  const out = new Set<string>()
+  for (const e of engines) {
+    for (const m of e.models) if (m.loaded) out.add(`${e.key}/${m.name}`)
+  }
+  return out
+}
+
+/** A resident model tagged with the instance holding it. */
+export interface LoadedModel extends OllamaModel {
+  engineKey: string
+  engineLabel: string
+  isCron: boolean
+}
+
+// Every model resident across ALL local instances. Surfaces that total VRAM must use
+// this: counting only the interactive instance understates what is actually on the GPU
+// by a whole model whenever a cron job is running.
+export function loadedModels(engines: EngineModels[]): LoadedModel[] {
+  return engines.flatMap(e =>
+    e.models.filter(m => m.loaded).map(m => ({ ...m, engineKey: e.key, engineLabel: e.label, isCron: e.isCron })),
+  )
+}
+
 export function formatBytes(bytes: number): string {
   if (bytes === 0) return '0 B'
   const units = ['B', 'KB', 'MB', 'GB', 'TB']

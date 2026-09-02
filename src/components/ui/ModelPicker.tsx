@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Loader2 } from 'lucide-react'
 import { useModelsStore } from '../../store/models'
+import { loadedModelIds } from '../../lib/ollama'
 import { useMetricsStore } from '../../store/metrics'
 import { useConnectionStore } from '../../store/connection'
 import { gatewayHost, isLocalGateway } from '../../lib/ollamaHealth'
@@ -23,7 +24,7 @@ interface PickerModel {
 
 export function ModelPicker({ value, onChange, placeholder, inputStyle }: Props) {
   const { providers, loading, load } = useModelsStore()
-  const { ollamaModels } = useMetricsStore()
+  const { engineModels } = useMetricsStore()
   const connectionUrl = useConnectionStore(s => s.connection?.url)
   const engineUrls = useConnectionStore(s => s.connection?.engineUrls)
   const [open, setOpen] = useState(false)
@@ -53,7 +54,9 @@ export function ModelPicker({ value, onChange, placeholder, inputStyle }: Props)
     return () => { cancelled = true }
   }, [providers, connectionUrl, engineUrls])
 
-  const loadedSet = new Set(ollamaModels.filter(m => m.loaded).map(m => `ollama/${m.name}`))
+  // Keyed by PROVIDER, so a model resident only on the isolated cron instance lights up
+  // under `ollama-cron/…` instead of being missed by a hardcoded `ollama/` prefix.
+  const loadedSet = loadedModelIds(engineModels)
 
   const groups = Object.entries(providers)
     .map(([pid, p]) => {
