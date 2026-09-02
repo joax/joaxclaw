@@ -17,6 +17,7 @@ import { listJobs, stopJob, type ScriptJob } from '../../lib/scriptJobs'
 import { useIsNarrow } from '../../lib/useIsNarrow'
 import { reminderBySession, fmtCountdown, isReminderJob } from '../../lib/reminders'
 import { isManagedJob } from '../../lib/managedJobs'
+import { loadedModels } from '../../lib/ollama'
 import { formatRelativeDate } from '../../lib/dateUtils'
 import type { NavSection } from '../../App'
 
@@ -564,7 +565,7 @@ function CronsSection({ onNavigate, narrow }: { onNavigate: (s: NavSection) => v
 // ── Resources ─────────────────────────────────────────────────────────────────
 
 function ResourcesSection({ narrow }: { narrow?: boolean }) {
-  const { metrics, ollamaModels } = useMetricsStore()
+  const { metrics, engineModels } = useMetricsStore()
   const remoteGateway = useIsRemoteGateway()
   const gwHost = useConnectionStore(s => gatewayHost(s.connection?.url))
 
@@ -590,7 +591,10 @@ function ResourcesSection({ narrow }: { narrow?: boolean }) {
   const gpuPct   = gpu?.utilizationGpu ?? 0
   const ramUsed  = metrics.ramUsed / (1024 ** 3)
   const ramPct   = metrics.ramTotal > 0 ? (metrics.ramUsed / metrics.ramTotal) * 100 : 0
-  const loaded   = ollamaModels.filter(m => m.loaded)
+  // Across EVERY local instance: the isolated cron engine loads its own copy into the
+  // same GPU, so counting only the interactive one understates VRAM by a whole model
+  // whenever an automation is running.
+  const loaded   = loadedModels(engineModels)
 
   // VRAM: prefer size_vram from Ollama /api/ps; fall back to model file size (size ≈ VRAM for quantized models)
   const modelVram = (m: typeof loaded[0]) => (m.vramUsed && m.vramUsed > 0) ? m.vramUsed : m.size

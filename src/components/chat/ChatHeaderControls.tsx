@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { ChevronDown, Brain, Check, SlidersHorizontal, Wrench, Layers } from 'lucide-react'
 import { ModelIcon } from '../ui/ModelIcon'
 import { useModelsStore } from '../../store/models'
+import { loadedModelIds } from '../../lib/ollama'
 import { useMetricsStore } from '../../store/metrics'
 import { THINKING_LEVELS, type ThinkingLevel } from '../../lib/types'
 
@@ -47,14 +48,16 @@ export function ModelSelect({ value, agentDefault, onChange }: {
   onChange: (model: string | null) => void
 }) {
   const { providers, load } = useModelsStore()
-  const { ollamaModels } = useMetricsStore()
+  const { engineModels } = useMetricsStore()
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
   const ref = useClickOutside(() => setOpen(false))
 
   useEffect(() => { if (open) load() }, [open])
 
-  const loadedSet = new Set(ollamaModels.filter(m => m.loaded).map(m => `ollama/${m.name}`))
+  // Keyed by PROVIDER, so a model resident only on the isolated cron instance lights up
+  // under `ollama-cron/…` instead of being missed by a hardcoded `ollama/` prefix.
+  const loadedSet = loadedModelIds(engineModels)
   const q = search.toLowerCase()
   const groups = Object.entries(providers)
     .map(([pid, p]) => ({
