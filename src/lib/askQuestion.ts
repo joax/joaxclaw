@@ -47,9 +47,10 @@ const ASK_BLOCK_RE = /<ask\b[^>]*>([\s\S]*?)<\/ask>/gi
 // the answer is still streaming in.
 const UNCLOSED_ASK_RE = /<ask\b[^>]*>[\s\S]*$/i
 
-const YES_NO: AskOption[] = [{ label: 'Yes' }, { label: 'No' }]
+export const YES_NO: AskOption[] = [{ label: 'Yes' }, { label: 'No' }]
 
-function normalizeOptions(raw: unknown): AskOption[] {
+/** Shared with the `ask_user` tool adapter — one definition of "what is an option". */
+export function normalizeOptions(raw: unknown): AskOption[] {
   if (!Array.isArray(raw)) return []
   const out: AskOption[] = []
   for (const item of raw) {
