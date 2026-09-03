@@ -5,6 +5,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.23.1] - 2026-09-03
+
+### Fixed
+
+- **A finished answer no longer leaves the chat stuck on "thinking…".** When the model completed a turn, an empty assistant bubble appeared beneath the answer and kept spinning, with the composer blocked — the only way out was to press **Stop** or wait 60 seconds for the stall detector. The gateway was never the cause: with a chat in this state it reports every session idle and the relevant ones `done`. `sessions.list` lags the final frame by a beat, so the pane briefly read the session as still running and re-attached to it; because a completed answer is not a reusable turn, that appended a fresh empty placeholder waiting for output that was never coming. The app now refuses to re-attach to a session the gateway reports idle, so the placeholder is never created, and a reconciler settles any turn left streaming after its run ends. A `sessions_yield` — where the gateway ends a run, auto-resumes, and answers later — is deliberately exempt, since a controller reads idle for a moment before its worker registers.
+
+---
+
 ## [0.23.0] - 2026-09-02
 
 ### Fixed
