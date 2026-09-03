@@ -33,7 +33,7 @@ import { isElectron } from './lib/platform'
 import { useUpdaterStore } from './store/updater'
 import { useConnectionStore, restoreConnectionsFromBackup } from './store/connection'
 import { useMetricsStore } from './store/metrics'
-import { useSettingsStore, ZOOM_STEP } from './store/settings'
+import { useSettingsStore, ZOOM_STEP, restoreProfileFromBackup } from './store/settings'
 import { useExtensionsStore } from './store/extensions'
 import { useProcessesStore } from './store/processes'
 import { useSessionsStore } from './store/sessions'
@@ -51,7 +51,7 @@ export default function App() {
   useNotificationsWatcher()
   const { status, connection, reconnecting } = useConnectionStore()
   const { start: startMetrics, stop: stopMetrics } = useMetricsStore()
-  const { monitorVisible, welcomeSeen } = useSettingsStore()
+  const { monitorVisible, welcomeSeen, profileRestored } = useSettingsStore()
   const { plugins, skills, load: loadExtensions } = useExtensionsStore()
   const obsidianEnabled =
     plugins.some(p => /obsidian/i.test(p.id) && p.enabled) ||
@@ -62,6 +62,9 @@ export default function App() {
     // Restore saved connections from the file backup (resilient to localStorage
     // resets) and keep the backup in sync going forward.
     restoreConnectionsFromBackup()
+    // Profile + "welcome seen" survive a localStorage reset, and are shared between the
+    // packaged app and the dev build (separate origins) — so the welcome asks once, ever.
+    void restoreProfileFromBackup()
     return () => stopMetrics()
   }, [])
 
@@ -232,7 +235,7 @@ export default function App() {
       )}
       {/* First-run welcome — once the user is connected and in the app, invite them to
           introduce themselves (Settings → You covers it afterward). */}
-      {status === 'connected' && !welcomeSeen && <WelcomeModal />}
+      {status === 'connected' && profileRestored && !welcomeSeen && <WelcomeModal />}
     </div>
   )
 }

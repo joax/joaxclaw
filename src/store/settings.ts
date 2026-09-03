@@ -4,6 +4,8 @@ import type { ThemeSettings, ThemeBgSlot, ThemeBackground, UserProfile } from '.
 import { DEFAULT_THEME, PRESET_THEMES } from '../lib/presetThemes'
 import { parseThemeManifest, serializeTheme, THEME_BG_SLOTS } from '../lib/themeFormat'
 import { applyTheme } from '../lib/theme'
+import { readLocalStore, patchLocalStore } from '../lib/localStore'
+import { mergeProfileBackup } from '../lib/profileBackup'
 
 interface ThemeApi {
   import?: () => Promise<{ ok: boolean; canceled?: boolean; error?: string; theme?: unknown }>
@@ -71,6 +73,7 @@ interface SettingsState {
   useNameAsIdentity: boolean
   // First-run welcome shown-and-dismissed flag.
   welcomeSeen: boolean
+  profileRestored: boolean
 
   setUserProfile: (patch: Partial<UserProfile>) => void
   setShareProfile: (on: boolean) => void
@@ -118,6 +121,9 @@ export const useSettingsStore = create<SettingsState>()(
       shareProfile: true,
       useNameAsIdentity: true,
       welcomeSeen: false,
+      // Flipped once the durable backup has been consulted. The welcome must not render
+      // before then, or it flashes on every start while the file read is in flight.
+      profileRestored: false,
 
       setUserProfile(patch) { set(s => ({ userProfile: { ...s.userProfile, ...patch } })) },
       setShareProfile(on) { set({ shareProfile: on }) },
@@ -220,7 +226,7 @@ export const useSettingsStore = create<SettingsState>()(
       // Base themes always come from the repo files (PRESET_THEMES) — never localStorage —
       // so updated presets and their bundled backgrounds take effect on upgrade and can't
       // go stale. Only user-created themes are persisted.
-      partialize: (s) => ({ ...s, themes: s.themes.filter(t => !PRESET_IDS.has(t.id)) }),
+      partialize: (s) => ({ ...s, profileRestored: false, themes: s.themes.filter(t => !PRESET_IDS.has(t.id)) }),
       merge: (persisted, current) => {
         const p = (persisted ?? {}) as Partial<SettingsState>
         const custom = (p.themes ?? []).filter(t => !PRESET_IDS.has(t.id))
@@ -236,3 +242,45 @@ export const useSettingsStore = create<SettingsState>()(
     }
   )
 )
+
+// ── Durable profile backup ────────────────────────────────────────────────────
+// Same reasoning as saved connections (see store/connection.ts): localStorage in an
+// Electron renderer is not durable, and on top of that the packaged app (file://) and
+// `npm run dev` (http://localhost:5173) are SEPARATE localStorage origins — so a profile
+// entered in one is invisible to the other, and the first-run welcome reappears every
+// time the app is opened from the other. ~/.joaxclaw/store.json is shared by both.
+
+let _profileBackupWired = false
+
+function mirrorProfile(s: SettingsState): void {
+  void patchLocalStore({
+    userProfile: s.userProfile,
+    shareProfile: s.shareProfile,
+    useNameAsIdentity: s.useNameAsIdentity,
+    welcomeSeen: s.welcomeSeen,
+  })
+}
+
+// Called once on app start, after localStorage has rehydrated. Restores anything the
+// local state is missing, then keeps the backup in sync.
+export async function restoreProfileFromBackup(): Promise<void> {
+  let backup: Awaited<ReturnType<typeof readLocalStore>> = {}
+  try { backup = await readLocalStore() } catch { backup = {} }
+
+  const cur = useSettingsStore.getState()
+  const patch: Partial<SettingsState> = mergeProfileBackup(cur, backup)
+
+  patch.profileRestored = true
+  useSettingsStore.setState(patch)
+  mirrorProfile(useSettingsStore.getState())
+
+  if (!_profileBackupWired) {
+    _profileBackupWired = true
+    useSettingsStore.subscribe((s, prev) => {
+      if (s.userProfile !== prev.userProfile
+        || s.shareProfile !== prev.shareProfile
+        || s.useNameAsIdentity !== prev.useNameAsIdentity
+        || s.welcomeSeen !== prev.welcomeSeen) mirrorProfile(s)
+    })
+  }
+}
