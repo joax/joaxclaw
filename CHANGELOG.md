@@ -5,6 +5,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.23.2] - 2026-09-03
+
+### Fixed
+
+- **The welcome no longer asks who you are every time you open the app.** Your "About You" profile and the fact you had answered the first-run welcome were kept only in `localStorage`, which is not durable in an Electron renderer — the same weakness that lost a set of saved gateway connections once, and why those are already mirrored to `~/.joaxclaw/store.json`. The profile now gets the same durable backup. It also fixes a second cause with no corruption involved: the packaged app (`file://`) and a local dev build (`http://localhost:5173`) are separate `localStorage` origins, so a profile entered in one was invisible to the other. Your local answer always wins over the backup, and "already answered" is one-way — a stale backup can never make the welcome reappear. Existing installs are asked once more, since a wiped `localStorage` has nothing to restore from; that answer is what seeds the backup.
+
+---
+
 ## [0.23.1] - 2026-09-03
 
 ### Fixed
