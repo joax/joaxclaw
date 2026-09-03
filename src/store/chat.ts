@@ -4,6 +4,9 @@ import type { Conversation, ChatMessage, ContextOverflowInfo, ToolCall, SubThrea
 import { gatewayClient } from '../lib/gateway'
 import { agentIdFromSessionKey as agentIdFromKey } from '../lib/sessionName'
 import { hasProduced } from '../lib/streamStatus'
+import { reconcileStreams } from '../lib/stuckStream'
+import { useSessionsStore } from './sessions'
+import { isSessionRunning } from '../lib/sessionRunning'
 import { useExtensionsStore } from './extensions'
 import { useConnectionStore } from './connection'
 import { useSettingsStore } from './settings'
@@ -16,6 +19,23 @@ const URL_RE = /https?:\/\/[^\s<>"')\]]+/g
 
 // Tracks active stream handlers per convId so they can be cancelled
 const activeStreams = new Map<string, { unsub: () => void; sessionKey: string }>()
+
+// convId → when the gateway first reported its session idle while a stream was still
+// open. Drives the grace period in settleStuckStreams.
+let streamIdleSince = new Map<string, number>()
+
+// Runs only while a stream is attached — which includes the stuck case this exists for.
+let settleTimer: ReturnType<typeof setInterval> | null = null
+function startSettleTicker(): void {
+  if (settleTimer) return
+  settleTimer = setInterval(() => {
+    if (activeStreams.size === 0) {
+      clearInterval(settleTimer!); settleTimer = null; streamIdleSince = new Map()
+      return
+    }
+    useChatStore.getState().settleStuckStreams()
+  }, 2000)
+}
 
 interface ChatEventPayload {
   sessionKey?: string
@@ -397,6 +417,7 @@ function attachChatStream(
     }
   })
   activeStreams.set(convId, { unsub, sessionKey })
+  startSettleTicker()
 }
 
 interface ChatState {
@@ -410,6 +431,7 @@ interface ChatState {
   setShareProfileOverride: (convId: string, value: boolean | undefined) => void
   sendMessage: (convId: string, text: string, attachments?: MediaAttachment[]) => Promise<void>
   abortStream: (convId: string) => Promise<void>
+  settleStuckStreams: () => void
   compact: (convId: string) => Promise<void>
   watchSession: (convId: string, sessionKey: string) => void
   deleteConversation: (id: string) => void
@@ -692,6 +714,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
   watchSession(convId, sessionKey) {
     if (activeStreams.has(convId)) return
 
+    // The gateway is the authority on whether there is anything to watch. A stale
+    // "running" reading (sessions.list lags the final frame by a beat) used to re-attach
+    // to a session that had already finished, and since the completed answer is not a
+    // reusable trailing turn, that appended a fresh EMPTY placeholder with streaming:true.
+    // No frame was ever coming, so it span "thinking…" until the stall timeout expired.
+    // Only refuse when the session is KNOWN to be idle: an unknown session is one whose
+    // row has not arrived yet, where attaching is still right.
+    const sess = useSessionsStore.getState().sessions.find(s => s.key === sessionKey)
+    if (sess && !isSessionRunning(sess)) return
+
     // Reuse a trailing in-flight assistant turn if there is one (e.g. thread
     // reconstruction added it for running yields on reconnect) so the live stream and the
     // reconstructed threads share one turn. Otherwise add a fresh streaming placeholder so
@@ -764,6 +796,53 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }))
     if (!sessionKey) return
     await gatewayClient.request('sessions.abort', { key: sessionKey }).catch(() => {})
+  },
+
+  // Settle turns the gateway has already finished. See lib/stuckStream for why a local
+  // stream can outlive its run and why the stall detector cannot catch this case.
+  // Unlike abortStream this never calls sessions.abort — there is nothing left to stop,
+  // and aborting would kill a run that only LOOKED idle.
+  settleStuckStreams() {
+    const sessions = useSessionsStore.getState().sessions
+    const { settle, idleSince } = reconcileStreams(
+      get().conversations.map(c => ({
+        id: c.id,
+        sessionKey: c.sessionKey || undefined,
+        streaming: c.messages.some(m => m.streaming),
+        mayBeYielding: c.messages.some(m =>
+          m.streaming && (m.threads ?? []).some(t => t.status === 'running' || t.status === 'spawning')),
+      })),
+      key => {
+        const sess = sessions.find(s => s.key === key)
+        return sess ? isSessionRunning(sess) : undefined
+      },
+      streamIdleSince,
+      Date.now(),
+    )
+    streamIdleSince = idleSince
+    if (settle.length === 0) return
+
+    for (const convId of settle) {
+      const entry = activeStreams.get(convId)
+      if (entry) { activeStreams.delete(convId); entry.unsub() }
+    }
+    set(s => ({
+      conversations: s.conversations.map(c => !settle.includes(c.id) ? c : {
+        ...c,
+        messages: c.messages.map(m => !m.streaming ? m : {
+          ...m,
+          streaming: false,
+          reasoningStreaming: false,
+          waitingForSession: undefined,
+          // A thread left mid-flight keeps its chip spinning and, via isActivelyWorking,
+          // suppresses the stall detector — settle those too.
+          threads: m.threads?.map(t =>
+            t.status === 'spawning' || t.status === 'running'
+              ? { ...t, status: 'done' as const, finishedAt: t.finishedAt ?? new Date().toISOString() }
+              : t),
+        }),
+      }),
+    }))
   },
 
   async compact(convId) {
