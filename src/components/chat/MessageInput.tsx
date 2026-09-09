@@ -9,6 +9,8 @@ import { useDraftsStore } from '../../store/drafts'
 import type { PendingAttachment } from '../../store/drafts'
 import type { MediaAttachment } from '../../lib/types'
 import { classifyKind } from '../../lib/attachments'
+import { gatewayClient } from '../../lib/gateway'
+import { attachmentRejection, overallPayloadExceeded } from '../../lib/gatewayPolicy'
 import { AttachmentCard } from './AttachmentCard'
 import { searchEmoji, activeEmojiToken, completedEmojiAt, type EmojiHit } from '../../lib/emoji'
 import { useIsNarrow } from '../../lib/useIsNarrow'
@@ -67,6 +69,7 @@ export function MessageInput({ convId }: Props) {
 
   const [sending, setSending] = useState(false)
   const [isDragOver, setIsDragOver] = useState(false)
+  const [attachError, setAttachError] = useState<string | null>(null)
   const [recording, setRecording] = useState(false)
   const [recordingMs, setRecordingMs] = useState(0)
   // `:shortcode` emoji autocomplete popup (null = closed).
@@ -150,7 +153,9 @@ export function MessageInput({ convId }: Props) {
         const blob = new Blob(recChunksRef.current, { type: mr.mimeType })
         const ext = mr.mimeType.includes('ogg') ? 'ogg' : mr.mimeType.includes('mp4') ? 'mp4' : 'webm'
         const file = new File([blob], `voice-${Date.now()}.${ext}`, { type: mr.mimeType })
-        fileToAttachment(file).then(att => setPendingAttachments(prev => [...prev, att]))
+        if (acceptFiles([file]).length > 0) {
+          fileToAttachment(file).then(att => setPendingAttachments(prev => [...prev, att]))
+        }
         setRecording(false)
         setRecordingMs(0)
         if (recTimerRef.current) { clearInterval(recTimerRef.current); recTimerRef.current = null }
@@ -269,13 +274,13 @@ export function MessageInput({ convId }: Props) {
     const fileItems = Array.from(e.clipboardData.items).filter(item => item.kind === 'file')
     if (fileItems.length === 0) return
     e.preventDefault()
-    const files = fileItems.map(i => i.getAsFile()).filter(Boolean) as File[]
+    const files = acceptFiles(fileItems.map(i => i.getAsFile()).filter(Boolean) as File[])
     const newAtts = await Promise.all(files.map(fileToAttachment))
     setPendingAttachments(prev => [...prev, ...newAtts])
   }
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files ?? [])
+    const files = acceptFiles(Array.from(e.target.files ?? []))
     e.target.value = ''
     if (files.length === 0) return
     const newAtts = await Promise.all(files.map(fileToAttachment))
@@ -286,10 +291,35 @@ export function MessageInput({ convId }: Props) {
   const handleDragLeave = () => setIsDragOver(false)
   const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault(); setIsDragOver(false)
-    const files = Array.from(e.dataTransfer.files)
+    const files = acceptFiles(Array.from(e.dataTransfer.files))
     if (files.length === 0) return
     const newAtts = await Promise.all(files.map(fileToAttachment))
     setPendingAttachments(prev => [...prev, ...newAtts])
+  }
+
+
+  // Check files against the ceilings this gateway advertised in hello-ok, BEFORE
+  // encoding and sending them. Previously an oversized attachment was discovered by the
+  // gateway rejecting the whole send — after the upload, with a protocol error rather
+  // than a sentence about the file.
+  const acceptFiles = (files: File[]): File[] => {
+    const policy = gatewayClient.attachmentPolicy
+    const rejected: string[] = []
+    const accepted = files.filter(f => {
+      const why = attachmentRejection({ size: f.size, type: f.type, name: f.name }, policy)
+      if (why) rejected.push(why)
+      return !why
+    })
+    // Each file can be within its own cap while the encoded batch still overflows the
+    // frame: base64 costs about 4 bytes per 3.
+    const sizes = [...pendingAttachments.map(a => a.size ?? 0), ...accepted.map(f => f.size)]
+    if (accepted.length > 0 && overallPayloadExceeded(sizes, gatewayClient.maxPayload)) {
+      rejected.push('Those attachments are too large to send together — remove one and try again.')
+      setAttachError(rejected.join(' '))
+      return []
+    }
+    setAttachError(rejected.join(' ') || null)
+    return accepted
   }
 
   const removeAttachment = (id: string) => setPendingAttachments(prev => prev.filter(a => a.id !== id))
@@ -377,6 +407,15 @@ export function MessageInput({ convId }: Props) {
       <input ref={fileInputRef} type="file" multiple style={{ display: 'none' }} onChange={handleFileChange} />
 
       {/* Attachment previews */}
+      {attachError && (
+        <div
+          className="text-xs px-2 py-1.5 mb-1.5 rounded flex items-start gap-2"
+          style={{ background: 'color-mix(in srgb, var(--danger) 10%, transparent)', color: 'var(--danger)' }}
+        >
+          <span style={{ flex: 1 }}>{attachError}</span>
+          <button onClick={() => setAttachError(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'inherit', lineHeight: 1 }}>×</button>
+        </div>
+      )}
       {pendingAttachments.length > 0 && (
         <div className="flex flex-wrap gap-2 mb-2">
           {pendingAttachments.map(att => (

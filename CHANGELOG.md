@@ -7,6 +7,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **The app now listens to what the gateway says about itself.** Every connection answers the handshake with a description of that exact gateway — the methods it implements, the attachment sizes it accepts, the frame it can hold — and all of it was thrown away. Six consequences, now fixed. Method support was learned by **calling a method and pattern-matching the rejection**, so every unsupported RPC cost a wasted request and an error in your gateway's log on each fresh connection; the advertised list is consulted first, while still treating "not advertised" as *try it*, because the gateway documents that list as deliberately incomplete. An oversized **attachment** was discovered by the gateway refusing the whole send; the composer now says which file is too big and what the limit is before anything is uploaded, including the case where each file fits but the base64-encoded batch overflows the frame. A **scope refusal** was read by matching a message the gateway calls changeable, rather than the structured details naming the exact missing scope. A **failed run** threw away `errorDetail` — the provider, model, HTTP status and a redacted reason — and showed a guess about watchdogs instead. A gateway **still finishing startup** answers "not yet, retry"; that was treated as a terminal authentication failure. And the session list took **two round-trips** where `sessions.subscribe` returns the subscription and the first page together.
+
+---
+
+## [Unreleased]
+
 ### Added
 
 - **Devices show whether they're actually online.** The gateway has always reported `connected`, `lastSeenAtMs` and `lastSeenReason` for every paired device, and the Devices panel rendered none of them — a phone connected right now looked identical to one last seen in April, since the only timestamp shown was when it was first paired. Each device now carries a live dot and reads *online* or *seen 3h*, with the exact time and the reason it was last seen (signed in, woken by a push, a background refresh) on hover. Devices can also be **renamed**, so a list of `openclaw-control-ui` and `ios-node` entries can become "my phone" and "work laptop"; the name is stored on the gateway against the stable device id, so it follows the device.
