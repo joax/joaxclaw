@@ -10,6 +10,7 @@ import { applyTheme } from './lib/theme'
 import { useSettingsStore } from './store/settings'
 import { installBrowserApi } from './lib/mobile/browserApi'
 import { isElectron } from './lib/platform'
+import { pushUrlToNavigate } from './lib/webPush'
 
 // In a plain browser (PWA / mobile companion) there's no Electron preload, so provide
 // a `window.api` shim: a real WebSocket for the gateway + a WebCrypto device identity,
@@ -27,9 +28,12 @@ if (!isElectron() && 'serviceWorker' in navigator) {
   // A tapped notification posts here from the SW; re-dispatch as a window event the
   // app listens for to route to the right chat/view.
   navigator.serviceWorker.addEventListener('message', (e) => {
-    if (e.data?.type === 'joax-navigate' && e.data.navigate) {
-      window.dispatchEvent(new CustomEvent('joax:navigate', { detail: e.data.navigate }))
-    }
+    if (e.data?.type !== 'joax-navigate') return
+    // Tier 1 notifications carry `navigate` directly; a gateway push carries `url` (a
+    // Control UI path) which pushUrlToNavigate maps onto one of our sections, or
+    // declines — in which case the tap has already focused the app, which is enough.
+    const nav = e.data.navigate ?? pushUrlToNavigate(e.data.url)
+    if (nav) window.dispatchEvent(new CustomEvent('joax:navigate', { detail: nav }))
   })
 }
 
