@@ -1,12 +1,12 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { X, Plus, Trash2, FileText, Pencil, Loader2, AlertCircle, Check, Save } from 'lucide-react'
+import { X, Plus, FileText, Pencil, Loader2, AlertCircle, Check, Save } from 'lucide-react'
 import Editor from '@monaco-editor/react'
 import type { Agent, AgentFile } from '../../lib/types'
 import { useAgentsStore } from '../../store/agents'
+import { creatableAgentFiles } from '../../lib/agentFiles'
 import { useIsNarrow } from '../../lib/useIsNarrow'
 import { editorDrawerStyle } from '../../lib/mobilePanel'
 import { Btn } from '../ui/Btn'
-import { Input } from '../ui/Input'
 import { ModelPicker } from '../ui/ModelPicker'
 
 interface Props { agent: Agent; onClose: () => void }
@@ -14,7 +14,7 @@ interface Props { agent: Agent; onClose: () => void }
 type Tab = 'model' | 'subagents' | 'files'
 
 export function AgentEditor({ agent, onClose }: Props) {
-  const { agents, update, listFiles, readFile, writeFile, deleteFile } = useAgentsStore()
+  const { agents, update, listFiles, readFile, writeFile } = useAgentsStore()
   const narrow = useIsNarrow()
   const [tab, setTab] = useState<Tab>('model')
 
@@ -35,9 +35,8 @@ export function AgentEditor({ agent, onClose }: Props) {
   const [files, setFiles] = useState<AgentFile[]>([])
   const [loadingFiles, setLoadingFiles] = useState(false)
   const [filesError, setFilesError] = useState<string | null>(null)
-  const [newFilename, setNewFilename] = useState('')
   const [showNewFile, setShowNewFile] = useState(false)
-  const [confirmDeleteFile, setConfirmDeleteFile] = useState<string | null>(null)
+  const [createError, setCreateError] = useState<string | null>(null)
 
   // Full-screen file editor state
   const [fileEditorOpen, setFileEditorOpen] = useState(false)
@@ -50,6 +49,7 @@ export function AgentEditor({ agent, onClose }: Props) {
   const [fileSaved, setFileSaved] = useState(false)
 
   const otherAgents = agents.filter(a => a.id !== agent.id)
+  const missingFiles = creatableAgentFiles(files.map(f => f.filename))
   const isDirty = fileContent !== originalContent
 
   useEffect(() => {
@@ -117,25 +117,16 @@ export function AgentEditor({ agent, onClose }: Props) {
     }
   }, [editingFilename, fileContent, savingFile, agent.id, writeFile])
 
-  async function handleDeleteFile(filename: string) {
-    if (confirmDeleteFile !== filename) { setConfirmDeleteFile(filename); return }
-    try {
-      await deleteFile(agent.id, filename)
-      setFiles(f => f.filter(x => x.filename !== filename))
-    } catch { /* ignore */ }
-    setConfirmDeleteFile(null)
-  }
-
-  async function handleCreateFile() {
-    const name = newFilename.trim()
-    if (!name) return
-    const filename = name.endsWith('.md') ? name : name + '.md'
+  async function handleCreateFile(filename: string) {
+    setCreateError(null)
     try {
       await writeFile(agent.id, filename, '')
-      setFiles(f => [...f, { filename }])
-      setNewFilename(''); setShowNewFile(false)
+      setFiles(f => [...f, { filename, size: 0 }])
+      setShowNewFile(false)
       handleOpenFile(filename)
-    } catch { /* ignore */ }
+    } catch (e) {
+      setCreateError(String(e))
+    }
   }
 
   const agentDisplayName = (a: Agent) => a.identity?.name ?? a.name ?? a.id
@@ -251,23 +242,28 @@ export function AgentEditor({ agent, onClose }: Props) {
           {tab === 'files' && (
             <div className="p-5">
               <div className="flex items-center justify-between mb-3">
-                <p className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>MD FILES</p>
-                <Btn size="sm" variant="outline" icon={<Plus size={12} />} onClick={() => setShowNewFile(s => !s)}>
-                  New file
+                <p className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>CORE FILES</p>
+                <Btn size="sm" variant="outline" icon={<Plus size={12} />} disabled={missingFiles.length === 0}
+                  onClick={() => setShowNewFile(s => !s)}>
+                  Add file
                 </Btn>
               </div>
 
-              {showNewFile && (
-                <div className="flex items-center gap-2 mb-3">
-                  <Input value={newFilename} onChange={setNewFilename} placeholder="filename.md" autoFocus
-                    onKeyDown={e => { if (e.key === 'Enter') handleCreateFile(); if (e.key === 'Escape') setShowNewFile(false) }}
-                    style={{ fontSize: 13 }} />
-                  <Btn size="sm" onClick={handleCreateFile}>Create</Btn>
+              {/* The gateway accepts six fixed names and no others, so this is a picker
+                  of the ones this agent is missing rather than a filename box. */}
+              {showNewFile && missingFiles.length > 0 && (
+                <div className="flex flex-wrap items-center gap-2 mb-3">
+                  {missingFiles.map(name => (
+                    <Btn key={name} size="sm" variant="outline" onClick={() => handleCreateFile(name)}>
+                      {name}
+                    </Btn>
+                  ))}
                   <button onClick={() => setShowNewFile(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)' }}>
                     <X size={14} />
                   </button>
                 </div>
               )}
+              {createError && <ErrorBox message={createError} />}
 
               {loadingFiles && (
                 <div className="flex items-center gap-2 py-3 text-sm" style={{ color: 'var(--text-secondary)' }}>
@@ -294,22 +290,11 @@ export function AgentEditor({ agent, onClose }: Props) {
                         {f.size < 1024 ? `${f.size}B` : `${(f.size / 1024).toFixed(1)}KB`}
                       </span>
                     )}
-                    {confirmDeleteFile === f.filename ? (
-                      <>
-                        <Btn size="sm" variant="danger" onClick={() => handleDeleteFile(f.filename)}>Delete</Btn>
-                        <Btn size="sm" variant="outline" onClick={() => setConfirmDeleteFile(null)}>Cancel</Btn>
-                      </>
-                    ) : (
-                      <>
-                        <Btn size="sm" variant="outline" icon={<Pencil size={11} />} onClick={() => handleOpenFile(f.filename)}>
-                          Edit
-                        </Btn>
-                        <button onClick={() => handleDeleteFile(f.filename)}
-                          style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--danger)', padding: 4 }}>
-                          <Trash2 size={12} />
-                        </button>
-                      </>
-                    )}
+                    {/* No delete: the gateway exposes list/get/set for these files and
+                        nothing else, so there is no way to remove one from here. */}
+                    <Btn size="sm" variant="outline" icon={<Pencil size={11} />} onClick={() => handleOpenFile(f.filename)}>
+                      Edit
+                    </Btn>
                   </div>
                 ))}
               </div>

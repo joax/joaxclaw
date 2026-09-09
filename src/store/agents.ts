@@ -122,7 +122,6 @@ interface AgentsState {
   listFiles: (agentId: string) => Promise<AgentFile[]>
   readFile: (agentId: string, filename: string) => Promise<string>
   writeFile: (agentId: string, filename: string, content: string) => Promise<void>
-  deleteFile: (agentId: string, filename: string) => Promise<void>
   readRelationship: (fromId: string, toId: string) => Promise<string>
   writeRelationship: (fromId: string, toId: string, instructions: string) => Promise<void>
 }
@@ -237,12 +236,12 @@ export const useAgentsStore = create<AgentsState>((set) => ({
     return String(content)
   },
 
+  // Creates as well as updates — `set` writes whatever name it's given, provided the
+  // name is one of the gateway's six core workspace files (see lib/agentFiles.ts).
+  // Anything else comes back as `unsupported file "<name>"`, so callers must pick from
+  // that list rather than accept a filename from the user.
   async writeFile(agentId, filename, content) {
     await gatewayClient.request('agents.files.set', { agentId, name: filename, content })
-  },
-
-  async deleteFile(agentId, filename) {
-    await gatewayClient.request('agents.files.delete', { agentId, name: filename })
   },
 
   async readRelationship(fromId, toId) {
