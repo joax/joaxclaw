@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { nanoid } from '../lib/nanoid'
 import type { Conversation, ChatMessage, ContextOverflowInfo, ToolCall, SubThread, MediaAttachment, ThinkingLevel } from '../lib/types'
 import { gatewayClient } from '../lib/gateway'
+import { describeRunFailure } from '../lib/gatewayPolicy'
 import { agentIdFromSessionKey as agentIdFromKey } from '../lib/sessionName'
 import { hasProduced } from '../lib/streamStatus'
 import { reconcileStreams } from '../lib/stuckStream'
@@ -387,10 +388,18 @@ function attachChatStream(
       // when it has no error object to hand — most often the LLM idle watchdog killing a slow
       // local model. "Unknown error" left nowhere to go, so name the likely cause and where
       // the real message lives.
-      const errText = (p.errorMessage ?? extractText(p.message))
+      // Protocol v4 adds `errorDetail` on a failed run — the provider, model, HTTP
+      // status and a credential-redacted preview, taken from the failed attempt's own
+      // sanitized observation. It is exactly the "which provider, and why" the generic
+      // message below had to guess at, so prefer it and append it when both exist.
+      const detail = describeRunFailure(p)
+      const base = (p.errorMessage ?? extractText(p.message))
         || (p.state === 'incomplete'
           ? 'Incomplete turn — the agent stopped without producing a response'
-          : 'The run ended with an error and the gateway sent no detail — often the model-silence watchdog on a slow local model. Check the gateway log for the reason.')
+          : detail
+            ? 'The run failed.'
+            : 'The run ended with an error and the gateway sent no detail — often the model-silence watchdog on a slow local model. Check the gateway log for the reason.')
+      const errText = detail ? `${base} (${detail})` : base
       if (handleInitConflict(errText)) return
       update(m => ({
         ...m,

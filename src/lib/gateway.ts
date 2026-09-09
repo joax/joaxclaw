@@ -1,4 +1,5 @@
 import type { GwResFrame } from './types'
+import { advertisesMethod, connectRetryDelayMs, hasCapability, readMissingScope, type AttachmentPolicy, type GatewayFeatures, type GatewayPolicy } from './gatewayPolicy'
 import { useSettingsStore } from '../store/settings'
 import { chatIdentityName } from './userProfile'
 
@@ -63,6 +64,8 @@ interface StoredDeviceToken { token: string; scopes: string[]; issuedAtMs?: numb
 // The connect response (`hello-ok`) auth block — carries the granted scopes and the
 // per-role device token(s) the gateway issues to a paired device.
 interface HelloOk {
+  features?: GatewayFeatures
+  policy?: GatewayPolicy
   auth?: {
     scopes?: string[]
     role?: string
@@ -111,12 +114,21 @@ export class GatewayClient {
   // Guards the one-shot clear-and-retry when a cached device token is stale, so a
   // persistently rejected token can't loop. Reset on each fresh connect().
   private _deviceTokenRetried = false
+  // One-shot guard for the "gateway still booting" retry, so a gateway that never
+  // finishes starting can't spin here. Reset on each fresh connect().
+  private _startupRetried = false
   // Methods this gateway answered with "unknown method" — older gateways don't
   // implement every RPC the client knows (e.g. plugins.list). We skip re-sending a
   // doomed request each fetch, which also stops the host logging an INVALID_REQUEST
   // every time. Cleared on each new handshake so a re-connected/upgraded gateway is
   // re-probed.
   private unsupportedMethods = new Set<string>()
+  // What this gateway said about itself in hello-ok. Previously discarded, so method
+  // support was learned by calling a method and reading the rejection — one wasted
+  // request and one INVALID_REQUEST in the host's log per unsupported method, per
+  // connection. Cleared and re-read on each handshake.
+  private features: GatewayFeatures | undefined
+  private policy: GatewayPolicy | undefined
 
   private _unsubMessage: (() => void) | null = null
   private _unsubStatus: (() => void) | null = null
@@ -155,6 +167,7 @@ export class GatewayClient {
     this._scopeTier = 0
     this._negotiating = false
     this._deviceTokenRetried = false
+    this._startupRetried = false
     this._open()
   }
 
@@ -322,6 +335,10 @@ export class GatewayClient {
     this._addLog('info', `Sending connect request… (scope request: [${scopes.join(', ')}]${device ? `, device ${device.id.slice(0, 8)}…` : ', no device identity'}${deviceToken ? ', device-token' : ''})`)
     this.request<HelloOk>('connect', params as Record<string, unknown>).then((res) => {
       this.grantedScopes = Array.isArray(res?.auth?.scopes) ? res.auth!.scopes! : []
+      this.features = res?.features
+      this.policy = res?.policy
+      const advertised = res?.features?.methods?.length ?? 0
+      if (advertised) this._addLog('info', `Gateway advertises ${advertised} methods${res?.policy?.attachments?.maxBytes ? `, attachments up to ${Math.round(res.policy.attachments.maxBytes / 1048576)}MB` : ''}.`)
 
       // Cache any device tokens the gateway issued (one for the connected role, plus
       // extras for other roles). Resent on the next connect as auth.deviceToken so a
@@ -358,6 +375,14 @@ export class GatewayClient {
       this.onStatusChange?.('connected')
     }).catch((err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err)
+      const structured = (err as { gatewayError?: unknown })?.gatewayError
+      const retryIn = connectRetryDelayMs(structured)
+      if (retryIn !== null && !this._startupRetried) {
+        this._startupRetried = true
+        this._addLog('info', `Gateway is still starting up — retrying in ${retryIn}ms.`)
+        setTimeout(() => { if (!this._connected) this._renegotiate() }, retryIn)
+        return
+      }
       // A cached device token went stale (gateway rotated/restarted): clear it and
       // reconnect once, which re-authenticates with the shared token + signature and
       // gets a fresh device token issued. Guarded so we don't loop.
@@ -422,6 +447,13 @@ export class GatewayClient {
     if (this.unsupportedMethods.has(method)) {
       throw new Error(`unknown method: ${method}`)
     }
+    // The advertised list is documented as conservative — some real methods are
+    // deliberately excluded from it — so only an explicit `false` short-circuits.
+    // `undefined` means "not advertised either way", and we still try.
+    if (advertisesMethod(this.features, method) === false) {
+      this.unsupportedMethods.add(method)
+      throw new Error(`unknown method: ${method}`)
+    }
     const id = nextId()
     const frame = { type: 'req', id, method, params }
     const json = JSON.stringify(frame)
@@ -435,7 +467,11 @@ export class GatewayClient {
           if (res.ok) resolve(res.payload as T)
           else {
             if (isUnknownMethodError(res.error)) this.unsupportedMethods.add(method)
-            reject(new Error(JSON.stringify(res.error)))
+            const scope = readMissingScope(res.error)
+            if (scope?.missingScope) {
+              this._addLog('info', `${method} needs ${scope.missingScope}${scope.requiredScopes?.length ? ` (accepts: ${scope.requiredScopes.join(', ')})` : ''} — this token doesn't have it.`)
+            }
+            reject(Object.assign(new Error(JSON.stringify(res.error)), { gatewayError: res.error }))
           }
         },
         reject
@@ -465,6 +501,21 @@ export class GatewayClient {
   on(listener: Listener): () => void {
     this.listeners.push(listener)
     return () => { this.listeners = this.listeners.filter(l => l !== listener) }
+  }
+
+  /** Per-attachment ceilings this gateway advertised, if any. */
+  get attachmentPolicy(): AttachmentPolicy | undefined {
+    return this.policy?.attachments
+  }
+
+  /** Largest frame this gateway accepts; attachments travel base64-encoded inside it. */
+  get maxPayload(): number | undefined {
+    return this.policy?.maxPayload
+  }
+
+  /** An additive wire contract this gateway supports. */
+  supports(capability: string): boolean {
+    return hasCapability(this.features, capability)
   }
 
   get connected(): boolean {
