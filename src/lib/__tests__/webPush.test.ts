@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { vapidKeyToBytes, pushUrlToNavigate, defaultPushPrefs } from '../webPush'
+import { vapidKeyToBytes, pushUrlToNavigate, defaultPushPrefs, PUSH_CATEGORIES } from '../webPush'
 
 // The VAPID key arrives base64url and `PushManager.subscribe` wants raw bytes. Getting
 // the alphabet or the padding wrong produces a subscription the push service rejects
@@ -36,10 +36,16 @@ describe('pushUrlToNavigate', () => {
     expect(pushUrlToNavigate('https://gw.example.com/ui/automations')).toEqual({ section: 'crons' })
   })
 
+  it('routes an agent question to the chat, where the dock renders it', () => {
+    expect(pushUrlToNavigate('ask/q1')).toEqual({ section: 'chat' })
+    expect(pushUrlToNavigate('https://gw.example.com/ui/ask/q1')).toEqual({ section: 'chat' })
+  })
+
   it('declines paths this app has no view for, so the tap just focuses the app', () => {
-    // Approvals and questions land here until their views exist (Phase 2 / Phase 1).
+    // Approvals land here until that view exists (Phase 2).
     expect(pushUrlToNavigate('approve/abc123')).toBeUndefined()
-    expect(pushUrlToNavigate('ask/q1')).toBeUndefined()
+    // `ask` with no id is not a question link.
+    expect(pushUrlToNavigate('ask')).toBeUndefined()
   })
 
   it('declines a missing or unusable url', () => {
@@ -56,9 +62,21 @@ describe('defaultPushPrefs', () => {
     expect(categories.agentFinished).toBe(true)
     expect(categories.scheduledTaskFailed).toBe(true)
     expect(categories.backgroundTaskFailed).toBe(true)
-    // No approvals or questions UI yet — the gateway would push into a dead end.
+    // Answerable now that the question dock exists.
+    expect(categories.agentQuestion).toBe(true)
+    // No approvals view yet — the gateway would push into a dead end.
     expect(categories.approvalRequested).toBe(false)
-    expect(categories.agentQuestion).toBe(false)
+    expect(categories.humanMentioned).toBe(false)
+  })
+
+  it('offers every enabled category as a toggle', () => {
+    // A category enabled by default but missing from PUSH_CATEGORIES would be
+    // undisableable from the UI.
+    const { categories } = defaultPushPrefs()
+    const offered = new Set(PUSH_CATEGORIES.map(c => c.key as string))
+    for (const [key, on] of Object.entries(categories)) {
+      if (on) expect(offered.has(key)).toBe(true)
+    }
   })
 
   it('sends every category the closed schema requires', () => {
