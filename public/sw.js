@@ -29,35 +29,50 @@ self.addEventListener('activate', (event) => {
 // where to route. The client re-dispatches this as a `joax:navigate` window event.
 self.addEventListener('notificationclick', (event) => {
   event.notification.close()
-  const nav = event.notification.data && event.notification.data.navigate
+  const data = event.notification.data || {}
+  // `navigate` comes from a Tier 1 notification this app raised itself; `url` comes from
+  // a gateway push and is a Control UI path we translate app-side (lib/webPush.ts), so
+  // the mapping stays in one tested place rather than being duplicated here.
+  const msg = { type: 'joax-navigate', navigate: data.navigate, url: data.url }
+  const routable = data.navigate || data.url
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
       for (const c of list) {
         if ('focus' in c) {
           c.focus()
-          if (nav) c.postMessage({ type: 'joax-navigate', navigate: nav })
+          if (routable) c.postMessage(msg)
           return
         }
       }
       return self.clients.openWindow('./').then((c) => {
-        if (c && nav) c.postMessage({ type: 'joax-navigate', navigate: nav })
+        if (c && routable) c.postMessage(msg)
       })
     })
   )
 })
 
-// Tier 2 (true background push) placeholder — inert until the gateway sends Web Push.
+// Tier 2: true background push from the gateway, which wakes this worker even with the
+// app fully closed. OpenClaw sends `{ title, body, tag, url?, renotify }` — `url` is its
+// own Control UI path and is absent for categories with nothing to select (a finished
+// agent run, a failed background task). `navigate` is accepted too so a payload this app
+// generates itself keeps working.
+//
+// `userVisibleOnly: true` was promised at subscribe time, so every push MUST show a
+// notification; bailing out silently is what gets a subscription revoked by the browser.
 self.addEventListener('push', (event) => {
   let payload = {}
   try { payload = event.data ? event.data.json() : {} } catch { /* ignore */ }
-  if (!payload || !payload.title) return
+  const title = (payload && payload.title) || 'JoaxClaw'
   event.waitUntil(
-    self.registration.showNotification(payload.title, {
+    self.registration.showNotification(title, {
       body: payload.body,
       tag: payload.tag,
       icon: './icons/icon-192.png',
       badge: './icons/icon-192.png',
-      data: { navigate: payload.navigate },
+      data: { navigate: payload.navigate, url: payload.url },
+      // The gateway sets renotify:false on a replacement (e.g. an approval going
+      // terminal) so a re-tagged alert doesn't buzz the phone a second time.
+      ...(payload.tag ? { renotify: payload.renotify !== false } : {}),
     })
   )
 })
