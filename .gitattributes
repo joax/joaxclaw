@@ -3,7 +3,10 @@
 # The resolution is always "keep both bullets", which is exactly what a union merge does.
 CHANGELOG.md merge=union
 
-# CHECK THE SECTION BEFORE CUTTING A RELEASE. Union keeps both sides of a hunk without
+# Guarded by src/lib/__tests__/changelogShape.test.ts, which runs in the pre-commit hook
+# — because the note below asked people to check and that was not enough, twice.
+#
+# Union keeps both sides of a hunk without
 # understanding structure, so when two branches each CREATE the "## [Unreleased]" header
 # — rather than adding to an existing one — it keeps both, and the changelog ends up with
 # two Unreleased sections. That happened between 0.24.0 and 0.24.1 and would have shipped

@@ -11,15 +11,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - **Find and update skills without leaving the app.** Extensions could list the skills already configured and switch them on, and the app installs its own bundled ones — but discovering somebody else's skill, or refreshing one already installed, meant a shell. **Browse** now searches ClawHub from the Skills tab and installs from the results, showing each one's publisher, whether it's official, its summary and install count. **Update installed** refreshes everything tracked from ClawHub in one go. That last one has a trap the gateway is careful about and so is this: a skill whose files you've edited since installing is *refused* rather than quietly overwritten, and the app names those skills and asks, rather than retrying with force behind your back. There is a subtler trap in installing, too. A search result carries both a `slug` and a publisher-qualified `installRef`, and several publishers can share one slug — so installing anything by its bare slug risks fetching a different author's skill under the name you searched for. Only the qualified reference is ever sent, and it's the one shown on each row. Finally, a result whose name clashes with one of JoaxClaw's own skills — `ask-user`, `script-runner`, `teams-blueprint`, `process-builder` — is flagged rather than offered, because every skill installs to the same place regardless of who published it: installing it would replace the app's copy, and the app would replace it back on the next connect. Nothing on ClawHub uses those names today; this is so it stays uneventful if something ever does.
 
----
-
-## [Unreleased]
-
-### Added
-
 - **Install plugins without leaving the app.** The Extensions page could list plugins and switch them on, and that was all — "Add plugin" registers a config entry for something already on disk, so actually getting a plugin onto your gateway meant a shell. **Browse** now searches ClawHub and installs from the results, showing each package's provenance (official, community or private), its summary, version and download count. Installing surfaces the gateway's consent step rather than skipping past it: a plugin declares what it will register — messaging channels, agent tools, MCP servers, CLI commands, and any config flags its own manifest marks dangerous — and the gateway refuses until that has been acknowledged. The app shows you the list and asks; the token that records your agreement is only ever sent after you have seen what it covers. If a plugin you already approved has grown its reach since, the prompt says so and shows **only what is new**, which is the case the mechanism exists for.
 
 ---
+
 
 ## [0.24.1] - 2026-09-09
 
