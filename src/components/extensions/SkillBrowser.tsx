@@ -1,7 +1,7 @@
 import { useState } from 'react'
-import { Search, Download, Loader2, X, CheckCircle2, RefreshCw, AlertTriangle } from 'lucide-react'
+import { Search, Download, Loader2, X, CheckCircle2, RefreshCw, AlertTriangle, ShieldAlert } from 'lucide-react'
 import { useSkillCatalogStore } from '../../store/skillCatalog'
-import { isInstallable, skillTrustLabel } from '../../lib/skillCatalog'
+import { isInstallable, isManagedSkill, skillTrustLabel } from '../../lib/skillCatalog'
 import { Btn } from '../ui/Btn'
 
 // Find and install skills from ClawHub, and refresh the ones already installed.
@@ -94,6 +94,11 @@ export function SkillBrowser({ onClose, installedSlugs }: { onClose: () => void;
           {results.map(r => {
             const already = installedSlugs.has(r.slug) || installed.includes(r.installRef)
             const canInstall = isInstallable(r)
+            // Every skill installs to ~/.openclaw/skills/<slug>/ regardless of publisher,
+            // so a result sharing a slug with one JoaxClaw manages would overwrite it —
+            // and the app would overwrite it back on the next connect. Say so rather than
+            // offering the install as if it were ordinary.
+            const collides = isManagedSkill(r.slug)
             return (
               <div key={r.installRef} className="flex items-start gap-3 px-3 py-2" style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius)', background: 'var(--bg-elevated)' }}>
                 <div style={{ minWidth: 0, flex: 1 }}>
@@ -117,7 +122,12 @@ export function SkillBrowser({ onClose, installedSlugs }: { onClose: () => void;
                     {r.installRef}{typeof r.downloads === 'number' ? ` · ${r.downloads.toLocaleString()} installs` : ''}
                   </div>
                 </div>
-                {already ? (
+                {collides ? (
+                  <span className="flex items-center gap-1 text-xs shrink-0" style={{ color: 'var(--danger)' }}
+                    title={`JoaxClaw installs and maintains a skill called “${r.slug}”. Installing this one would replace it, and the app would restore its own on the next connect.`}>
+                    <ShieldAlert size={12} /> Name clash
+                  </span>
+                ) : already ? (
                   <span className="flex items-center gap-1 text-xs shrink-0" style={{ color: 'var(--accent)' }}>
                     <CheckCircle2 size={12} /> Installed
                   </span>
