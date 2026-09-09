@@ -32,6 +32,7 @@ import { useChatStore } from './store/chat'
 import { isElectron } from './lib/platform'
 import { useUpdaterStore } from './store/updater'
 import { useConnectionStore, restoreConnectionsFromBackup } from './store/connection'
+import { useQuestionsStore } from './store/questions'
 import { useMetricsStore } from './store/metrics'
 import { useSettingsStore, ZOOM_STEP, restoreProfileFromBackup } from './store/settings'
 import { useExtensionsStore } from './store/extensions'
@@ -116,6 +117,10 @@ export default function App() {
       // running counts are accurate regardless of which tab is open.
       useSessionsStore.getState().fetch()
       useTeamsStore.getState().load()
+      // Questions the gateway is holding open. Loaded here rather than in ChatView so a
+      // question asked while the app was closed is already in hand when the chat opens,
+      // and so the question.* broadcasts are subscribed for the whole session.
+      useQuestionsStore.getState().start()
     }
   }, [status])
 
