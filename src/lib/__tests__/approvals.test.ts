@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
-  APPROVAL_LIST_METHODS, decisionLabel, decisionsFor, isApprovalPending,
+  APPROVAL_LIST_METHODS, approvalGetParams, approvalResolveParams,
+  decisionLabel, decisionsFor, isApprovalPending,
   parseApprovalEvent, sortApprovals, summarize,
   type ExecPresentation, type PendingApproval, type PluginPresentation,
 } from '../approvals'
@@ -116,5 +117,22 @@ describe('decisionLabel', () => {
     expect(decisionLabel('allow-once')).toBe('Allow once')
     expect(decisionLabel('allow-always')).toBe('Always allow')
     expect(decisionLabel('deny')).toBe('Deny')
+  })
+})
+
+// Both methods take an id, and only one of them takes the kind. Sending `kind` to
+// approval.get is a hard INVALID_REQUEST against its closed schema — and because the
+// hydrate step swallows failures, the symptom was silent: no approval ever rendered.
+// Verified against a live 2026.9.3 gateway, which answers "invalid approval.get params"
+// for { id, kind } and "approval not found" for { id }.
+describe('request params', () => {
+  it('approval.get takes the id alone', () => {
+    expect(approvalGetParams('abc')).toEqual({ id: 'abc' })
+    expect(Object.keys(approvalGetParams('abc'))).toEqual(['id'])
+  })
+
+  it('approval.resolve takes the kind as well', () => {
+    expect(approvalResolveParams('abc', 'exec', 'allow-once'))
+      .toEqual({ id: 'abc', kind: 'exec', decision: 'allow-once' })
   })
 })
