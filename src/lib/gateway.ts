@@ -17,7 +17,11 @@ export interface ConnLog {
 // Connection log panel as "withheld").
 export const REQUESTED_OPERATOR_SCOPES = [
   'operator.admin', 'operator.read', 'operator.write',
-  'operator.approvals', 'operator.pairing', 'operator.talk.secrets'
+  'operator.approvals', 'operator.pairing', 'operator.talk.secrets',
+  // question.* (list/get/resolve). NOT implied by operator.write — unlike
+  // operator.talk, which write does satisfy — so without asking for it every
+  // question RPC comes back FORBIDDEN and the cards never appear.
+  'operator.questions'
 ] as const
 
 // The scopes without which the app is fundamentally broken (nearly every RPC needs
@@ -36,7 +40,7 @@ export const CRITICAL_OPERATOR_SCOPES = ['operator.read', 'operator.write'] as c
 // operator.read (the floor the app needs to be usable at all).
 const SCOPE_NEGOTIATION_TIERS: string[][] = [
   [...REQUESTED_OPERATOR_SCOPES],                              // full (admin + everything)
-  ['operator.read', 'operator.write', 'operator.approvals'],  // operator without admin/pairing/talk
+  ['operator.read', 'operator.write', 'operator.approvals', 'operator.questions'],  // operator without admin/pairing/talk
   ['operator.read', 'operator.write'],                        // read + write
   ['operator.read'],                                          // read-only token
 ]
