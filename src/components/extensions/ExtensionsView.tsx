@@ -8,6 +8,7 @@ import { useSkillsStore } from '../../store/skills'
 import { useHelpStore } from '../../store/help'
 import { Btn } from '../ui/Btn'
 import { PluginBrowser } from './PluginBrowser'
+import { SkillBrowser } from './SkillBrowser'
 import { Input } from '../ui/Input'
 import { PluginConfigModal } from './PluginConfigModal'
 import { usePluginUpdateStore } from '../../store/pluginUpdate'
@@ -195,11 +196,9 @@ export function ExtensionsView({ onOpenChat }: { onOpenChat?: () => void }) {
               style={{ padding: '5px 10px 5px 28px', fontSize: 12, borderRadius: 'var(--radius)', border: '1px solid var(--border)', background: 'var(--bg-elevated)', color: 'var(--text-primary)', outline: 'none', width: 180 }}
             />
           </div>
-          {tab === 'plugins' && (
-            <Btn variant="outline" size="sm" icon={<Download size={13} />} onClick={() => setBrowsing(true)}>
-              Browse
-            </Btn>
-          )}
+          <Btn variant="outline" size="sm" icon={<Download size={13} />} onClick={() => setBrowsing(true)}>
+            Browse
+          </Btn>
           <Btn variant="outline" size="sm" icon={<Plus size={13} />} onClick={() => tab === 'skills' ? setShowAddSkill(v => !v) : setShowAddPlugin(v => !v)}>
             Add {tab === 'skills' ? 'skill' : 'plugin'}
           </Btn>
@@ -241,11 +240,17 @@ export function ExtensionsView({ onOpenChat }: { onOpenChat?: () => void }) {
         <SkillMdModal skill={mdModal.skill} onClose={() => setMdModal(null)} />
       )}
 
-      {/* ClawHub browser */}
-      {browsing && (
+      {/* ClawHub browsers — skills and plugins are different registries and methods. */}
+      {browsing && tab === 'plugins' && (
         <PluginBrowser
           onClose={() => setBrowsing(false)}
           installedIds={new Set(plugins.map(p => p.id))}
+        />
+      )}
+      {browsing && tab === 'skills' && (
+        <SkillBrowser
+          onClose={() => setBrowsing(false)}
+          installedSlugs={new Set(skills.map(s => s.id))}
         />
       )}
 
