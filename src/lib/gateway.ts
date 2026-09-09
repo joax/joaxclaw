@@ -1,4 +1,4 @@
-import type { GwFrame, GwResFrame } from './types'
+import type { GwResFrame } from './types'
 import { useSettingsStore } from '../store/settings'
 import { chatIdentityName } from './userProfile'
 

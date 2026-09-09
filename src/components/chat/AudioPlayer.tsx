@@ -194,6 +194,7 @@ export function AudioPlayer({ attachment, accentColor }: Props) {
       setSrcUrl(url)
       return () => URL.revokeObjectURL(url)
     }
+    return undefined   // nothing to revoke when the attachment carries neither
   }, [attachment.url, attachment.data, attachment.mediaType])
 
   const togglePlay = () => {

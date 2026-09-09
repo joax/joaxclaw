@@ -23,7 +23,7 @@
     "test:watch": "vitest",
     "postinstall": "node node_modules/electron/install.js",
     "lint": "eslint src/",
-    "type-check": "tsc --noEmit",
+    "type-check": "tsc -p tsconfig.web.json --noEmit && tsc -p tsconfig.node.json --noEmit",
     "check-secrets": "node scripts/check-secrets.mjs",
     "audit-secrets": "node scripts/check-secrets.mjs --all",
     "prepare": "simple-git-hooks"

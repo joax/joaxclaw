@@ -84,7 +84,7 @@ export function MemoryView({ onOpenChat }: { onOpenChat?: () => void } = {}) {
       {remote && remoteReady === null ? (
         <CheckingPlugin />
       ) : remote && remoteReady === false ? (
-        <RemoteMemoryInstallNotice host={gwHost} onOpenChat={onOpenChat} />
+        <RemoteMemoryInstallNotice host={gwHost ?? undefined} onOpenChat={onOpenChat} />
       ) : connections.length === 0 ? (
         <EmptyState onAdd={() => { setEditing(null); setAdding(true) }} />
       ) : (

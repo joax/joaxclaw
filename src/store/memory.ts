@@ -1,4 +1,5 @@
 import { useMemo } from 'react'
+import { isLocalGateway } from '../lib/ollamaHealth'
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { MemoryConnection, MemoryAccess, MemoryGraph, MemoryItem, MemoryConnInfo } from '../lib/memory/types'
@@ -146,13 +147,23 @@ async function loadContent(get: () => MemoryState, set: (p: Partial<MemoryState>
 // Compatibility selector for the few views that still consume the old
 // "Obsidian vaults" shape (Agent map, Process collaboration vault picker) — now
 // derived from the unified memory connections instead of a separate store.
-export interface ObsidianVaultRef { name: string; url: string; apiKey: string }
+/** A vault served from this machine, versus one reached over the network. */
+function vaultMode(url: string): 'local' | 'remote' {
+  try { return isLocalGateway(new URL(url).hostname) ? 'local' : 'remote' } catch { return 'remote' }
+}
+
+export interface ObsidianVaultRef { name: string; url: string; apiKey: string; mode: 'local' | 'remote' }
 export function useObsidianVaults(): ObsidianVaultRef[] {
   const connections = useMemoryStore(s => s.connections)
   return useMemo(
     () => connections
       .filter(c => c.providerId === 'obsidian' && c.enabled)
-      .map(c => ({ name: c.name, url: c.config.url ?? '', apiKey: c.config.apiKey ?? '' })),
+      .map(c => ({
+        name: c.name,
+        url: c.config.url ?? '',
+        apiKey: c.config.apiKey ?? '',
+        mode: vaultMode(c.config.url ?? ''),
+      })),
     [connections],
   )
 }

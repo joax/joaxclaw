@@ -60,7 +60,7 @@ export function UpdateBanner() {
           onDownload={download} onInstall={install} onRestart={restart}
           onViewNotes={openReleasePage} onRetry={() => (status === 'error' ? download() : reset())}
         />
-        {!inFlight && status !== 'installing' && (
+        {!inFlight && (
           <>
             {info?.available && (
               <button

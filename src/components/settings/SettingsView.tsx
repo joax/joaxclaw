@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { RefreshCw, Download, ExternalLink, RotateCw, Sparkles, CheckCircle2 } from 'lucide-react'
-import { useSettingsStore, ZOOM_MIN, ZOOM_MAX, ZOOM_STEP } from '../../store/settings'
+import { useSettingsStore, ZOOM_MIN, ZOOM_MAX, ZOOM_STEP, type SettingsState } from '../../store/settings'
 import { useUpdaterStore } from '../../store/updater'
 import { useIsNarrow } from '../../lib/useIsNarrow'
 import { notificationsSupported, notificationPermission, requestNotificationPermission } from '../../lib/notifications'
@@ -33,7 +33,7 @@ export function SettingsView() {
                 key={key}
                 label={label}
                 value={value}
-                onChange={v => useSettingsStore.setState({ [key]: v } as Partial<typeof useSettingsStore>)}
+                onChange={v => useSettingsStore.setState({ [key]: v } as Partial<SettingsState>)}
               />
             ))}
           </div>
@@ -239,7 +239,7 @@ function UpdatesSection() {
             </div>
             <div className="flex items-center gap-1.5">
               {downloadable && status !== 'downloaded' && status !== 'downloading' && (
-                <Btn size="sm" icon={<Download size={12} />} loading={status === 'downloading'} onClick={() => download()}>
+                <Btn size="sm" icon={<Download size={12} />} onClick={() => download()}>
                   Download
                 </Btn>
               )}
