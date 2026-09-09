@@ -1,15 +1,17 @@
 import { useEffect, useState } from 'react'
 import {
   RefreshCw, ChevronDown, ChevronRight, Copy, Check, Trash2, RotateCw, Ban,
-  Globe, Smartphone, Monitor, Terminal, Server, ShieldCheck, KeyRound, X, AlertTriangle,
+  Globe, Smartphone, Monitor, Terminal, Server, ShieldCheck, KeyRound, X, AlertTriangle, Pencil,
 } from 'lucide-react'
 import { Btn } from '../ui/Btn'
 import { useIsAdmin } from '../../store/connection'
+import { DEVICE_LABEL_MAX } from '../../store/devices'
 import {
   useDevicesStore, isLastAdminDevice, deviceHasAdmin,
   type PairedDevice, type PendingPair, type DeviceToken,
 } from '../../store/devices'
 import { relativeFromMs } from '../../lib/dateUtils'
+import { describeLastSeen, describeUsage, diskUsed, loadFraction, memoryUsed, statsAreStale, type GatewayNode } from '../../lib/nodeStats'
 
 // ── small shared bits ───────────────────────────────────────────────────────────
 
@@ -127,10 +129,83 @@ function TokenLine({ t }: { t: DeviceToken }) {
 
 // ── Paired device row ───────────────────────────────────────────────────────────
 
+// One capability node with its host resources. The gateway keeps serving the last saved
+// snapshot while a node is offline, with its original timestamp — so a stale reading is
+// normal and is labelled with its age rather than shown as current truth.
+function NodeRow({ node }: { node: GatewayNode }) {
+  const stats = node.hostStats
+  const stale = statsAreStale(stats)
+  const load = loadFraction(stats)
+  const mem = memoryUsed(stats)
+  const disk = diskUsed(stats)
+
+  return (
+    <div style={{ padding: '10px 12px', borderBottom: `1px solid ${C.border}` }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span
+          title={node.connected ? 'Connected now' : 'Not connected'}
+          style={{ width: 7, height: 7, borderRadius: '50%', flexShrink: 0, background: node.connected ? 'var(--accent)' : C.border }}
+        />
+        <span style={{ fontSize: 13, fontWeight: 600, color: C.text }}>
+          {node.displayName || node.nodeId}
+        </span>
+        <span style={{ fontSize: 11, color: C.dim }}>{node.platform}</span>
+        <div style={{ flex: 1 }} />
+        <span style={{ fontSize: 11, color: node.connected ? 'var(--accent)' : C.dim }}>
+          {node.connected ? 'online' : node.lastSeenAtMs ? `seen ${relativeFromMs(node.lastSeenAtMs)}` : ''}
+        </span>
+      </div>
+
+      {(node.caps?.length ?? 0) > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 6 }}>
+          {node.caps!.map(c => (
+            <span key={c} style={{ fontSize: 10, padding: '1px 6px', borderRadius: 10, border: `1px solid ${C.border}`, color: C.dim }}>{c}</span>
+          ))}
+        </div>
+      )}
+
+      {stats && (
+        <div style={{ marginTop: 8 }}>
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+            <Meter label="Load" fraction={load} detail={stats.cpuCount ? `${stats.cpuCount} cores` : null} />
+            <Meter label="Memory" fraction={mem} detail={describeUsage(stats.memoryTotalBytes, stats.memoryFreeBytes)} />
+            <Meter label="Disk" fraction={disk} detail={describeUsage(stats.diskTotalBytes, stats.diskAvailableBytes)} />
+          </div>
+          {stale && stats.updatedAtMs && (
+            <div style={{ fontSize: 10, color: C.dim, marginTop: 4 }}>
+              last reported {relativeFromMs(stats.updatedAtMs)} ago
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// A null fraction means the gateway did not report that pair — rendered as a dash rather
+// than an empty bar, which would imply zero usage.
+function Meter({ label, fraction, detail }: { label: string; fraction: number | null; detail: string | null }) {
+  return (
+    <div style={{ minWidth: 120, flex: 1 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: C.dim }}>
+        <span>{label}</span>
+        <span>{fraction === null ? '—' : `${Math.round(fraction * 100)}%`}</span>
+      </div>
+      <div style={{ height: 4, borderRadius: 2, background: C.border, marginTop: 3, overflow: 'hidden' }}>
+        {fraction !== null && (
+          <div style={{ width: `${Math.round(fraction * 100)}%`, height: '100%', background: 'var(--accent)' }} />
+        )}
+      </div>
+      {detail && <div style={{ fontSize: 10, color: C.dim, marginTop: 2 }}>{detail}</div>}
+    </div>
+  )
+}
+
 function DeviceRow({ device, canManage, paired }: { device: PairedDevice; canManage: boolean; paired: PairedDevice[] }) {
-  const { remove, revokeToken, rotateToken, busy } = useDevicesStore()
+  const { remove, revokeToken, rotateToken, rename, busy } = useDevicesStore()
   const [open, setOpen] = useState(false)
   const [confirm, setConfirm] = useState<'remove' | 'revoke' | null>(null)
+  const [draftName, setDraftName] = useState<string | null>(null)
   const Icon = platformIcon(device.platform, device.clientMode)
   const working = !!busy[device.deviceId]
 
@@ -138,8 +213,34 @@ function DeviceRow({ device, canManage, paired }: { device: PairedDevice; canMan
   const lastAdmin = isLastAdminDevice(paired, device.deviceId) && deviceHasAdmin(device)
   const name = device.displayName || device.clientId || shortId(device.deviceId)
 
+  const saveName = async () => {
+    const next = (draftName ?? '').trim()
+    setDraftName(null)
+    if (next && next !== (device.displayName ?? '')) await rename(device.deviceId, next)
+  }
+
   const ActionRow = (
     <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 10 }}>
+      {draftName === null ? (
+        <Btn size="sm" variant="outline" icon={<Pencil size={12} />} disabled={working}
+          onClick={() => setDraftName(device.displayName ?? '')}>
+          Rename
+        </Btn>
+      ) : (
+        <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+          <input
+            value={draftName}
+            autoFocus
+            maxLength={DEVICE_LABEL_MAX}
+            onChange={e => setDraftName(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') void saveName(); if (e.key === 'Escape') setDraftName(null) }}
+            placeholder="Device name"
+            style={{ padding: '3px 8px', fontSize: 12, borderRadius: 'var(--radius)', border: `1px solid ${C.border}`, background: 'var(--bg-elevated)', color: C.text, outline: 'none', width: 180 }}
+          />
+          <Btn size="sm" loading={working} disabled={!draftName.trim()} onClick={() => void saveName()}>Save</Btn>
+          <Btn size="sm" variant="ghost" onClick={() => setDraftName(null)}>Cancel</Btn>
+        </span>
+      )}
       <Btn size="sm" variant="outline" icon={<RotateCw size={12} />} loading={working}
         onClick={() => void rotateToken(device.deviceId, device.role, device.scopes)}>
         Rotate token
@@ -182,6 +283,13 @@ function DeviceRow({ device, canManage, paired }: { device: PairedDevice; canMan
         <Icon size={16} style={{ color: C.dim, flexShrink: 0 }} />
         <div style={{ minWidth: 0, flex: 1 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span
+              title={device.connected ? 'Connected now' : 'Not connected'}
+              style={{
+                width: 7, height: 7, borderRadius: '50%', flexShrink: 0,
+                background: device.connected ? 'var(--accent)' : C.border,
+              }}
+            />
             <span style={{ fontSize: 13, fontWeight: 600, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
             {deviceHasAdmin(device) && <ShieldCheck size={12} style={{ color: C.accent, flexShrink: 0 }} />}
           </div>
@@ -191,8 +299,15 @@ function DeviceRow({ device, canManage, paired }: { device: PairedDevice; canMan
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
           <span style={{ fontSize: 10, color: C.dim }}>{activeTokens.length} token{activeTokens.length !== 1 ? 's' : ''}</span>
-          <span style={{ fontSize: 11, color: C.dim }} title={device.approvedAtMs ? new Date(device.approvedAtMs).toLocaleString() : undefined}>
-            paired {relativeFromMs(device.approvedAtMs ?? device.createdAtMs)}
+          <span
+            style={{ fontSize: 11, color: device.connected ? 'var(--accent)' : C.dim }}
+            title={device.lastSeenAtMs ? `Last seen ${new Date(device.lastSeenAtMs).toLocaleString()}${describeLastSeen(device.lastSeenReason) ? ` — ${describeLastSeen(device.lastSeenReason)}` : ''}` : undefined}
+          >
+            {device.connected
+              ? 'online'
+              : device.lastSeenAtMs
+                ? `seen ${relativeFromMs(device.lastSeenAtMs)}`
+                : `paired ${relativeFromMs(device.approvedAtMs ?? device.createdAtMs)}`}
           </span>
           {open ? <ChevronDown size={14} style={{ color: C.dim }} /> : <ChevronRight size={14} style={{ color: C.dim }} />}
         </div>
@@ -271,7 +386,7 @@ function RotateModal() {
 // ── Panel ────────────────────────────────────────────────────────────────────────
 
 export function DevicesPanel({ connected }: { connected: boolean }) {
-  const { pending, paired, loading, error, load, clearError } = useDevicesStore()
+  const { pending, paired, nodes, loading, error, load, clearError } = useDevicesStore()
   const isAdmin = useIsAdmin()
 
   useEffect(() => { if (connected) void load() }, [connected, load])
@@ -338,6 +453,20 @@ export function DevicesPanel({ connected }: { connected: boolean }) {
             </div>
           )}
         </div>
+
+        {/* Nodes — a separate roster from paired devices: clients that expose
+            capabilities to agents (camera, screen, canvas) and report host resources.
+            Hidden entirely when the gateway has none, which is the common case. */}
+        {nodes.length > 0 && (
+          <div>
+            <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: C.dim, marginBottom: 6 }}>
+              Nodes ({nodes.length})
+            </div>
+            <div style={{ border: `1px solid ${C.border}`, borderRadius: 'var(--radius)', overflow: 'hidden', background: C.surface }}>
+              {nodes.map(n => <NodeRow key={n.nodeId} node={n} />)}
+            </div>
+          </div>
+        )}
 
         <p style={{ fontSize: 11, color: C.dim, opacity: 0.7, lineHeight: 1.5 }}>
           This app authenticates with the gateway token, so removing a device or revoking its token won't disconnect this app.
