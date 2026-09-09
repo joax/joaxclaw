@@ -55,8 +55,30 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
     if (get()._subscribed) return
     set({ _subscribed: true })
 
-    // Subscribe to sessions.changed events from the gateway
-    gatewayClient.request('sessions.subscribe', {}).catch(() => {})
+    // Subscribe AND load the first page in one request. The gateway registers the
+    // subscription before projecting the list, so events can arrive while the snapshot
+    // is being built — which is why the listener below is attached first and the result
+    // is merged rather than assigned.
+    gatewayClient
+      .request<{ subscribed?: boolean; list?: { sessions?: Session[] } }>('sessions.subscribe', {
+        limit: 60,
+        // Prepends rows owned by this connection's viewer, when the gateway can resolve
+        // one. Ignored otherwise, and only applies to the first page.
+        ownerFirst: true,
+        includeDerivedTitles: true,
+        includeLastMessage: true,
+      })
+      .then(res => {
+        const rows = res?.list?.sessions
+        if (!Array.isArray(rows) || rows.length === 0) return
+        set(s => {
+          // Anything an event already added while this was in flight wins — it is newer.
+          const known = new Set(s.sessions.map(x => x.key))
+          const extra = rows.filter(r => r.key && !known.has(r.key))
+          return extra.length ? { sessions: [...s.sessions, ...extra] } : {}
+        })
+      })
+      .catch(() => {})
 
     gatewayClient.on((frame) => {
       // sessions.changed: update if known, add if new (e.g. created by an agent skill)
