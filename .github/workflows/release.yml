@@ -96,6 +96,18 @@ jobs:
 
       - name: Install system dependencies
         run: |
+          # The runner image preinstalls third-party apt repos (Google Chrome, Microsoft,
+          # …) that this build has no use for. `apt-get update` fails as a whole if ANY
+          # configured repo serves an inconsistent index, so an upstream hiccup in one of
+          # them takes the release down with it — which is what blocked v0.24.1:
+          #
+          #   Err: https://dl.google.com/linux/chrome-stable/deb stable/main amd64 Packages
+          #     Hash Sum mismatch
+          #
+          # It was not transient; a re-run hit the identical mismatch. fakeroot, dpkg and
+          # rpm all come from Ubuntu's own archive in /etc/apt/sources.list, so drop the
+          # extra sources rather than depending on third parties to stay consistent.
+          sudo rm -f /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources
           sudo apt-get update -y
           sudo apt-get install -y fakeroot dpkg rpm
 
