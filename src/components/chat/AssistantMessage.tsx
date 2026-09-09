@@ -15,6 +15,7 @@ import { MarkdownContent } from './MarkdownContent'
 import { QuestionsBlock } from './QuestionCard'
 import { parseAskBlocks } from '../../lib/askQuestion'
 import { questionsFromToolCalls, renderedAsQuestionCard } from '../../lib/askUserTool'
+import { useQuestionsStore } from '../../store/questions'
 import { useChatStore } from '../../store/chat'
 import { DiffView } from './DiffView'
 import { AudioPlayer } from './AudioPlayer'
@@ -295,6 +296,7 @@ function MessageFeedback({ message }: { message: ChatMessage }) {
 interface Props { message: ChatMessage; showTools?: boolean; showReasoning?: boolean; convId?: string; isLast?: boolean }
 
 export function AssistantMessage({ message, showTools = true, showReasoning = true, convId, isLast = false }: Props) {
+  const sessionKey = useChatStore(s => s.conversations.find(c => c.id === convId)?.sessionKey || undefined)
   const stripped = stripProtocolTags(message.content)
   const { actions: gatewayActions, text: noActions } = extractGatewayActions(stripped)
   const { thinking: inlineThinking, text: afterThink } = extractThinkTags(noActions)
@@ -304,7 +306,22 @@ export function AssistantMessage({ message, showTools = true, showReasoning = tr
   // The gateway also exposes a real `ask_user` TOOL for this, and a model given both
   // reaches for the tool. Those calls used to render as a generic pill, so the buttons
   // never appeared and the feature looked dead. Both routes now land on this card.
-  const questions = [...askedInText, ...questionsFromToolCalls(message.toolCalls)]
+  //
+  // Unless the gateway is holding the question open itself: an `ask_user` call also
+  // reserves a question record, and the same prompt would then draw twice — once here
+  // and once in the dock above the composer. Only the dock can actually answer it
+  // (`question.resolve`); this copy would send a chat message the parked run isn't
+  // listening to. So when a record is pending for this session, the dock owns it and the
+  // tool-derived card stands down. Text `<ask>` blocks are unaffected — no record exists
+  // for those, and chatting the answer back is the whole mechanism. The suppression is
+  // sticky per session: once resolved the record is gone, and a card that reappeared
+  // live would send a chat turn answering a question that is already closed.
+  const gatewayManagesQuestions = useQuestionsStore(
+    s => !!sessionKey && s.managedSessions[sessionKey] === true,
+  )
+  const questions = gatewayManagesQuestions
+    ? askedInText
+    : [...askedInText, ...questionsFromToolCalls(message.toolCalls)]
   const hasQuestions = questions.length > 0
   // A question is answerable only while it's the tail of the conversation and the
   // turn has finished; sending the answer is just the user's next chat message.
