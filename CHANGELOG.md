@@ -5,7 +5,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [Unreleased]
+## [0.24.1] - 2026-09-09
+
+### Added
+
+- **Devices show whether they're actually online.** The gateway has always reported `connected`, `lastSeenAtMs` and `lastSeenReason` for every paired device, and the Devices panel rendered none of them — a phone connected right now looked identical to one last seen in April, since the only timestamp shown was when it was first paired. Each device now carries a live dot and reads *online* or *seen 3h*, with the exact time and the reason it was last seen (signed in, woken by a push, a background refresh) on hover. Devices can also be **renamed**, so a list of `openclaw-control-ui` and `ios-node` entries can become "my phone" and "work laptop"; the name is stored on the gateway against the stable device id, so it follows the device.
+- **Nodes report their host's resources.** OpenClaw 2026.9 added a resource snapshot that capability nodes — a phone, a CLI host — send on connect and every 60 seconds. A **Nodes** section now lists them with their capabilities and meters for load, memory and disk. Two details it is careful about: load is scaled by core count, because a load of 4 on an 8-core host is half busy rather than four times over; and a value the host didn't report shows a dash rather than an empty bar, which would read as "nothing in use". The gateway keeps serving a node's last snapshot while it is offline, so a reading older than five minutes is labelled with its age instead of being presented as current. The section is hidden entirely when the gateway has no nodes, which is the common case.
 
 ### Fixed
 
@@ -14,14 +19,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [Unreleased]
-
-### Added
-
-- **Devices show whether they're actually online.** The gateway has always reported `connected`, `lastSeenAtMs` and `lastSeenReason` for every paired device, and the Devices panel rendered none of them — a phone connected right now looked identical to one last seen in April, since the only timestamp shown was when it was first paired. Each device now carries a live dot and reads *online* or *seen 3h*, with the exact time and the reason it was last seen (signed in, woken by a push, a background refresh) on hover. Devices can also be **renamed**, so a list of `openclaw-control-ui` and `ios-node` entries can become "my phone" and "work laptop"; the name is stored on the gateway against the stable device id, so it follows the device.
-- **Nodes report their host's resources.** OpenClaw 2026.9 added a resource snapshot that capability nodes — a phone, a CLI host — send on connect and every 60 seconds. A **Nodes** section now lists them with their capabilities and meters for load, memory and disk. Two details it is careful about: load is scaled by core count, because a load of 4 on an 8-core host is half busy rather than four times over; and a value the host didn't report shows a dash rather than an empty bar, which would read as "nothing in use". The gateway keeps serving a node's last snapshot while it is offline, so a reading older than five minutes is labelled with its age instead of being presented as current. The section is hidden entirely when the gateway has no nodes, which is the common case.
-
----
 
 ## [0.24.0] - 2026-09-09
 
