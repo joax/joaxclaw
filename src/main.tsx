@@ -11,6 +11,7 @@ import { useSettingsStore } from './store/settings'
 import { installBrowserApi } from './lib/mobile/browserApi'
 import { isElectron } from './lib/platform'
 import { pushUrlToNavigate } from './lib/webPush'
+import { requestPersistentStorage } from './lib/idbStore'
 
 // In a plain browser (PWA / mobile companion) there's no Electron preload, so provide
 // a `window.api` shim: a real WebSocket for the gateway + a WebCrypto device identity,
@@ -25,6 +26,12 @@ if (!isElectron() && 'serviceWorker' in navigator) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('./sw.js').catch(() => { /* SW optional; app still runs */ })
   })
+  // Ask for persistent storage. Without it everything this origin stores is evictable
+  // under storage pressure, and Safari clears it after seven days without a visit to a
+  // site that isn't installed to the Home Screen — which is how a phone loses its
+  // profile and saved connections. Chrome grants it automatically to an installed PWA.
+  // A denial is normal and needs no handling: storage still works, just not durably.
+  void requestPersistentStorage()
   // A tapped notification posts here from the SW; re-dispatch as a window event the
   // app listens for to route to the right chat/view.
   navigator.serviceWorker.addEventListener('message', (e) => {
