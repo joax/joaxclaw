@@ -1,7 +1,8 @@
 import { create } from 'zustand'
 import { gatewayClient } from '../lib/gateway'
 import {
-  APPROVAL_LIST_METHODS, isApprovalPending, parseApprovalEvent, sortApprovals,
+  APPROVAL_LIST_METHODS, approvalGetParams, approvalResolveParams,
+  isApprovalPending, parseApprovalEvent, sortApprovals,
   type ApprovalDecision, type ApprovalKind, type ApprovalPresentation, type PendingApproval,
 } from '../lib/approvals'
 
@@ -33,7 +34,7 @@ async function hydrate(id: string, kind: ApprovalKind): Promise<PendingApproval 
     const res = await gatewayClient.request<{ approval?: {
       id?: string; status?: string; createdAtMs?: number; expiresAtMs?: number
       presentation?: ApprovalPresentation
-    } }>('approval.get', { id, kind })
+    } }>('approval.get', approvalGetParams(id))
     const a = res.approval
     // Only pending approvals belong here — `approval.get` also answers for terminal ones,
     // and a resolved record must never render as an actionable prompt.
@@ -108,9 +109,9 @@ export const useApprovalsStore = create<ApprovalsState>((set, get) => ({
       // `applied: false` means another reviewer (a phone, the Control UI, a channel)
       // answered first. That is a normal outcome, not an error: the approval is settled
       // either way, so drop it and say nothing.
-      await gatewayClient.request<{ applied?: boolean }>('approval.resolve', {
-        id: approval.id, kind: approval.kind, decision,
-      })
+      await gatewayClient.request<{ applied?: boolean }>(
+        'approval.resolve', approvalResolveParams(approval.id, approval.kind, decision),
+      )
       set(s => {
         const approvals = { ...s.approvals }; delete approvals[approval.id]
         const resolving = { ...s.resolving }; delete resolving[approval.id]
