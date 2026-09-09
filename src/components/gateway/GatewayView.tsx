@@ -24,7 +24,7 @@ interface ConfigSnapshot { hash?: string; config?: Record<string, unknown>; pars
 
 type GwStatus = { running: boolean; pid?: number; uptime?: string }
 
-type SettingsTab = 'connection' | 'gateway' | 'sessions' | 'devices' | 'channels' | 'engines' | 'models' | 'extensions'
+export type SettingsTab = 'connection' | 'gateway' | 'sessions' | 'devices' | 'channels' | 'engines' | 'models' | 'extensions'
 // Remembered across remounts (e.g. when an auto-reconnect briefly swaps the view
 // out) so the user returns to the tab they were on — notably Channels.
 let lastSettingsTab: SettingsTab = 'connection'

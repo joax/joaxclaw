@@ -4,6 +4,7 @@ import {
   ArrowRight, Activity, Timer, Cpu, Clock, Zap, UsersRound, Terminal, Square, Bell, X,
 } from 'lucide-react'
 import { useConnectionStore, useIsRemoteGateway } from '../../store/connection'
+import { focusGatewayTab, type SettingsTab } from '../gateway/GatewayView'
 import { gatewayHost } from '../../lib/ollamaHealth'
 import { useChatStore } from '../../store/chat'
 import { useAgentsStore } from '../../store/agents'
@@ -145,9 +146,10 @@ function HealthStrip({ onNavigate }: { onNavigate: (s: NavSection) => void }) {
     : status === 'connecting' ? 'var(--warning)'
     : 'var(--danger)'
 
-  const chip = (label: string, count: number, nav: NavSection) => (
+  // `tab` focuses a tab inside the target section — Sessions lives inside Gateway.
+  const chip = (label: string, count: number, nav: NavSection, tab?: SettingsTab) => (
     <button
-      onClick={() => onNavigate(nav)}
+      onClick={() => { if (tab) focusGatewayTab(tab); onNavigate(nav) }}
       style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '2px 8px', borderRadius: 12, border: '1px solid var(--border)', background: 'var(--bg-elevated)', cursor: 'pointer', fontSize: 11, color: 'var(--text-secondary)' }}
     >
       <span style={{ fontWeight: 600, color: count > 0 ? 'var(--text-primary)' : 'var(--text-secondary)' }}>{count}</span>
@@ -172,7 +174,7 @@ function HealthStrip({ onNavigate }: { onNavigate: (s: NavSection) => void }) {
         )}
       </div>
       <div style={{ flex: 1 }} />
-      {chip('sessions active', activeSess, 'sessions')}
+      {chip('sessions active', activeSess, 'gateway', 'sessions')}
       {chip('processes running', runningProcs, 'processes')}
       {chip('teams running', runningTeams, 'teams')}
     </div>
@@ -191,9 +193,9 @@ function QuickStats({ onNavigate }: { onNavigate: (s: NavSection) => void }) {
   const runningProcs = Object.values(runs).filter(r => r.status === 'running' && !teamIds.has(r.processId)).length
   const runningTeams = Object.values(runs).filter(r => r.status === 'running' && teamIds.has(r.processId)).length
 
-  const tile = (Icon: typeof Activity, count: number, label: string, nav: NavSection) => (
+  const tile = (Icon: typeof Activity, count: number, label: string, nav: NavSection, tab?: SettingsTab) => (
     <button
-      onClick={() => onNavigate(nav)}
+      onClick={() => { if (tab) focusGatewayTab(tab); onNavigate(nav) }}
       style={{
         flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2,
         padding: '12px 12px', borderRadius: 12, border: '1px solid var(--border)',
@@ -209,7 +211,7 @@ function QuickStats({ onNavigate }: { onNavigate: (s: NavSection) => void }) {
 
   return (
     <div style={{ display: 'flex', gap: 8 }}>
-      {tile(Activity, activeSess, 'Sessions', 'sessions')}
+      {tile(Activity, activeSess, 'Sessions', 'gateway', 'sessions')}
       {tile(Zap, runningProcs, 'Processes', 'processes')}
       {tile(UsersRound, runningTeams, 'Teams', 'teams')}
     </div>

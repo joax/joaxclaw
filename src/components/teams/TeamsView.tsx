@@ -884,7 +884,7 @@ function TeamDetail({
   // state hasn't flushed yet); falls back to the current box contents.
   const handleRun = async (override?: string) => {
     const t = (override ?? task).trim()
-    if (!launchValidation.valid || (usesObjective && !t)) return
+    if (!launchValidation.valid || (usesObjective && !t) || !compiledDef) return
     const hadRequest = !!runRequests[blueprint.id]
     setIsStarting(true)
     try {
@@ -1397,7 +1397,7 @@ function MobileTeamDetail({ blueprint, compiledDef, onBack, onOpenChat }: {
   const canRun = validation.valid && !(usesObjective && !task.trim())
 
   const handleRun = async () => {
-    if (!canRun) return
+    if (!canRun || !compiledDef) return
     setStarting(true)
     try { await startRun(blueprint.id, compiledDef, blueprint.controllerAgentId, task.trim()) }
     finally { setStarting(false) }
@@ -1431,7 +1431,7 @@ function MobileTeamDetail({ blueprint, compiledDef, onBack, onOpenChat }: {
               : <Btn size="sm" icon={<Play size={12} />} loading={starting} disabled={!canRun} onClick={handleRun}>Run</Btn>}
             {running && onOpenChat && <Btn size="sm" variant="ghost" onClick={onOpenChat}>Open run in chat</Btn>}
           </div>
-          {!validation.valid && <p className="text-xs mt-1.5" style={{ color: 'var(--danger)' }}>{validation.reason ?? 'Not runnable — check the blueprint on desktop.'}</p>}
+          {!validation.valid && <p className="text-xs mt-1.5" style={{ color: 'var(--danger)' }}>{validation.errors.join(' · ') || 'Not runnable — check the blueprint on desktop.'}</p>}
         </div>
 
         {/* Flow */}
