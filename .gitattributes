@@ -1,7 +1,12 @@
 # Every changelog entry is added at the top of the same "## [Unreleased]" section, so
 # any two PRs open at once conflict on that one line however unrelated their code is.
 # The resolution is always "keep both bullets", which is exactly what a union merge does.
-#
-# Union can duplicate a line if two branches edit the SAME bullet — rare here, since
-# entries are append-at-top — so give the section a glance after a noisy merge.
 CHANGELOG.md merge=union
+
+# CHECK THE SECTION BEFORE CUTTING A RELEASE. Union keeps both sides of a hunk without
+# understanding structure, so when two branches each CREATE the "## [Unreleased]" header
+# — rather than adding to an existing one — it keeps both, and the changelog ends up with
+# two Unreleased sections. That happened between 0.24.0 and 0.24.1 and would have shipped
+# a release missing half its entries, since the release workflow reads only the first
+# matching section. Merging the duplicates by hand takes a moment; noticing at release
+# time does not happen by itself.
