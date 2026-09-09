@@ -9,10 +9,16 @@ import type { AskQuestion } from '../../lib/askQuestion'
 // conversation and the turn has finished — otherwise it renders read-only (the
 // user's own reply already sits below it in the thread).
 
+// `detail` carries the structured answer. The <ask> path only needs `text` (it sends
+// the labels as an ordinary chat turn), but a gateway question resolves against
+// `question.resolve`, which files answers per questionId — so both are handed over and
+// each caller takes what it needs.
+export interface AnswerDetail { id: string; labels: string[] }
+
 interface Props {
   question: AskQuestion
   active: boolean
-  onAnswer: (text: string) => void
+  onAnswer: (text: string, detail: AnswerDetail) => void
 }
 
 export function QuestionCard({ question, active, onAnswer }: Props) {
@@ -24,7 +30,7 @@ export function QuestionCard({ question, active, onAnswer }: Props) {
   const submit = (labels: string[]) => {
     if (disabled || labels.length === 0) return
     setAnswered(labels)
-    onAnswer(labels.join(', '))
+    onAnswer(labels.join(', '), { id: question.id, labels })
   }
 
   const toggle = (label: string) => {
@@ -142,7 +148,7 @@ export function QuestionCard({ question, active, onAnswer }: Props) {
 export function QuestionsBlock({ questions, active, onAnswer }: {
   questions: AskQuestion[]
   active: boolean
-  onAnswer: (text: string) => void
+  onAnswer: (text: string, detail: AnswerDetail) => void
 }) {
   if (questions.length === 0) return null
   return (
