@@ -5,6 +5,9 @@ import { useUpdaterStore } from '../../store/updater'
 import { useIsNarrow } from '../../lib/useIsNarrow'
 import { notificationsSupported, notificationPermission, requestNotificationPermission } from '../../lib/notifications'
 import { Btn } from '../ui/Btn'
+import { usePushStore } from '../../store/push'
+import { useConnectionStore } from '../../store/connection'
+import { PUSH_CATEGORIES } from '../../lib/webPush'
 
 // Theme editing lives in its own screen now (components/theme/ThemesView). This keeps the
 // non-appearance app settings: status-bar meters, zoom, stall timeout, and updates.
@@ -97,7 +100,58 @@ function NotificationsSection() {
           ? 'Notifications are blocked for this site — enable them in your browser/OS settings, then toggle this on.'
           : 'Alerts fire only while the app is in the background. Add this app to your home screen for the best experience.'}
       </p>
+      {perm === 'granted' && <BackgroundPushRows />}
     </Section>
+  )
+}
+
+// Background push: the gateway pushes to this browser's subscription, so alerts arrive
+// with the app fully closed — unlike the rows above, which need the app still in memory.
+function BackgroundPushRows() {
+  const { supported, endpoint, prefs, busy, error, refresh, enable, disable, test, setCategory } = usePushStore()
+  const connected = useConnectionStore(s => s.status === 'connected')
+
+  useEffect(() => { if (connected) void refresh() }, [connected, refresh])
+
+  if (!supported) return null
+
+  return (
+    <div className="mt-4 pt-4" style={{ borderTop: '1px solid var(--border)' }}>
+      <Toggle
+        label="Also notify me when the app is closed"
+        value={!!endpoint}
+        onChange={on => { void (on ? enable() : disable()) }}
+      />
+      <p className="text-xs mt-2" style={{ color: 'var(--text-secondary)', opacity: 0.7 }}>
+        {!connected
+          ? 'Connect to a gateway to set this up.'
+          : endpoint
+            ? 'Your gateway pushes these to this device even when JoaxClaw is not running.'
+            : 'Registers this browser with your gateway so it can wake it with a notification.'}
+      </p>
+
+      {error && <p className="text-xs mt-2" style={{ color: 'var(--danger)' }}>{error}</p>}
+
+      {endpoint && prefs && (
+        <div className="mt-3 space-y-2">
+          {PUSH_CATEGORIES.map(c => (
+            <div key={c.key}>
+              <Toggle
+                label={c.label}
+                value={prefs.categories[c.key] === true}
+                onChange={on => { void setCategory(c.key, on) }}
+              />
+              <p className="text-xs" style={{ color: 'var(--text-secondary)', opacity: 0.6 }}>{c.hint}</p>
+            </div>
+          ))}
+          <div className="pt-1">
+            <Btn size="sm" variant="outline" disabled={busy} onClick={() => { void test() }}>
+              Send a test
+            </Btn>
+          </div>
+        </div>
+      )}
+    </div>
   )
 }
 

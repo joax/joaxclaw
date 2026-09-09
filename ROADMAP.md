@@ -32,7 +32,8 @@ gateway. Major areas already in place:
   `build:web` bundle. The phone pairs as its own device (WebCrypto Ed25519 identity), so
   it holds full operator scopes without copying the desktop token. Every view has a
   phone design pass (bottom tabs, master-detail, read-and-run Teams/Processes) plus
-  in-session background notifications. Notes: [docs/mobile-companion.md](docs/mobile-companion.md).
+  background notifications — both in-session and true Web Push, so the gateway can wake
+  the phone with the app fully closed. Notes: [docs/mobile-companion.md](docs/mobile-companion.md).
 
 ## Next / under consideration
 
@@ -45,9 +46,9 @@ gateway. Major areas already in place:
   with a reactive orb (over the gateway-relay transport) → VRM avatar + audio-driven
   lip-sync → expressions/idle → WebRTC transport + polish. Design notes:
   [src/lib/TALK.md](src/lib/TALK.md).
-- **Mobile follow-ons** — true background push (Web Push + VAPID, blocked on the gateway
-  sending push messages to a stored subscription; an inert handler is already in the
-  service worker), and a phone design pass for the Talk/voice view.
+- **Mobile follow-ons** — a phone design pass for the Talk/voice view. (True background
+  push shipped: OpenClaw 2026.9 added `push.web.*` and its own VAPID key, so the gateway
+  now pushes to a stored subscription.)
 - **Per-engine model listing in the model picker** for remote engines (the
   `engines.fetch` primitive exists; surface it more widely).
 - **Richer plugin config forms** — schema-driven fields beyond the curated API-key
