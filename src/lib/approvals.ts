@@ -141,6 +141,24 @@ export function decisionsFor(p: ApprovalPresentation): ApprovalDecision[] {
   return offered.includes('deny') ? offered : [...offered, 'deny']
 }
 
+/**
+ * Params for `approval.get`.
+ *
+ * Takes the id and NOTHING ELSE. Its schema is a closed object, so the `kind` that
+ * `approval.resolve` requires is an unexpected property here and makes the whole call a
+ * hard INVALID_REQUEST — which, swallowed by a hydrate step, meant no approval ever
+ * rendered. The kind is still needed by the caller for `approval.resolve`; it just must
+ * not be sent to `get`.
+ */
+export function approvalGetParams(id: string): { id: string } {
+  return { id }
+}
+
+/** Params for `approval.resolve`, which DOES take the kind. */
+export function approvalResolveParams(id: string, kind: ApprovalKind, decision: ApprovalDecision) {
+  return { id, kind, decision }
+}
+
 export function decisionLabel(d: ApprovalDecision): string {
   return d === 'allow-once' ? 'Allow once' : d === 'allow-always' ? 'Always allow' : 'Deny'
 }
