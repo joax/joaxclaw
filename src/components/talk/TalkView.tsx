@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Mic, MicOff, PhoneOff, Phone, Settings2, Captions, AlertCircle, Wrench, KeyRound, Bot, ListTree, Loader2, CheckCircle2, XCircle } from 'lucide-react'
 import type { TalkActivity } from '../../store/talk'
-import { useTalkStore, providersForMode, providerKeyPath, type TalkPhase, type VisualizerStyle } from '../../store/talk'
+import { useTalkStore, providersForMode, providerKeyPath, type ConsultRouting, type TalkPhase, type VisualizerStyle } from '../../store/talk'
 import { useConnectionStore } from '../../store/connection'
 import { useAgentsStore } from '../../store/agents'
 import { Visualizer, type VizSource } from './Visualizer'
@@ -38,7 +38,7 @@ const VIZ_LABEL: Record<VisualizerStyle, string> = { orb: 'Orb', bars: 'Bars', r
 export function TalkView() {
   const {
     phase, muted, micLevel, agentLevel, transcript, toolActivity, activity, error, catalog, config, visualizer,
-    loadCatalog, setConfig, setVisualizer, start, stop, toggleMute, interrupt,
+    consultRouting, loadCatalog, setConfig, setVisualizer, setConsultRouting, start, stop, toggleMute, interrupt,
   } = useTalkStore()
   const connected = useConnectionStore(s => s.status === 'connected')
   const { agents, defaultId, fetch: fetchAgents } = useAgentsStore()
@@ -96,12 +96,20 @@ export function TalkView() {
           <span>voice: {providerLabel ?? '—'}</span>
           <span style={{ opacity: 0.5 }}>·</span>
           <span>brain: {config.brain}</span>
+          {brainIsAgent && consultRouting === 'provider-direct' && (
+            <>
+              <span style={{ opacity: 0.5 }}>·</span>
+              <span title="The voice model decides whether to ask your agent. When it decides not to, it answers by itself — or says it will check and then goes quiet. Settings → Always ask the agent."
+                style={{ color: 'var(--warning)' }}>the voice decides when to ask</span>
+            </>
+          )}
         </div>
       )}
 
       {showSettings && (
         <SettingsBar catalog={catalog} config={config} setConfig={setConfig} disabled={active}
-          agents={agents} defaultId={defaultId} setProviderKey={useTalkStore.getState().setProviderKey} />
+          agents={agents} defaultId={defaultId} setProviderKey={useTalkStore.getState().setProviderKey}
+          consultRouting={consultRouting} setConsultRouting={setConsultRouting} />
       )}
 
       {/* Stage */}
@@ -217,7 +225,7 @@ function ActivityRow({ a }: { a: TalkActivity }) {
   )
 }
 
-function SettingsBar({ catalog, config, setConfig, disabled, agents, defaultId, setProviderKey }: {
+function SettingsBar({ catalog, config, setConfig, disabled, agents, defaultId, setProviderKey, consultRouting, setConsultRouting }: {
   catalog: ReturnType<typeof useTalkStore.getState>['catalog']
   config: ReturnType<typeof useTalkStore.getState>['config']
   setConfig: (p: Partial<ReturnType<typeof useTalkStore.getState>['config']>) => void
@@ -225,6 +233,8 @@ function SettingsBar({ catalog, config, setConfig, disabled, agents, defaultId, 
   agents: ReturnType<typeof useAgentsStore.getState>['agents']
   defaultId: string | null
   setProviderKey: (id: string, key: string) => Promise<boolean>
+  consultRouting: ConsultRouting | null
+  setConsultRouting: (r: ConsultRouting) => Promise<boolean>
 }) {
   const modeProviders = providersForMode(catalog, config.mode)
   const provider = modeProviders.find(p => p.id === config.provider)
@@ -246,9 +256,53 @@ function SettingsBar({ catalog, config, setConfig, disabled, agents, defaultId, 
             options={agents.map(a => ({ value: a.id, label: a.id }))} placeholder={`default${defaultId ? ` (${defaultId})` : ''}`} />
         )}
       </div>
+      {/* Whether every spoken turn reaches the agent, or the voice model gets to choose. */}
+      {config.brain === 'agent-consult' && consultRouting !== null && (
+        <ConsultRoutingField routing={consultRouting} onChange={setConsultRouting}
+          agentLabel={agents.find(a => a.id === (config.agentId ?? defaultId))?.id ?? 'your agent'} />
+      )}
+
       {/* Set the realtime provider's key (talk.providers.<id>.apiKey) right here. */}
       {provider && !provider.configured && !disabled && (
         <ProviderKeyField providerId={provider.id} label={provider.label} path={providerKeyPath(config.mode)} onSave={setProviderKey} />
+      )}
+    </div>
+  )
+}
+
+// The routing switch writes to the gateway's config, so it can be refused (a token
+// without write scope, a config race). Saying so beats a checkbox that quietly springs
+// back to where it was.
+function ConsultRoutingField({ routing, onChange, agentLabel }: {
+  routing: ConsultRouting
+  onChange: (r: ConsultRouting) => Promise<boolean>
+  agentLabel: string
+}) {
+  const [failed, setFailed] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
+  const toggle = async (on: boolean) => {
+    setFailed(null)
+    setSaving(true)
+    const ok = await onChange(on ? 'force-agent-consult' : 'provider-direct')
+    setSaving(false)
+    if (!ok) setFailed(useTalkStore.getState().error ?? 'could not save to the gateway')
+  }
+  return (
+    <div className="flex flex-col gap-0.5">
+      <label className="flex items-center gap-1.5 text-xs" style={{ color: 'var(--text-secondary)', cursor: saving ? 'progress' : 'pointer' }}>
+        <input type="checkbox" checked={routing === 'force-agent-consult'} disabled={saving}
+          onChange={e => void toggle(e.target.checked)} />
+        <span>Always ask the agent</span>
+        <span style={{ opacity: 0.7 }}>
+          — otherwise the voice model answers by itself unless it chooses to consult
+          <b> {agentLabel}</b>, which is why it can promise to check something and then go quiet
+        </span>
+        <span style={{ opacity: 0.6, whiteSpace: 'nowrap' }}>→ talk.realtime.consultRouting</span>
+      </label>
+      {failed && (
+        <span className="text-xs" style={{ color: 'var(--danger)', marginLeft: 20 }}>
+          Not saved — {failed}. Set it on the gateway: <code style={{ fontFamily: 'monospace' }}>openclaw config set talk.realtime.consultRouting force-agent-consult</code>
+        </span>
       )}
     </div>
   )
