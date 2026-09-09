@@ -5,6 +5,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- **The agent Files tab no longer pretends to be a folder.** "New file" and the delete button both looked like they worked and neither did: the file list came back unchanged the moment you reopened the tab. `agents.files.*` is not a folder API — the gateway resolves every call through a fixed allowlist of six core workspace files (`AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`, `BOOTSTRAP.md`, `MEMORY.md`) and refuses any other name with `unsupported file "<name>"`, while **delete has no RPC at all**: `list`, `get` and `set` are the entire surface, and `set` only ever writes. Both handlers swallowed the error and updated the list optimistically, which is why the failure was invisible. **Add file** is now a picker of the core files this agent is missing — the gateway names `SOUL.md`, `IDENTITY.md`, `USER.md` and `MEMORY.md` as the ones whose absence is normal and asks editors to offer exactly those — and it reports a refusal instead of hiding it. The delete button is gone, since nothing in the protocol can carry out what it promised. Verified against the shipped OpenClaw 2026.9.3 handlers; every other method the app calls is still registered there.
+
+---
+
 ## [0.23.2] - 2026-09-03
 
 ### Fixed
