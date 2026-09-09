@@ -493,7 +493,7 @@ export function ChatView({ solo }: { solo?: string } = {}) {
                     {convDisplayName(activeConv)}
                   </span>
                   {activeConv.sessionKey?.includes(':heartbeat') && (
-                    <Heart size={14} title="Heartbeat session" style={{ color: 'var(--accent)', opacity: 0.8, flexShrink: 0 }} />
+                    <span title="Heartbeat session" style={{ display: 'inline-flex', flexShrink: 0 }}><Heart size={14} style={{ color: 'var(--accent)', opacity: 0.8 }} /></span>
                   )}
                   {/* Files the agents wrote — the same panel artifact cards open. */}
                   {!solo && (
@@ -549,7 +549,7 @@ export function ChatView({ solo }: { solo?: string } = {}) {
                 </span>
               )}
               {activeConv.sessionKey?.includes(':heartbeat') && (
-                <Heart size={12} title="Heartbeat session" style={{ color: 'var(--accent)', opacity: 0.8, flexShrink: 0 }} />
+                <span title="Heartbeat session" style={{ display: 'inline-flex', flexShrink: 0 }}><Heart size={12} style={{ color: 'var(--accent)', opacity: 0.8 }} /></span>
               )}
 
               {/* Per-chat model + thinking overrides (independent of the agent's config) */}
@@ -828,8 +828,8 @@ function ChatRow({ item }: { item: ChatItem }) {
             {item.name}
           </p>
         )}
-        {item.cron && !editing && <Clock size={11} title="Scheduled run (automation)" style={{ color: 'var(--text-secondary)', flexShrink: 0 }} />}
-        {item.heartbeat && !editing && <Heart size={11} title="Heartbeat session" style={{ color: 'var(--accent)', opacity: 0.8, flexShrink: 0 }} />}
+        {item.cron && !editing && <span title="Scheduled run (automation)" style={{ display: 'inline-flex', flexShrink: 0 }}><Clock size={11} style={{ color: 'var(--text-secondary)' }} /></span>}
+        {item.heartbeat && !editing && <span title="Heartbeat session" style={{ display: 'inline-flex', flexShrink: 0 }}><Heart size={11} style={{ color: 'var(--accent)', opacity: 0.8 }} /></span>}
         {!editing && !hovered && item.time && <span className="text-xs shrink-0" style={{ color: 'var(--text-secondary)' }}>{item.time}</span>}
       </div>
       {item.subtitle && !editing && (

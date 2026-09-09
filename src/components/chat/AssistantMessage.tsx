@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { ChevronDown, ChevronRight, BrainCircuit, CheckCircle2, XCircle, Loader2, Clock, Hourglass, Terminal, PenLine, FileText, Search, Globe, Plug, Bot, Wrench, FolderSearch, AlertTriangle, Zap, ThumbsUp, ThumbsDown } from 'lucide-react'
+import { ChevronDown, ChevronRight, BrainCircuit, CheckCircle2, XCircle, Loader2, Clock, Hourglass, Terminal, PenLine, FileText, Globe, Plug, Bot, Wrench, FolderSearch, AlertTriangle, Zap, ThumbsUp, ThumbsDown } from 'lucide-react'
 import type { ChatMessage, ContextOverflowInfo, ToolCall, SubThread } from '../../lib/types'
 import { useExtensionsStore } from '../../store/extensions'
 import { useOllamaProgress } from '../../store/ollamaProgress'
@@ -947,7 +947,7 @@ function ToolCallsBlock({ calls }: { calls: ToolCall[] }) {
                 className="text-xs"
                 style={{ borderTop: '1px solid var(--border)', background: 'var(--bg-primary)' }}
               >
-                <ToolDetail kind={kind} name={call.name} args={a} rawArgs={call.args} result={call.result} error={call.error} />
+                <ToolDetail kind={kind} args={a} rawArgs={call.args} result={call.result} error={call.error} />
               </div>
             )}
           </div>
@@ -957,8 +957,8 @@ function ToolCallsBlock({ calls }: { calls: ToolCall[] }) {
   )
 }
 
-function ToolDetail({ kind, name, args, rawArgs, result, error }: {
-  kind: ToolKind; name: string; args: Record<string, unknown>; rawArgs?: string; result?: string; error?: string
+function ToolDetail({ kind, args, rawArgs, result, error }: {
+  kind: ToolKind; args: Record<string, unknown>; rawArgs?: string; result?: string; error?: string
 }) {
   const str = (v: unknown) => (typeof v === 'string' ? v : '')
   const codeBlock = (content: string, lang?: string) => (

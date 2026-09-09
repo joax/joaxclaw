@@ -86,7 +86,7 @@ export function webPushSupported(): boolean {
 
 // VAPID keys arrive base64url; PushManager wants raw bytes. Kept exported and pure so
 // the padding/alphabet handling is covered by a test rather than by trying it on a phone.
-export function vapidKeyToBytes(base64Url: string): Uint8Array {
+export function vapidKeyToBytes(base64Url: string): Uint8Array<ArrayBuffer> {
   const padded = base64Url.replace(/-/g, '+').replace(/_/g, '/')
   const withPad = padded + '='.repeat((4 - (padded.length % 4)) % 4)
   const raw = atob(withPad)

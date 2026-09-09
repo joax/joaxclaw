@@ -39,7 +39,7 @@ function applyZoom(level: number): void {
   api?.zoom?.set(level)
 }
 
-interface SettingsState {
+export interface SettingsState {
   activeThemeId: string
   themes: ThemeSettings[]
   monitorVisible: boolean

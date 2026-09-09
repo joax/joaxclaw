@@ -1,9 +1,7 @@
 import { describe, it, expect } from 'vitest'
-// @ts-expect-error — plain ESM helpers shared by the Vercel functions and Edge middleware
+// Plain ESM helpers shared by the Vercel functions and the Edge middleware.
 import { signSession, readSession, readCookie, sessionCookie, clearedSessionCookie, TTL_SECONDS } from '../../../api/_lib/session.mjs'
-// @ts-expect-error — same
 import { entitled, allowlist, accessFor, authorizeUrl, OAUTH_SCOPE } from '../../../api/_lib/github.mjs'
-// @ts-expect-error — same
 import { isPublicAppAsset } from '../../../api/_lib/gate.mjs'
 
 // The session cookie IS the authorisation for the hosted web app, so these cover the ways

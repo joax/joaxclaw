@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { X, Plus, FileText, Pencil, Loader2, AlertCircle, Check, Save } from 'lucide-react'
 import Editor from '@monaco-editor/react'
 import type { Agent, AgentFile } from '../../lib/types'

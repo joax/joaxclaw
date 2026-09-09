@@ -35,7 +35,8 @@ export function TitleBar() {
         height: 36,
         background: 'var(--bg-primary)',
         borderBottom: '1px solid var(--border)',
-        WebkitAppRegion: 'drag' as React.CSSProperties['WebkitAppRegion']
+        // Electron-only, absent from React's CSSProperties.
+        WebkitAppRegion: 'drag',
       } as React.CSSProperties}
     >
       <div className="flex items-center gap-2" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
