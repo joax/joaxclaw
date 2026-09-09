@@ -62,10 +62,10 @@ describe('defaultPushPrefs', () => {
     expect(categories.agentFinished).toBe(true)
     expect(categories.scheduledTaskFailed).toBe(true)
     expect(categories.backgroundTaskFailed).toBe(true)
-    // Answerable now that the question dock exists.
+    // Answerable now that the question dock and approvals banner exist.
     expect(categories.agentQuestion).toBe(true)
-    // No approvals view yet — the gateway would push into a dead end.
-    expect(categories.approvalRequested).toBe(false)
+    expect(categories.approvalRequested).toBe(true)
+    // Multi-user, with no surface here — the gateway would push into a dead end.
     expect(categories.humanMentioned).toBe(false)
   })
 

@@ -27,10 +27,13 @@ import { isElectron } from './platform'
 // notification. A category only belongs here once there is somewhere to land: a
 // notification that opens onto nothing is worse than no notification.
 //
-// `approvalRequested` is still absent — there is no approvals view. `humanMentioned` is
-// multi-user and has no surface here either.
+// `humanMentioned` is multi-user and has no surface here, so it stays absent.
 export const PUSH_CATEGORIES = [
   { key: 'agentFinished', label: 'Agent finished', hint: 'A run you started has completed.' },
+  // Answerable since the approvals banner landed. It is app-global rather than a
+  // section, so a tapped approval push needs no routing — focusing the app is enough,
+  // which is why `approve/<id>` stays absent from pushUrlToNavigate.
+  { key: 'approvalRequested', label: 'Approval needed', hint: 'A run is blocked until you allow or deny it.' },
   // Answerable since the question dock landed: an agent parked on question.resolve is
   // exactly the case worth waking a phone for, because nothing proceeds until you answer.
   { key: 'agentQuestion', label: 'Agent has a question', hint: 'A run is waiting on your answer.' },
@@ -56,7 +59,7 @@ export interface PushPrefs { categories: PushCategoryPrefs; detailLevel: PushDet
 export function defaultPushPrefs(): PushPrefs {
   return {
     categories: {
-      approvalRequested: false,
+      approvalRequested: true,
       agentFinished: true,
       agentQuestion: true,
       humanMentioned: false,
