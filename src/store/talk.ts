@@ -1,8 +1,9 @@
 // Talk-mode store: drives a realtime voice conversation over the gateway's Talk API.
-// The gateway owns the pipeline (VAD, barge-in, agent "brain"); this orchestrates the
+// The gateway owns the voice pipeline (VAD, barge-in, turn-taking); this orchestrates the
 // session RPCs, consumes the `talk.event` stream, runs the interaction state machine,
-// and wires the audio engine (mic → appendAudio, agent audio → playback). See
-// src/lib/TALK.md for the contract and the Phase-1 scope.
+// wires the audio engine (mic → appendAudio, agent audio → playback), and — because the
+// relay delegates it — drives the agent consult behind `brain: agent-consult` (see the
+// consult contract below). src/lib/TALK.md has the full protocol and the Phase-1 scope.
 
 import { create } from 'zustand'
 import { gatewayClient } from '../lib/gateway'
@@ -91,6 +92,18 @@ export function providerKeyPath(mode: string): string {
   return mode === 'realtime' ? 'talk.realtime.providers' : 'talk.providers'
 }
 
+// How a final user transcript reaches the agent. `provider-direct` (the gateway default)
+// leaves it to the realtime model to decide whether to call `openclaw_agent_consult` — and
+// when it decides not to, it answers from its own head or, worse, promises to check and
+// then says nothing: there is no tool call, so nothing ever consults the agent.
+// `force-agent-consult` makes the gateway route every finished user turn to the agent
+// itself (it stops the provider auto-answering and synthesizes the consult).
+export type ConsultRouting = 'provider-direct' | 'force-agent-consult'
+
+export function consultRoutingPatch(routing: ConsultRouting): unknown {
+  return { talk: { realtime: { consultRouting: routing } } }
+}
+
 export function providerKeyPatch(mode: string, providerId: string, apiKey: string | null): unknown {
   const entry = { [providerId]: { apiKey } }
   return mode === 'realtime' ? { talk: { realtime: { providers: entry } } } : { talk: { providers: entry } }
@@ -132,6 +145,8 @@ interface TalkState {
   activity: TalkActivity[]
   catalog: TalkCatalog | null
   config: TalkConfig
+  // The gateway's `talk.realtime.consultRouting`. null until read from the gateway.
+  consultRouting: ConsultRouting | null
   visualizer: VisualizerStyle
 
   setVisualizer: (v: VisualizerStyle) => void
@@ -139,6 +154,7 @@ interface TalkState {
   loadCatalog: () => Promise<void>
   setConfig: (patch: Partial<TalkConfig>) => void
   setProviderKey: (providerId: string, key: string) => Promise<boolean>
+  setConsultRouting: (routing: ConsultRouting) => Promise<boolean>
   start: () => Promise<void>
   stop: () => Promise<void>
   toggleMute: () => void
@@ -146,6 +162,62 @@ interface TalkState {
 }
 
 const DEFAULT_CONFIG: TalkConfig = { mode: 'realtime', transport: 'gateway-relay', brain: 'agent-consult' }
+
+// ── the consult contract (why Talk needs more than the session RPCs) ─────────────
+//
+// The realtime relay does NOT run the agent for us. When the voice model calls
+// `openclaw_agent_consult`, the gateway parks the provider on a "working" placeholder
+// (that's the `tool.progress` frame), forwards the tool call to the owning client, and
+// then waits for *that client* to run the consult and submit the result. A client that
+// only renders the tool call leaves the provider waiting forever — the call goes silent
+// at "Working…". So this round-trip is mandatory, not an enhancement:
+//
+//   tool.call openclaw_agent_consult
+//     → talk.client.toolCall            starts a chat run on the agent session
+//     → watch `chat` events for runId    until state=final (the answer text)
+//     → talk.session.submitToolResult    { result: text } → the voice speaks it
+//
+//   tool.call openclaw_agent_control     ("are you still working?", "stop that")
+//     → talk.session.steer               → submitToolResult with the steer result
+const CONSULT_TOOL = 'openclaw_agent_consult'
+const CONTROL_TOOL = 'openclaw_agent_control'
+// The consult RPC returns as soon as the agent run is acknowledged, not when it answers.
+const CONSULT_START_TIMEOUT_MS = 60000
+// How long to wait for the agent's answer before handing the provider an error, so the
+// voice says something instead of going quiet.
+const CONSULT_TIMEOUT_MS = 120000
+
+// Which agent session the voice consults. `talk.session.create` resolves an omitted key
+// to the agent's main session but never reports which key it picked — and
+// `talk.client.toolCall` rejects a mismatch ("relay session belongs to another agent
+// session"), so we always send an explicit key and reuse that exact string.
+export function talkSessionKey(agentId?: string): string {
+  return agentId ? `agent:${agentId}:main` : 'main'
+}
+
+// Tool args arrive as an object from the typed event, but a provider may hand the relay
+// the raw JSON string it generated.
+export function parseToolArgs(args: unknown): Record<string, unknown> {
+  if (typeof args === 'string') {
+    try { return JSON.parse(args || '{}') as Record<string, unknown> } catch { return {} }
+  }
+  return args && typeof args === 'object' ? args as Record<string, unknown> : {}
+}
+
+// The agent's answer as the chat `final` event carries it: a plain `text`, or content
+// blocks to be joined.
+export function readRunText(message: unknown): string {
+  if (!message || typeof message !== 'object') return ''
+  const m = message as { text?: unknown; content?: unknown }
+  if (typeof m.text === 'string') return m.text.trim()
+  if (!Array.isArray(m.content)) return ''
+  return m.content
+    .map(b => {
+      const block = b as { type?: unknown; text?: unknown } | null
+      return block && block.type === 'text' && typeof block.text === 'string' ? block.text : ''
+    })
+    .filter(Boolean).join('\n\n').trim()
+}
 
 // The gateway wraps request errors as Error(JSON.stringify({code,message,details})). Pull
 // out the human-readable talkIssue/message so the UI shows "… provider not configured"
@@ -161,6 +233,12 @@ export function talkErrorMessage(e: unknown): string {
 // Audio engine + event unsubscribe live outside the store (not React/serializable state).
 let audio: TalkAudio | null = null
 let unsubEvents: (() => void) | null = null
+// The agent session this call consults — chosen at start(), replayed on every
+// talk.client.toolCall (the gateway rejects any other key for this relay session).
+let sessionKey: string | null = null
+// Consults in flight, callId → the agent run behind it. Doubles as the de-dupe guard:
+// the relay can re-emit a tool call (a forced consult racing the provider's own).
+const consults = new Map<string, { runId?: string; cancel?: () => void }>()
 // Resolved by the `session.ready` event; start() waits on it before opening the mic.
 let resolveReady: (() => void) | null = null
 // Debounces the end of agent speech — see scheduleDrainCheck().
@@ -175,10 +253,24 @@ function cancelDrain(): void {
   if (drainTimer) { clearTimeout(drainTimer); drainTimer = null }
 }
 
+// Hanging up mid-consult must also stop the agent run it started — otherwise the turn
+// keeps running (and writing to the session) after the call is over.
+function cancelConsults(): void {
+  for (const [, run] of consults) {
+    if (run.runId && sessionKey) {
+      void gatewayClient.request('chat.abort', { sessionKey, runId: run.runId }).catch(() => {})
+    }
+    run.cancel?.()
+  }
+  consults.clear()
+}
+
 // Drop the local session: audio engine, event subscription, pending waiters. Used by
 // stop() and by `session.closed`, which means the gateway already tore its side down.
 async function teardown(): Promise<void> {
   cancelDrain()
+  cancelConsults()
+  sessionKey = null
   resolveReady = null
   await audio?.stop()
   audio = null
@@ -293,6 +385,7 @@ export const useTalkStore = create<TalkState>((set, get) => ({
   activity: [],
   catalog: null,
   config: DEFAULT_CONFIG,
+  consultRouting: null,
   visualizer: loadViz(),
 
   setVisualizer(v) {
@@ -308,6 +401,13 @@ export const useTalkStore = create<TalkState>((set, get) => ({
     try {
       const cat = await gatewayClient.request<TalkCatalog>('talk.catalog', {})
       set({ catalog: cat })
+      // Read how the gateway routes a finished user turn — the difference between the
+      // agent answering and the voice model deciding on its own whether to ask it.
+      try {
+        const cfg = await gatewayClient.request<{ config?: { talk?: { realtime?: { consultRouting?: string } } } }>('talk.config', {})
+        const routing = cfg.config?.talk?.realtime?.consultRouting
+        set({ consultRouting: routing === 'force-agent-consult' ? 'force-agent-consult' : 'provider-direct' })
+      } catch { /* older gateway: leave it unknown */ }
       // Default to the first configured provider for the current mode (prefer one with a key).
       const forMode = providersForMode(cat, get().config.mode)
       const pick = forMode.find(p => p.configured) ?? forMode[0]
@@ -333,6 +433,21 @@ export const useTalkStore = create<TalkState>((set, get) => ({
     } catch (e) { set({ error: talkErrorMessage(e) }); return false }
   },
 
+  // Switch the gateway between "the voice model decides whether to ask your agent" and
+  // "every turn goes to your agent".
+  async setConsultRouting(routing) {
+    const previous = get().consultRouting
+    set({ consultRouting: routing })
+    try {
+      const snap = await gatewayClient.request<{ hash?: string }>('config.get', {})
+      await gatewayClient.request('config.patch', {
+        raw: JSON.stringify(consultRoutingPatch(routing)),
+        ...(snap.hash ? { baseHash: snap.hash } : {}),
+      })
+      return true
+    } catch (e) { set({ error: talkErrorMessage(e), consultRouting: previous }); return false }
+  },
+
   async start() {
     if (get().phase !== 'idle' && get().phase !== 'error') return
     set({ phase: 'connecting', error: null, transcript: [], toolActivity: null, activity: [] })
@@ -346,18 +461,14 @@ export const useTalkStore = create<TalkState>((set, get) => ({
 
     try {
       const { config } = get()
-      // To talk to a specific agent (agent-consult), attach the Talk session to a
-      // session for that agent; omit for the gateway default agent.
-      let sessionKey: string | undefined
-      if (config.agentId) {
-        const s = await gatewayClient.request<{ key: string }>('sessions.create', { agentId: config.agentId })
-        sessionKey = s.key
-      }
+      // Bind the call to an agent session up front and keep the key: the consult RPC
+      // needs this exact string, and the gateway never tells us which key it resolved.
+      sessionKey = talkSessionKey(config.agentId)
       const res = await gatewayClient.request<{ sessionId: string }>('talk.session.create', {
         mode: config.mode,
         transport: transportForMode(config.mode),
         brain: config.brain,
-        ...(sessionKey ? { sessionKey } : {}),
+        sessionKey,
         ...(config.provider ? { provider: config.provider } : {}),
         ...(config.voice ? { voice: config.voice } : {}),
       })
@@ -436,6 +547,112 @@ function scheduleDrainCheck(set: SetFn, get: GetFn): void {
   }, DRAIN_GRACE_MS)
 }
 
+// ── answering the relay's tool calls ────────────────────────────────────────────
+
+// Give the provider its tool result back. Skipped once the call is over — there is no
+// session left to answer, and the gateway would reject it anyway.
+async function submitToolResult(get: GetFn, sessionId: string, callId: string, result: unknown): Promise<void> {
+  if (get().sessionId !== sessionId) return
+  await gatewayClient.request('talk.session.submitToolResult', { sessionId, callId, result }).catch(() => {})
+}
+
+// Wait for one consult's agent run to finish and resolve with its reply. The run's
+// progress arrives on the gateway's `chat`/`agent` streams (keyed by runId), not on the
+// talk stream — the talk stream only carries the provider's side of the call.
+function awaitRunText(set: SetFn, runId: string, callId: string): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    let settled = false
+    const settle = (fn: () => void) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      unsub()
+      fn()
+    }
+    const timer = setTimeout(() => settle(() => reject(new Error('The agent did not answer in time'))), CONSULT_TIMEOUT_MS)
+    const unsub = gatewayClient.on(frame => {
+      const p = (frame.payload ?? {}) as {
+        runId?: string; state?: string; message?: unknown; errorMessage?: string
+        stream?: string; data?: { name?: string; phase?: string }
+      }
+      if (p.runId !== runId) return
+      // Tool steps the agent takes while answering — shown on the consult's activity row.
+      if (frame.event === 'agent') {
+        if (p.stream === 'tool' && p.data?.name) {
+          const step = p.data.phase ? `${p.data.name} · ${p.data.phase}` : p.data.name
+          set(s => ({ activity: s.activity.map(a => a.id === callId ? { ...a, progress: step } : a) }))
+        }
+        return
+      }
+      if (frame.event !== 'chat') return
+      if (p.state === 'final') settle(() => resolve(readRunText(p.message) || 'The agent finished without a reply.'))
+      else if (p.state === 'aborted') settle(() => reject(new Error(p.errorMessage ?? 'The agent run was cancelled')))
+      else if (p.state === 'error') settle(() => reject(new Error(p.errorMessage ?? 'The agent run failed')))
+    })
+    const entry = consults.get(callId)
+    if (entry) entry.cancel = () => settle(() => reject(new Error('The call ended before the agent answered')))
+  })
+}
+
+// Run one `openclaw_agent_consult` end to end: start the agent run, wait for its reply,
+// and hand it to the provider so the voice can speak it.
+async function runConsult(set: SetFn, get: GetFn, callId: string, args: unknown): Promise<void> {
+  const sessionId = get().sessionId
+  const key = sessionKey
+  if (!sessionId || !key || consults.has(callId)) return
+  consults.set(callId, {})
+  try {
+    const started = await gatewayClient.request<{ runId?: string; idempotencyKey?: string }>('talk.client.toolCall', {
+      sessionKey: key,
+      relaySessionId: sessionId,
+      callId,
+      name: CONSULT_TOOL,
+      args: parseToolArgs(args),
+    }, CONSULT_START_TIMEOUT_MS)
+    const runId = started.runId ?? started.idempotencyKey
+    if (!runId) throw new Error('The gateway started no agent run for this consult')
+    const entry = consults.get(callId)
+    if (!entry) return                       // torn down while the RPC was in flight
+    entry.runId = runId
+    const text = await awaitRunText(set, runId, callId)
+    set(s => ({ activity: s.activity.map(a => a.id === callId ? { ...a, status: 'done', result: summarize(text) } : a) }))
+    await submitToolResult(get, sessionId, callId, { result: text })
+  } catch (e) {
+    const message = talkErrorMessage(e)
+    set(s => ({ activity: s.activity.map(a => a.id === callId ? { ...a, status: 'error', error: message } : a) }))
+    // Tell the provider it failed rather than leaving it parked on the placeholder —
+    // a spoken "I hit an error" beats silence.
+    await submitToolResult(get, sessionId, callId, { error: message })
+  } finally {
+    consults.delete(callId)
+  }
+}
+
+// `openclaw_agent_control` is how the voice relays "how's it going?" / "stop that" into
+// the running consult. The gateway applies it but leaves the tool call for us to answer.
+async function runControl(set: SetFn, get: GetFn, callId: string, args: unknown): Promise<void> {
+  const sessionId = get().sessionId
+  if (!sessionId) return
+  const parsed = parseToolArgs(args)
+  const text = typeof parsed.text === 'string' ? parsed.text : ''
+  const mode = typeof parsed.mode === 'string' ? parsed.mode : undefined
+  try {
+    if (!text) throw new Error('Voice control request carried no text')
+    const result = await gatewayClient.request('talk.session.steer', {
+      sessionId,
+      ...(sessionKey ? { sessionKey } : {}),
+      text,
+      ...(mode ? { mode } : {}),
+    })
+    set(s => ({ activity: s.activity.map(a => a.id === callId ? { ...a, status: 'done', result: summarize(result) } : a) }))
+    await submitToolResult(get, sessionId, callId, result)
+  } catch (e) {
+    const message = talkErrorMessage(e)
+    set(s => ({ activity: s.activity.map(a => a.id === callId ? { ...a, status: 'error', error: message } : a) }))
+    await submitToolResult(get, sessionId, callId, { error: message })
+  }
+}
+
 function handleTalkEvent(set: SetFn, get: GetFn, p: Record<string, unknown>) {
   const kind = readEventKind(p)
   const role = readRole(p, kind)
@@ -489,6 +706,9 @@ function handleTalkEvent(set: SetFn, get: GetFn, p: Record<string, unknown>) {
         toolActivity: name,
         activity: [...s.activity, { id, name, args: summarize(args), status: 'running', ts: Date.now() }].slice(-40),
       }))
+      // The relay is waiting on *us* to answer these two — see the consult contract above.
+      if (name === CONSULT_TOOL) void runConsult(set, get, id, args)
+      else if (name === CONTROL_TOOL) void runControl(set, get, id, args)
       break
     }
 
