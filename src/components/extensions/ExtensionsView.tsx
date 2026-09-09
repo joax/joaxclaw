@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Puzzle, RefreshCw, Plus, Trash2, Check, Loader2, Search, FileText, X, ChevronRight, SlidersHorizontal, CheckCircle2, XCircle, HelpCircle, KeyRound } from 'lucide-react'
+import { Puzzle, RefreshCw, Plus, Trash2, Check, Loader2, Search, FileText, X, ChevronRight, SlidersHorizontal, CheckCircle2, XCircle, HelpCircle, KeyRound, Download } from 'lucide-react'
 import { useExtensionsStore } from '../../store/extensions'
 import type { Plugin, Skill } from '../../store/extensions'
 import type { PluginKeyStatus } from '../../lib/pluginConfig'
@@ -7,6 +7,7 @@ import { useConnectionStore } from '../../store/connection'
 import { useSkillsStore } from '../../store/skills'
 import { useHelpStore } from '../../store/help'
 import { Btn } from '../ui/Btn'
+import { PluginBrowser } from './PluginBrowser'
 import { Input } from '../ui/Input'
 import { PluginConfigModal } from './PluginConfigModal'
 import { usePluginUpdateStore } from '../../store/pluginUpdate'
@@ -41,6 +42,7 @@ export function ExtensionsView({ onOpenChat }: { onOpenChat?: () => void }) {
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
   const [showAddSkill, setShowAddSkill] = useState(false)
   const [showAddPlugin, setShowAddPlugin] = useState(false)
+  const [browsing, setBrowsing] = useState(false)
   const [mdModal, setMdModal] = useState<{ skill: Skill } | null>(null)
   const [configPlugin, setConfigPlugin] = useState<Plugin | null>(null)
 
@@ -193,6 +195,11 @@ export function ExtensionsView({ onOpenChat }: { onOpenChat?: () => void }) {
               style={{ padding: '5px 10px 5px 28px', fontSize: 12, borderRadius: 'var(--radius)', border: '1px solid var(--border)', background: 'var(--bg-elevated)', color: 'var(--text-primary)', outline: 'none', width: 180 }}
             />
           </div>
+          {tab === 'plugins' && (
+            <Btn variant="outline" size="sm" icon={<Download size={13} />} onClick={() => setBrowsing(true)}>
+              Browse
+            </Btn>
+          )}
           <Btn variant="outline" size="sm" icon={<Plus size={13} />} onClick={() => tab === 'skills' ? setShowAddSkill(v => !v) : setShowAddPlugin(v => !v)}>
             Add {tab === 'skills' ? 'skill' : 'plugin'}
           </Btn>
@@ -232,6 +239,14 @@ export function ExtensionsView({ onOpenChat }: { onOpenChat?: () => void }) {
       {/* Skill MD modal */}
       {mdModal && (
         <SkillMdModal skill={mdModal.skill} onClose={() => setMdModal(null)} />
+      )}
+
+      {/* ClawHub browser */}
+      {browsing && (
+        <PluginBrowser
+          onClose={() => setBrowsing(false)}
+          installedIds={new Set(plugins.map(p => p.id))}
+        />
       )}
 
       {/* Plugin configure modal */}
