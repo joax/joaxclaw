@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { RefreshCw, ChevronUp, ChevronDown, Square, MessageSquare, Trash2, Heart, Pencil, Cpu, AlarmClock, X } from 'lucide-react'
+import { RefreshCw, ChevronUp, ChevronDown, Square, MessageSquare, Trash2, Heart, Pencil, Cpu, AlarmClock, X, Search } from 'lucide-react'
 import { ModelIcon } from '../ui/ModelIcon'
 import { useSessionsStore } from '../../store/sessions'
 import { useChatStore } from '../../store/chat'
@@ -8,6 +8,8 @@ import type { Session } from '../../lib/types'
 import { agentIdFromSessionKey as sessionAgentId } from '../../lib/sessionName'
 import { reminderBySession, fmtCountdown, type PendingReminder } from '../../lib/reminders'
 import { Btn } from '../ui/Btn'
+import { useSessionSearchStore } from '../../store/sessionSearch'
+import { groupHits, trimSnippet } from '../../lib/sessionSearch'
 
 type SortKey = 'updatedAt' | 'status' | 'model'
 interface Props { onOpenChat: () => void }
@@ -91,6 +93,16 @@ export function SessionsView({ onOpenChat }: Props) {
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
   const [filterStatus, setFilterStatus] = useState<string>('all')
   const [search, setSearch] = useState('')
+
+  // Transcript search (sessions.search) — distinct from the instant name filter above.
+  const searchHits = useSessionSearchStore(s => s.hits)
+  const searchQuery = useSessionSearchStore(s => s.query)
+  const searchLoading = useSessionSearchStore(s => s.loading)
+  const searchError = useSessionSearchStore(s => s.error)
+  const searchRan = useSessionSearchStore(s => s.ran)
+  const searchSkipped = useSessionSearchStore(s => s.skipped)
+  const runSearch = useSessionSearchStore(s => s.run)
+  const clearSearch = useSessionSearchStore(s => s.clear)
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
   const [editingKey, setEditingKey] = useState<string | null>(null)
   const [openingKey, setOpeningKey] = useState<string | null>(null)
@@ -115,6 +127,13 @@ export function SessionsView({ onOpenChat }: Props) {
     if (sort === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
     else { setSort(key); setSortDir('desc') }
   }
+
+  // Newest first, so past the gateway's 200-key cap it is the recent sessions that get
+  // searched rather than an arbitrary slice.
+  const runTranscriptSearch = () => {
+    void runSearch(search, [...sessions].sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0)).map(x => x.key))
+  }
+  const clearTranscriptSearch = () => { clearSearch() }
 
   const filtered = sessions
     .filter(s => filterStatus === 'all' || sessionStatus(s) === filterStatus)
@@ -175,6 +194,7 @@ export function SessionsView({ onOpenChat }: Props) {
         <input
           value={search}
           onChange={e => setSearch(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') runTranscriptSearch() }}
           placeholder="Search sessions…"
           style={{
             padding: '5px 10px', fontSize: 12,
@@ -182,6 +202,18 @@ export function SessionsView({ onOpenChat }: Props) {
             background: 'var(--bg-elevated)', color: 'var(--text-primary)', outline: 'none', width: 200
           }}
         />
+        {/* The box above filters names and keys instantly, client-side. This reads the
+            transcripts on the gateway, so it is an explicit action rather than firing on
+            every keystroke. */}
+        {search.trim().length > 1 && (
+          <Btn size="sm" variant="outline" loading={searchLoading}
+            icon={<Search size={12} />} onClick={runTranscriptSearch}>
+            Search messages
+          </Btn>
+        )}
+        {searchRan && (
+          <Btn size="sm" variant="outline" onClick={clearTranscriptSearch}>Clear</Btn>
+        )}
         <FilterSelect value={filterStatus} onChange={setFilterStatus} label="Status">
           <option value="all">All statuses</option>
           <option value="running">Running</option>
@@ -194,6 +226,56 @@ export function SessionsView({ onOpenChat }: Props) {
       {!loading && sessions.length === 0 && !error && (
         <div className="flex-1 flex items-center justify-center text-sm" style={{ color: 'var(--text-secondary)' }}>
           No sessions found on gateway
+        </div>
+      )}
+
+      {/* Transcript search results — a separate block above the table, since these are
+          messages rather than sessions and are ranked by the gateway, not sorted here. */}
+      {searchRan && (
+        <div className="mb-4">
+          {searchError ? (
+            <div className="px-3 py-2 rounded text-sm" style={{ background: 'color-mix(in srgb, var(--danger) 10%, transparent)', border: '1px solid var(--danger)', color: 'var(--danger)' }}>
+              {searchError}
+            </div>
+          ) : searchHits.length === 0 ? (
+            <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
+              No messages matching “{searchQuery}”.
+            </p>
+          ) : (
+            <>
+              <p className="text-xs mb-2" style={{ color: 'var(--text-secondary)' }}>
+                {searchHits.length} message{searchHits.length === 1 ? '' : 's'} matching “{searchQuery}”
+                {searchSkipped > 0 && ` · oldest ${searchSkipped} session${searchSkipped === 1 ? '' : 's'} not searched`}
+              </p>
+              <div className="flex flex-col gap-1.5">
+                {groupHits(searchHits).map(group => (
+                  <div key={group.sessionKey} style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius)', background: 'var(--bg-surface)' }}>
+                    <div className="px-3 py-1.5 text-xs font-medium truncate" style={{ borderBottom: '1px solid var(--border)', color: 'var(--text-secondary)' }}>
+                      {sessionLabel(sessions.find(x => x.key === group.sessionKey) ?? { key: group.sessionKey } as Session, customLabels, derivedNames)}
+                    </div>
+                    {group.hits.map(h => (
+                      <button
+                        key={h.messageId}
+                        onClick={() => {
+                          const sess = sessions.find(x => x.key === group.sessionKey)
+                          if (sess) void handleOpenInChat(sess)
+                        }}
+                        className="w-full text-left px-3 py-2"
+                        style={{ background: 'none', border: 'none', cursor: 'pointer', display: 'block' }}
+                      >
+                        <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+                          {h.role === 'user' ? 'You' : 'Agent'} · {new Date(h.timestamp).toLocaleString()}
+                        </span>
+                        <span className="text-sm block" style={{ color: 'var(--text-primary)' }}>
+                          {trimSnippet(h.snippet)}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
         </div>
       )}
 
