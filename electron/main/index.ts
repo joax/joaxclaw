@@ -1241,8 +1241,11 @@ ipcMain.handle('metrics:get', async () => {
     let gpuControllers = graphics.controllers.map((c) => ({
       model:          c.model,
       utilizationGpu: c.utilizationGpu ?? 0,
-      memUsed:        c.memUsed        ?? 0,
-      memTotal:       c.memTotal       ?? 0,
+      // systeminformation calls these memoryUsed/memoryTotal; the old names never
+      // existed on the type, so GPU memory always read as 0. `vram` (in MB) is the
+      // fallback total on controllers that don't report memoryTotal.
+      memUsed:        c.memoryUsed     ?? 0,
+      memTotal:       c.memoryTotal    ?? c.vram ?? 0,
       temperatureGpu: c.temperatureGpu ?? 0,
     }))
 

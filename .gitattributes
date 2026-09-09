@@ -1,0 +1,7 @@
+# Every changelog entry is added at the top of the same "## [Unreleased]" section, so
+# any two PRs open at once conflict on that one line however unrelated their code is.
+# The resolution is always "keep both bullets", which is exactly what a union merge does.
+#
+# Union can duplicate a line if two branches edit the SAME bullet — rare here, since
+# entries are append-at-top — so give the section a glance after a noisy merge.
+CHANGELOG.md merge=union

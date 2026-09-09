@@ -311,7 +311,6 @@ function buildBody(
 // Reconstruct a TeamMemberDef list from a compiled ProcessDef.
 // Used for migrating legacy .md-only teams into the new blueprint format.
 // Members are ordered by graph x-position (left to right).
-import type { TeamMemberDef } from './teamBlueprint'
 
 export function extractMembersFromDef(def: ProcessDef): TeamMemberDef[] {
   const agentNodes = (def.graph?.nodes ?? [])

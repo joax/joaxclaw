@@ -2,7 +2,9 @@ import { Loader2 } from 'lucide-react'
 import type { CSSProperties, ReactNode } from 'react'
 
 interface BtnProps {
-  children: ReactNode
+  // Optional: an icon-only button is a deliberate, widely used shape here (toolbars,
+  // table row actions). `title` supplies its accessible name in that case.
+  children?: ReactNode
   onClick?: () => void
   variant?: 'primary' | 'ghost' | 'danger' | 'outline'
   size?: 'sm' | 'md'
@@ -12,9 +14,11 @@ interface BtnProps {
   className?: string
   style?: CSSProperties
   type?: 'button' | 'submit'
+  /** Native tooltip; also the accessible name for an icon-only button. */
+  title?: string
 }
 
-export function Btn({ children, onClick, variant = 'primary', size = 'md', icon, loading, disabled, className = '', style, type = 'button' }: BtnProps) {
+export function Btn({ children, onClick, variant = 'primary', size = 'md', icon, loading, disabled, className = '', style, type = 'button', title }: BtnProps) {
   const base: CSSProperties = {
     display: 'inline-flex',
     alignItems: 'center',
@@ -42,6 +46,7 @@ export function Btn({ children, onClick, variant = 'primary', size = 'md', icon,
       type={type}
       onClick={disabled || loading ? undefined : onClick}
       className={className}
+      {...(title ? { title, 'aria-label': children ? undefined : title } : {})}
       style={{ ...base, ...variants[variant], ...style }}
       onMouseEnter={e => {
         if (disabled || loading) return

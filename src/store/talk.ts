@@ -150,7 +150,7 @@ interface TalkState {
   visualizer: VisualizerStyle
 
   setVisualizer: (v: VisualizerStyle) => void
-  fillFrequencies: (kind: 'mic' | 'agent', out: Uint8Array) => boolean
+  fillFrequencies: (kind: 'mic' | 'agent', out: Uint8Array<ArrayBuffer>) => boolean
   loadCatalog: () => Promise<void>
   setConfig: (patch: Partial<TalkConfig>) => void
   setProviderKey: (providerId: string, key: string) => Promise<boolean>
@@ -704,7 +704,7 @@ function handleTalkEvent(set: SetFn, get: GetFn, p: Record<string, unknown>) {
       const args = nestedPayload(p).args ?? p.args
       set(s => ({
         toolActivity: name,
-        activity: [...s.activity, { id, name, args: summarize(args), status: 'running', ts: Date.now() }].slice(-40),
+        activity: [...s.activity, { id, name, args: summarize(args), status: 'running' as const, ts: Date.now() }].slice(-40),
       }))
       // The relay is waiting on *us* to answer these two — see the consult contract above.
       if (name === CONSULT_TOOL) void runConsult(set, get, id, args)

@@ -23,7 +23,7 @@ export function floatTo16BitPCM(input: Float32Array): Int16Array {
 }
 
 // Signed 16-bit PCM → Float32 [-1,1].
-export function pcm16ToFloat32(input: Int16Array): Float32Array {
+export function pcm16ToFloat32(input: Int16Array): Float32Array<ArrayBuffer> {
   const out = new Float32Array(input.length)
   for (let i = 0; i < input.length; i++) out[i] = input[i] / (input[i] < 0 ? 0x8000 : 0x7fff)
   return out
@@ -160,7 +160,7 @@ export class TalkAudio {
 
   // Fill `out` (length FREQ_BINS) with the current byte-frequency data for the mic
   // input or the agent playback. Returns false if that analyser isn't ready.
-  readFrequencies(kind: 'mic' | 'agent', out: Uint8Array): boolean {
+  readFrequencies(kind: 'mic' | 'agent', out: Uint8Array<ArrayBuffer>): boolean {
     const a = kind === 'agent' ? this.agentAnalyser : this.micAnalyser
     if (!a) return false
     a.getByteFrequencyData(out)

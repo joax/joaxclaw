@@ -1,7 +1,7 @@
 import { contextBridge, ipcRenderer, webFrame } from 'electron'
 import { homedir } from 'os'
 
-contextBridge.exposeInMainWorld('api', {
+const api = {
   // App info
   app: {
     version: () => ipcRenderer.invoke('app:version'),
@@ -210,11 +210,13 @@ contextBridge.exposeInMainWorld('api', {
     clearDeviceToken: (host: string, role: string) =>
       ipcRenderer.invoke('deviceAuth:clearDeviceToken', host, role) as Promise<{ ok: boolean; error?: string }>
   }
-})
+}
+
+contextBridge.exposeInMainWorld('api', api)
 
 // Type declarations for renderer
 declare global {
   interface Window {
-    api: typeof import('./index')['default']
+    api: typeof api
   }
 }

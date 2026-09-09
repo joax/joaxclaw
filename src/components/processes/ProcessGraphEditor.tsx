@@ -2,6 +2,7 @@ import { useState, useRef, useCallback, useEffect } from 'react'
 import { Plus, Trash2, X, Save, ZoomIn, ZoomOut, Maximize2, LayoutGrid, Bot, Database, FolderOpen, Brain, Radio, ChevronDown, AlertCircle, Shuffle, UserCheck } from 'lucide-react'
 import type { ProcessDef, GraphNode, GraphEdge, Deliverable, ProcessGraph, PortSide } from '../../lib/processParser'
 import { useAgentsStore } from '../../store/agents'
+import type { Agent } from '../../lib/types'
 import { useIsNarrow } from '../../lib/useIsNarrow'
 import { editorDrawerStyle } from '../../lib/mobilePanel'
 import { useObsidianVaults, type ObsidianVaultRef } from '../../store/memory'
@@ -272,7 +273,7 @@ function NodeCard({
 }: {
   node: GraphNode
   selected: boolean
-  agents: ReturnType<typeof useAgentsStore>['agents']
+  agents: Agent[]
   onSelect: () => void
   onMouseDown: (e: React.MouseEvent) => void
   onPortMouseDown: (e: React.MouseEvent, nodeId: string, portSide: PortSide) => void
@@ -423,7 +424,7 @@ function CollaborationPanel({ node, nodes, edges, agents, vaults, onChange, onCl
   node: GraphNode
   nodes: GraphNode[]
   edges: GraphEdge[]
-  agents: ReturnType<typeof useAgentsStore>['agents']
+  agents: Agent[]
   vaults: ObsidianVaultRef[]
   onChange: (patch: Partial<GraphNode>) => void
   onClose: () => void

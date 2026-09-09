@@ -37,7 +37,7 @@ export function normalizeMeta(value?: string): string {
   return value.trim().replace(/[A-Z]/g, c => String.fromCharCode(c.charCodeAt(0) + 32))
 }
 
-export async function sha256Hex(bytes: Uint8Array): Promise<string> {
+export async function sha256Hex(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
   const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))
   return [...digest].map(b => b.toString(16).padStart(2, '0')).join('')
 }
