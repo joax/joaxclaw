@@ -22,6 +22,7 @@ import { UpdateBanner } from './components/layout/UpdateBanner'
 import { PluginUpdateBanner } from './components/layout/PluginUpdateBanner'
 import { GatewayUpdateBanner } from './components/layout/GatewayUpdateBanner'
 import { ScopeWarningBanner } from './components/layout/ScopeWarningBanner'
+import { ApprovalsBanner } from './components/layout/ApprovalsBanner'
 import { WelcomeModal } from './components/layout/WelcomeModal'
 import { BottomNav } from './components/layout/BottomNav'
 import { FileDrawer } from './components/files/FileDrawer'
@@ -187,6 +188,8 @@ export default function App() {
       {/* Custom title bar is Electron window chrome — omit it in the browser/PWA build. */}
       {isElectron() && <TitleBar />}
       <UpdateBanner />
+      {/* Above the update banners: an approval is blocking a run right now, they are not. */}
+      <ApprovalsBanner />
       <ScopeWarningBanner onFix={() => { focusGatewayTab('connection'); setSection('gateway') }} />
       <GatewayUpdateBanner onOpenChat={() => setSection('chat')} />
       <PluginUpdateBanner onOpenChat={() => setSection('chat')} />
