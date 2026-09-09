@@ -10,6 +10,7 @@
 
 import { create } from 'zustand'
 import { gatewayClient } from '../lib/gateway'
+import type { GatewayNode, NodeHostStats } from '../lib/nodeStats'
 
 // ── Types (mirror device.pair.list payloads) ───────────────────────────────────
 
@@ -34,6 +35,10 @@ export interface PairedDevice {
   createdAtMs: number
   approvedAtMs?: number
   lastSeenAtMs?: number
+  /** Why it was last seen — `connect`, `device-token-auth`, a background wake… */
+  lastSeenReason?: string
+  /** Live right now. Present in device.pair.list; the panel showed no online state at all. */
+  connected?: boolean
   tokens?: DeviceToken[]
 }
 
@@ -65,9 +70,17 @@ interface DeviceListResponse {
   paired?: PairedDevice[]
 }
 
+interface NodeListResponse {
+  ts?: number
+  nodes?: GatewayNode[]
+}
+
 // ── Helpers (pure, exported for tests) ──────────────────────────────────────────
 
 const ADMIN_SCOPE = 'operator.admin'
+
+/** device.pair.rename caps `label` at 64 characters. */
+export const DEVICE_LABEL_MAX = 64
 
 /** A device with at least one non-revoked admin token, or admin in its scope grant. */
 export function deviceHasAdmin(d: PairedDevice): boolean {
@@ -92,6 +105,8 @@ export function isLastAdminDevice(paired: PairedDevice[], deviceId: string): boo
 interface DevicesState {
   pending: PendingPair[]
   paired: PairedDevice[]
+  /** Capability nodes (phones, CLI hosts) — a different roster from paired devices. */
+  nodes: GatewayNode[]
   loading: boolean
   error: string | null
   busy: Record<string, boolean>          // keyed by requestId or deviceId
@@ -102,6 +117,8 @@ interface DevicesState {
   approve: (requestId: string) => Promise<boolean>
   reject: (requestId: string) => Promise<boolean>
   remove: (deviceId: string) => Promise<boolean>
+  /** `label` is the gateway's parameter name, capped at 64 chars. */
+  rename: (deviceId: string, label: string) => Promise<boolean>
   rotateToken: (deviceId: string, role: string, scopes: string[]) => Promise<boolean>
   revokeToken: (deviceId: string, role: string) => Promise<boolean>
   clearRotated: () => void
@@ -120,6 +137,7 @@ let _refreshTimer: ReturnType<typeof setTimeout> | null = null
 export const useDevicesStore = create<DevicesState>((set, get) => ({
   pending: [],
   paired: [],
+  nodes: [],
   loading: false,
   error: null,
   busy: {},
@@ -135,6 +153,22 @@ export const useDevicesStore = create<DevicesState>((set, get) => ({
       if (frame.event.startsWith('device.pair') || frame.event.startsWith('device.pairing')) {
         if (_refreshTimer) clearTimeout(_refreshTimer)
         _refreshTimer = setTimeout(() => { void get().load() }, 250)
+        return
+      }
+      // A resource snapshot for one node, sent on connect and every 60s. Patched in
+      // place: re-listing on each would be a request per node per minute.
+      if (frame.event === 'node.hostStats') {
+        const p = (frame.payload ?? {}) as { nodeId?: string; hostStats?: NodeHostStats }
+        if (!p.nodeId || !p.hostStats) return
+        set(s => ({
+          nodes: s.nodes.map(n => (n.nodeId === p.nodeId ? { ...n, hostStats: p.hostStats } : n)),
+        }))
+        return
+      }
+      // Presence and pairing changes alter the roster itself, so re-list.
+      if (frame.event === 'node.presence' || frame.event.startsWith('node.pair')) {
+        if (_refreshTimer) clearTimeout(_refreshTimer)
+        _refreshTimer = setTimeout(() => { void get().load() }, 250)
       }
     })
   },
@@ -146,7 +180,14 @@ export const useDevicesStore = create<DevicesState>((set, get) => ({
       const r = await gatewayClient.request<DeviceListResponse>('device.pair.list', {})
       const paired = [...(r.paired ?? [])].sort((a, b) => (b.approvedAtMs ?? b.createdAtMs ?? 0) - (a.approvedAtMs ?? a.createdAtMs ?? 0))
       const pending = [...(r.pending ?? [])].sort((a, b) => (b.ts ?? 0) - (a.ts ?? 0))
-      set({ paired, pending, loading: false })
+      // Nodes are a separate roster and a separate method. A gateway with none answers
+      // with an empty list; one that withholds the scope rejects it — neither should
+      // cost us the device list, so it degrades on its own.
+      const nodes = await gatewayClient
+        .request<NodeListResponse>('node.list', {})
+        .then(n => (Array.isArray(n?.nodes) ? n.nodes : []))
+        .catch(() => [])
+      set({ paired, pending, nodes, loading: false })
     } catch (e) {
       set({ loading: false, error: errText(e) })
     }
@@ -155,6 +196,11 @@ export const useDevicesStore = create<DevicesState>((set, get) => ({
   async approve(requestId) { return run(set, get, requestId, () => gatewayClient.request('device.pair.approve', { requestId })) },
   async reject(requestId)  { return run(set, get, requestId, () => gatewayClient.request('device.pair.reject',  { requestId })) },
   async remove(deviceId)   { return run(set, get, deviceId,  () => gatewayClient.request('device.pair.remove',  { deviceId })) },
+  async rename(deviceId, label) {
+    const trimmed = label.trim().slice(0, DEVICE_LABEL_MAX)
+    if (!trimmed) return false          // the schema requires at least one character
+    return run(set, get, deviceId, () => gatewayClient.request('device.pair.rename', { deviceId, label: trimmed }))
+  },
   async revokeToken(deviceId, role) {
     return run(set, get, deviceId, () => gatewayClient.request('device.token.revoke', { deviceId, role }))
   },
