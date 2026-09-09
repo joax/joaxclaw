@@ -24,11 +24,16 @@ import { gatewayClient } from './gateway'
 import { isElectron } from './platform'
 
 // Which of the gateway's six categories this app can actually act on when you tap the
-// notification. Approvals and agent questions are deliberately absent: the gateway will
-// happily push them, but JoaxClaw has nowhere to land yet, and a notification that
-// opens onto nothing is worse than no notification. Add them here when their views land.
+// notification. A category only belongs here once there is somewhere to land: a
+// notification that opens onto nothing is worse than no notification.
+//
+// `approvalRequested` is still absent — there is no approvals view. `humanMentioned` is
+// multi-user and has no surface here either.
 export const PUSH_CATEGORIES = [
   { key: 'agentFinished', label: 'Agent finished', hint: 'A run you started has completed.' },
+  // Answerable since the question dock landed: an agent parked on question.resolve is
+  // exactly the case worth waking a phone for, because nothing proceeds until you answer.
+  { key: 'agentQuestion', label: 'Agent has a question', hint: 'A run is waiting on your answer.' },
   { key: 'scheduledTaskFailed', label: 'Automation failed', hint: 'A scheduled run ended in failure.' },
   { key: 'backgroundTaskFailed', label: 'Background task failed', hint: 'A background job ended in failure.' },
 ] as const
@@ -53,7 +58,7 @@ export function defaultPushPrefs(): PushPrefs {
     categories: {
       approvalRequested: false,
       agentFinished: true,
-      agentQuestion: false,
+      agentQuestion: true,
       humanMentioned: false,
       scheduledTaskFailed: true,
       backgroundTaskFailed: true,
@@ -171,8 +176,8 @@ export async function writePushPrefs(endpoint: string, preferences: PushPrefs): 
 // event→notification map:
 //
 //   approval-requested      approve/<approvalId>
-//   agent-question          ask/<questionId>
-//   scheduled-task-failed   automations?job=<jobId>&run=<runId>
+//   agent-question          ask/<questionId>        -> chat
+//   scheduled-task-failed   automations?job=<jobId>&run=<runId> -> Automations
 //   agent-finished          (no url — nothing to select, so just focus the app)
 //   background-task-failed  (no url)
 //
@@ -201,5 +206,10 @@ export function pushUrlToNavigate(url: unknown): PushNavigate | undefined {
   // The Control UI can live under a base path, so match the last segment group rather
   // than anchoring at the start.
   if (/(^|\/)automations$/.test(path)) return { section: 'crons' }
+  // `ask/<questionId>`: the dock finds the pending question by session key on its own,
+  // so this only has to put the user in the right section. It deliberately does not try
+  // to resolve the id to a conversation — on a cold start from a push the questions
+  // store has not loaded yet, so there would be nothing to look the id up in.
+  if (/(^|\/)ask\/[^/]+$/.test(path)) return { section: 'chat' }
   return undefined
 }
