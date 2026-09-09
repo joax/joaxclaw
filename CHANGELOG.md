@@ -5,6 +5,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **Install plugins without leaving the app.** The Extensions page could list plugins and switch them on, and that was all — "Add plugin" registers a config entry for something already on disk, so actually getting a plugin onto your gateway meant a shell. **Browse** now searches ClawHub and installs from the results, showing each package's provenance (official, community or private), its summary, version and download count. Installing surfaces the gateway's consent step rather than skipping past it: a plugin declares what it will register — messaging channels, agent tools, MCP servers, CLI commands, and any config flags its own manifest marks dangerous — and the gateway refuses until that has been acknowledged. The app shows you the list and asks; the token that records your agreement is only ever sent after you have seen what it covers. If a plugin you already approved has grown its reach since, the prompt says so and shows **only what is new**, which is the case the mechanism exists for.
+
+---
+
 ## [0.24.1] - 2026-09-09
 
 ### Added
