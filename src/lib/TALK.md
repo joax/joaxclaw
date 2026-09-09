@@ -39,7 +39,55 @@ Verified against the gateway protocol validators (`validateTalk*`).
 - `talk.session.startTurn` / `endTurn` / `cancelTurn` `({ sessionId, turnId? })`
 - `talk.session.cancelOutput({ sessionId, turnId?, reason? })` — **barge-in**: stop the agent's current speech
 - `talk.ptt.start` / `stop` / `once` / `cancel` — push-to-talk control
+- `talk.session.submitToolResult({ sessionId, callId, result, options? })` — answer a tool call
+- `talk.session.steer({ sessionId, sessionKey?, text, mode })` — apply voice control to the run
 - `talk.client.create` / `steer` / `toolCall`, `talk.config`, `talk.catalog` (providers/voices)
+
+**The consult round-trip — the client runs the agent, not the gateway.** `brain:
+agent-consult` does *not* mean the gateway answers for you. The relay hands the provider two
+tools (`openclaw_agent_consult`, `openclaw_agent_control`); when the voice model calls the
+consult, the gateway parks the provider on a "working" placeholder, emits `tool.call` to the
+socket that owns the session, and then **waits for that client**. Render the call and stop
+there and the provider never gets a result: the call goes silent at "Working…" forever.
+Verified against the shipped gateway (`dist/talk-*.js`) and its own control UI:
+
+```
+tool.call openclaw_agent_consult
+  → talk.client.toolCall { sessionKey, relaySessionId, callId, name, args }  → { runId }
+  → watch the `chat` event stream for that runId until state=final           (the answer)
+      (`agent` events with stream=tool are the agent's steps — progress, not the result)
+  → talk.session.submitToolResult { sessionId, callId, result: { result: text } }
+  → the gateway broadcasts tool.result and the voice speaks the answer
+
+tool.call openclaw_agent_control      ("how's it going?", "stop that")
+  → talk.session.steer { sessionId, sessionKey, text, mode }
+  → talk.session.submitToolResult with the steer result   (steer alone answers nothing)
+```
+
+**The provider may simply never call the tool.** Nothing forces the realtime model to use
+`openclaw_agent_consult`: it can answer from its own head, or say "let me check that for
+you" and stop — no tool call, so nothing ever reaches the agent and the call goes quiet with
+an *empty* activity feed (that's how you tell this apart from the stall above). The gateway's
+fallback is config, not client code: **`talk.realtime.consultRouting`** — `provider-direct`
+(the default) leaves the choice to the model, `force-agent-consult` routes every final user
+transcript to the agent (it also turns off the provider's auto-answer and synthesizes the
+consult as a `tool.call` with `forced: true`, which the client answers exactly like a native
+one). The Talk settings bar exposes this as **"Always ask the agent"**.
+
+`talk.client.toolCall` returns as soon as the run is *acknowledged*, so its response is not
+the answer; on failure submit `{ error }` so the provider says something instead of hanging.
+Hanging up mid-consult should `chat.abort({ sessionKey, runId })` — the agent turn outlives
+the call otherwise.
+
+**`sessionKey` is not optional in practice.** `talk.session.create` resolves an omitted key
+to the agent's main session but never reports which key it chose, and
+`ensureTalkRealtimeRelayVoiceSession` rejects any other key ("relay session belongs to
+another agent session"). So pass an explicit key at create and replay that exact string:
+`agent:<agentId>:main` for a chosen agent, `main` for the gateway default
+(`talkSessionKey()` in `store/talk.ts`).
+
+Realtime also **pins the brain**: `talk.session.create` rejects anything but
+`transport="gateway-relay"` + `brain="agent-consult"`.
 
 **Event stream** — every `talk.event` frame carries the event **twice**, and the two use
 different vocabularies. Confirmed by probing a live 2026.6.5 gateway (`gateway-relay`):
@@ -89,7 +137,8 @@ UI state machine ◄── talk.event (transcript.*, output.text.*, output.audio
 
 - **Transport `gateway-relay`** (PCM16 base64 over the WS we already hold) — simplest, works
   local *and* remote, no WebRTC plumbing. `webrtc` is a later latency optimization.
-- **`brain: agent-consult`** — talk to *your* agent, not a generic voice bot.
+- **`brain: agent-consult`** — talk to *your* agent, not a generic voice bot. The client owes
+  the relay the consult round-trip above; the gateway only starts the run.
 - Works for both `realtime` and `stt-tts` modes; the gateway abstracts it.
 
 **To build**
@@ -130,6 +179,8 @@ idle → connecting → listening → user_speaking → thinking → speaking �
   filler. Never dead-still.
 - **Captions** — two-sided, streaming partials, finalised on `transcript.done`, persisted.
 - **Tool calls** — light inline chip ("🔍 Searching…"); non-blocking; user can still interject.
+  `openclaw_agent_consult` is the agent thinking, and its `agent` tool-stream steps feed the
+  activity row's progress line.
 - **Lifecycle** — unambiguous Mute (session stays, agent may keep talking) + End; auto-reconnect
   with a visible state; fall back to text chat on failure.
 

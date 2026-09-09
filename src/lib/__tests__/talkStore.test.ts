@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import {
   nextPhase, providersForMode, transportForMode, talkErrorMessage, summarize,
-  readEventKind, readRole, readLineId, mergeTranscript, type TalkCatalog,
+  readEventKind, readRole, readLineId, mergeTranscript, talkSessionKey, parseToolArgs,
+  readRunText, consultRoutingPatch, type TalkCatalog,
 } from '../../store/talk'
 
 // Frames below are shaped exactly as the gateway's realtime relay emits them
@@ -164,5 +165,53 @@ describe('talkErrorMessage', () => {
   })
   it('falls back to the raw message when not JSON', () => {
     expect(talkErrorMessage(new Error('boom'))).toBe('boom')
+  })
+})
+
+// The relay hands the consult to the client and waits: talk.client.toolCall must replay
+// the exact session key talk.session.create was given, or the gateway rejects it with
+// "relay session belongs to another agent session" and the call stalls at "Working…".
+describe('talkSessionKey — the key the consult RPC has to replay', () => {
+  it('scopes to the picked agent, and falls back to the gateway default agent', () => {
+    expect(talkSessionKey('research-worker')).toBe('agent:research-worker:main')
+    expect(talkSessionKey()).toBe('main')
+    expect(talkSessionKey(undefined)).toBe('main')
+  })
+})
+
+describe('parseToolArgs', () => {
+  it('passes objects through and parses the JSON string form a provider may send', () => {
+    expect(parseToolArgs({ question: 'weather' })).toEqual({ question: 'weather' })
+    expect(parseToolArgs('{"question":"weather"}')).toEqual({ question: 'weather' })
+  })
+  it('degrades to an empty object rather than throwing', () => {
+    expect(parseToolArgs('not json')).toEqual({})
+    expect(parseToolArgs(undefined)).toEqual({})
+    expect(parseToolArgs(null)).toEqual({})
+  })
+})
+
+describe('readRunText — the answer out of the chat `final` event', () => {
+  it('reads a plain text message', () => {
+    expect(readRunText({ text: '  It is raining.  ' })).toBe('It is raining.')
+  })
+  it('joins text content blocks and ignores the rest', () => {
+    expect(readRunText({ content: [
+      { type: 'text', text: 'First.' },
+      { type: 'tool_use', name: 'weather' },
+      { type: 'text', text: 'Second.' },
+    ] })).toBe('First.\n\nSecond.')
+  })
+  it('returns empty for a message with nothing to say', () => {
+    expect(readRunText({ content: [] })).toBe('')
+    expect(readRunText(undefined)).toBe('')
+    expect(readRunText('hello')).toBe('')
+  })
+})
+
+describe('consultRoutingPatch', () => {
+  it('writes the realtime routing switch where the gateway reads it', () => {
+    expect(consultRoutingPatch('force-agent-consult')).toEqual({ talk: { realtime: { consultRouting: 'force-agent-consult' } } })
+    expect(consultRoutingPatch('provider-direct')).toEqual({ talk: { realtime: { consultRouting: 'provider-direct' } } })
   })
 })
