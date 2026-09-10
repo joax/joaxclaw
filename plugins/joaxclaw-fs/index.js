@@ -18,6 +18,7 @@
 
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
+import { buildLaunchPrompt, compileProcessToJob, parseCompiledProcess } from './launchPrompt.js'
 import os from 'node:os'
 import https from 'node:https'
 import { execFile, spawn } from 'node:child_process'
@@ -850,6 +851,44 @@ export default definePluginEntry({
         respond(true, { ok: true, id, nonce })
       } catch (err) { failed(respond, err) }
     }, { scope: WRITE_SCOPE })
+
+    // Everything needed to START a team, for any caller that can begin a turn.
+    //
+    // `teams.run` only queues a request for the desktop app to notice, so an agent that
+    // called it got `ok` while nothing ran. This hands back the finished Team Lead prompt
+    // instead; the caller spawns the controller with it (sessions_spawn is an ordinary
+    // agent tool) and the run proceeds on the gateway like any other.
+    //
+    // Deliberately does NOT launch. A plugin installed from npm has no way to begin a
+    // turn — the SDK's session-turn scheduler is bundled-only — and shelling out to the
+    // CLI to fake it would be worse than handing the job to a caller that already has it.
+    api.registerGatewayMethod('teams.launchPrompt', async ({ params, respond }) => {
+      const id = params?.id
+      if (!isValidId(id)) return badId(respond, 'team', id)
+      const task = typeof params?.task === 'string' ? params.task.trim() : ''
+      try {
+        const compiled = await readTextOrNull(path.join(teamsDir(), id + SUFFIX.md))
+        if (compiled == null) {
+          return respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, `no such team ${JSON.stringify(id)}`))
+        }
+        const def = parseCompiledProcess(compiled, id)
+        if (!def) {
+          return respond(false, undefined, errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `team ${JSON.stringify(id)} has no compiled graph — open it in JoaxClaw once to compile it`,
+          ))
+        }
+        respond(true, {
+          ok: true,
+          id: def.id,
+          name: def.name,
+          // The agent the prompt must be given to. Spawning a different one produces a
+          // Team Lead with the wrong tools and model.
+          controllerAgentId: def.controllerAgentId ?? null,
+          prompt: buildLaunchPrompt(def, compileProcessToJob(def), task || undefined),
+        })
+      } catch (err) { failed(respond, err) }
+    }, { scope: READ_SCOPE })
 
     api.registerGatewayMethod('teams.delete', async ({ params, respond }) => {
       const id = params?.id

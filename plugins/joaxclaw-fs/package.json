@@ -8,6 +8,7 @@
   "main": "./index.js",
   "files": [
     "index.js",
+    "launchPrompt.js",
     "openclaw.plugin.json",
     "README.md"
   ],
