@@ -1,17 +1,17 @@
-name: Refresh site on release
+name: Refresh site
 
-# Vercel deploys joaxclaw.ai from its own Git integration on every push to main, but a
-# GitHub *release* isn't a push — so the site would keep serving the previous version's
-# baked-in download links until the next commit. This pings a Vercel deploy hook to
-# rebuild it. Cosmetic safety net: site/download.js also refreshes the links client-side,
-# so a skipped run degrades to "the no-JS view names the previous version".
+# Manually rebuild joaxclaw.ai — for when the site needs to pick up a release outside
+# the normal flow (e.g. the automatic ping failed).
 #
-# Setup: create a deploy hook in the Vercel project (Settings → Git → Deploy Hooks) and
-# store the URL as the VERCEL_DEPLOY_HOOK repository secret. Without it, this no-ops.
+# Releases refresh the site automatically from the publish job in release.yml. This
+# workflow used to listen for `release: published` instead, but that trigger never fired:
+# a release published with GITHUB_TOKEN does not start other workflows. Vercel still
+# rebuilds on every push to main through its own Git integration.
+#
+# Needs the VERCEL_DEPLOY_HOOK repository secret (Vercel → Settings → Git → Deploy Hooks,
+# branch `main`). Without it, this no-ops.
 
 on:
-  release:
-    types: [published]
   workflow_dispatch:
 
 jobs:
