@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
-  advertisesMethod, attachmentRejection, connectRetryDelayMs, describeRunFailure,
+  advertisesMethod, attachmentRejection, clientSideGate, isHandshakeMethod, connectRetryDelayMs, describeRunFailure,
   hasCapability, overallPayloadExceeded, readMissingScope,
 } from '../gatewayPolicy'
 
@@ -131,5 +131,34 @@ describe('describeRunFailure', () => {
     // Successful and cancelled events omit errorDetail entirely.
     expect(describeRunFailure({ state: 'final' })).toBeNull()
     expect(describeRunFailure({ errorDetail: {} })).toBeNull()
+  })
+})
+
+describe('clientSideGate', () => {
+  // Regression: 0.24.0 gated the handshake on the PREVIOUS connection's advertised
+  // methods. `connect` is never in that list, so every reconnect failed client-side with
+  // "unknown method: connect" before a frame was sent — reported as a laptop that had
+  // been online and then could not get back.
+  const helloOk = { methods: ['health', 'sessions.list', 'chat.send'] }
+
+  it('never gates the handshake', () => {
+    expect(isHandshakeMethod('connect')).toBe(true)
+    expect(clientSideGate('connect', helloOk, new Set())).toBeNull()
+    // Even if an old gateway once answered "unknown method" for it.
+    expect(clientSideGate('connect', helloOk, new Set(['connect']))).toBeNull()
+  })
+
+  it('rejects a method this connection already learned is missing', () => {
+    expect(clientSideGate('talk.catalog', undefined, new Set(['talk.catalog']))).toBe('cached')
+  })
+
+  it('rejects a method the advertised list explicitly leaves out', () => {
+    expect(clientSideGate('sessions.search', helloOk, new Set())).toBe('not-advertised')
+  })
+
+  it('sends what is advertised, and anything it cannot know about', () => {
+    expect(clientSideGate('sessions.list', helloOk, new Set())).toBeNull()
+    expect(clientSideGate('sessions.search', undefined, new Set())).toBeNull()
+    expect(clientSideGate('sessions.search', { methods: [] }, new Set())).toBeNull()
   })
 })
