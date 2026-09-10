@@ -7,6 +7,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`script_start` no longer promises a wake-up it can't deliver.** The tool told agents that when a long-running script finished, *"THIS session is automatically woken with the result — so you do NOT need to poll or block: launch it, then continue other work or end your turn"*. That wake has never fired. The scheduler behind it is offered to every plugin, but the gateway drops the call unless the plugin ships **bundled inside OpenClaw itself**; installed from npm, as this one is, it returns without warning and without scheduling anything. So an agent that took the tool at its word ended its turn and the result never arrived — the failure being silence, which is the hardest kind to notice. The tool now tells agents to poll `script_status`, and says why. The wake attempt stays in the code because it costs nothing and would work if the plugin were ever bundled; it simply isn't advertised any more.
+
 ---
 
 ## [0.25.0] - 2026-09-10
