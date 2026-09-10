@@ -189,6 +189,27 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      # The site bakes the latest release's download links into its HTML at build time,
+      # and Vercel only rebuilds on a push — which a release isn't. site-release-hook.yml
+      # was meant to cover this on `release: published`, but it never ran once: a release
+      # published with GITHUB_TOKEN does not trigger other workflows (GitHub's guard
+      # against recursive runs). So the ping lives in the job that publishes. A failed
+      # ping warns rather than failing the job — the release itself has already shipped,
+      # and site/download.js refreshes the links client-side anyway.
+      - name: Refresh the site's download links
+        env:
+          HOOK: ${{ secrets.VERCEL_DEPLOY_HOOK }}
+        run: |
+          if [ -z "$HOOK" ]; then
+            echo "::notice::VERCEL_DEPLOY_HOOK is not set — the site picks up this release on the next push to main."
+            exit 0
+          fi
+          if curl -fsS -X POST "$HOOK" > /dev/null; then
+            echo "Asked Vercel to rebuild the site."
+          else
+            echo "::warning::The Vercel deploy hook failed — the site's baked download links still name the previous release."
+          fi
+
   # ── Prune: keep only the 5 most recent releases (older releases removed; tags kept) ─
   prune:
     needs: [check, publish]
