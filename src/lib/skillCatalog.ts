@@ -16,6 +16,30 @@
 // at best fail and at worst install a DIFFERENT publisher's skill under the name you
 // searched for — so `installRef` is the only identifier this module will hand over.
 
+// Skills this app installs and keeps up to date itself (see NATIVE_SKILLS in
+// electron/main/index.ts). They teach agents JoaxClaw's own conventions — the `<ask>`
+// block, the script-runner protocol, the process and team blueprint formats — and the
+// app rewrites them on connect whenever its bundled version is newer.
+//
+// They matter here because the slug namespace is SHARED: every skill installs to
+// `~/.openclaw/skills/<slug>/`, whoever published it. A ClawHub skill with one of these
+// slugs would install straight over ours, and the app would then overwrite it back on
+// the next reconnect — two installers fighting over one directory. None of these slugs
+// exists on ClawHub today; this is so that stays a non-event if one appears.
+//
+// Kept in sync with the main-process list by a test, since a silent drift here would
+// quietly stop protecting whichever skill was renamed.
+export const JOAXCLAW_MANAGED_SKILLS = [
+  'ask-user',
+  'script-runner',
+  'teams-blueprint',
+  'process-builder',
+] as const
+
+export function isManagedSkill(slug: string): boolean {
+  return (JOAXCLAW_MANAGED_SKILLS as readonly string[]).includes(slug)
+}
+
 export interface SkillPublisher {
   displayName?: string
   handle?: string

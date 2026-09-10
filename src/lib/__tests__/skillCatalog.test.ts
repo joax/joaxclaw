@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
-  isInstallable, needsForce, skillInstallParams, skillTrustLabel, skillUpdateParams,
-  updateOutcomes, type SkillSearchResult,
+  JOAXCLAW_MANAGED_SKILLS, isInstallable, isManagedSkill, needsForce, skillInstallParams,
+  skillTrustLabel, skillUpdateParams, updateOutcomes, type SkillSearchResult,
 } from '../skillCatalog'
 
 const hit = (over: Partial<SkillSearchResult> = {}): SkillSearchResult => ({
@@ -107,5 +107,26 @@ describe('isInstallable', () => {
 
   it('respects an explicit refusal', () => {
     expect(isInstallable(hit({ trust: { installability: 'unavailable' } }))).toBe(false)
+  })
+})
+
+// The renderer needs to know which slugs the app manages, and the main process owns the
+// actual list. Duplicating it is the pragmatic option — electron/main and src are
+// separate TS projects — so this reads the real source and fails if the two drift.
+// Without it, renaming a native skill would silently stop protecting it.
+describe('JOAXCLAW_MANAGED_SKILLS', () => {
+  it('matches NATIVE_SKILLS in the main process', async () => {
+    const { readFileSync } = await import('node:fs')
+    const main = readFileSync('electron/main/index.ts', 'utf8')
+    const block = main.slice(main.indexOf('const NATIVE_SKILLS'))
+    const slugs = [...block.matchAll(/^\s*slug: '([a-z0-9-]+)',$/gm)].map(m => m[1])
+
+    expect(slugs.length).toBeGreaterThan(0)
+    expect([...JOAXCLAW_MANAGED_SKILLS].sort()).toEqual(slugs.sort())
+  })
+
+  it('recognises a managed slug', () => {
+    expect(isManagedSkill('ask-user')).toBe(true)
+    expect(isManagedSkill('pdf')).toBe(false)
   })
 })
