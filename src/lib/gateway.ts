@@ -1,5 +1,5 @@
 import type { GwResFrame } from './types'
-import { advertisesMethod, connectRetryDelayMs, hasCapability, readMissingScope, type AttachmentPolicy, type GatewayFeatures, type GatewayPolicy } from './gatewayPolicy'
+import { clientSideGate, isHandshakeMethod, connectRetryDelayMs, hasCapability, readMissingScope, type AttachmentPolicy, type GatewayFeatures, type GatewayPolicy } from './gatewayPolicy'
 import { useSettingsStore } from '../store/settings'
 import { chatIdentityName } from './userProfile'
 
@@ -195,6 +195,13 @@ export class GatewayClient {
 
   private _open(): void {
     this._teardownListeners()
+    // Everything a hello-ok taught us describes ONE connection. A new socket may reach a
+    // restarted, upgraded or entirely different gateway, and 0.24.0 carried the old list
+    // across — applying the previous gateway's methods to the next handshake. Re-learned
+    // from this socket's hello-ok.
+    this.features = undefined
+    this.policy = undefined
+    this.unsupportedMethods.clear()
 
     const ws = wsApi()
 
@@ -442,16 +449,15 @@ export class GatewayClient {
     if (!this._connected && method !== 'connect') {
       throw new Error('Not connected')
     }
-    // This gateway already told us it doesn't implement this method — reject client-side
-    // instead of re-sending (and re-logging INVALID_REQUEST on the host) every fetch.
-    if (this.unsupportedMethods.has(method)) {
-      throw new Error(`unknown method: ${method}`)
-    }
-    // The advertised list is documented as conservative — some real methods are
-    // deliberately excluded from it — so only an explicit `false` short-circuits.
-    // `undefined` means "not advertised either way", and we still try.
-    if (advertisesMethod(this.features, method) === false) {
-      this.unsupportedMethods.add(method)
+    // Reject client-side what this connection already knows the gateway lacks — learned
+    // from an earlier "unknown method" reply, or left out of hello-ok's advertised list
+    // (only an explicit `false` counts; the list is documented as conservative). Never for
+    // `connect`: the handshake isn't an advertised RPC, and gating it on the previous
+    // connection's list made every reconnect fail right here with "unknown method:
+    // connect", before a frame was sent. See gatewayPolicy.clientSideGate.
+    const gate = clientSideGate(method, this.features, this.unsupportedMethods)
+    if (gate) {
+      if (gate === 'not-advertised') this.unsupportedMethods.add(method)
       throw new Error(`unknown method: ${method}`)
     }
     const id = nextId()
@@ -466,7 +472,7 @@ export class GatewayClient {
         resolve: (res) => {
           if (res.ok) resolve(res.payload as T)
           else {
-            if (isUnknownMethodError(res.error)) this.unsupportedMethods.add(method)
+            if (isUnknownMethodError(res.error) && !isHandshakeMethod(method)) this.unsupportedMethods.add(method)
             const scope = readMissingScope(res.error)
             if (scope?.missingScope) {
               this._addLog('info', `${method} needs ${scope.missingScope}${scope.requiredScopes?.length ? ` (accepts: ${scope.requiredScopes.join(', ')})` : ''} — this token doesn't have it.`)

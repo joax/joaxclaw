@@ -47,6 +47,34 @@ export function advertisesMethod(features: GatewayFeatures | undefined, method: 
   return list.includes(method)
 }
 
+/**
+ * The handshake itself. It is never in `features.methods` — that list describes the RPCs
+ * callable on an OPEN connection — so it must never be gated on it.
+ */
+export function isHandshakeMethod(method: string): boolean {
+  return method === 'connect'
+}
+
+/**
+ * Whether to reject a request without sending it, and why: `'cached'` when this
+ * connection already got "unknown method" for it, `'not-advertised'` when hello-ok's list
+ * explicitly leaves it out, `null` to send it.
+ *
+ * The handshake is exempt from both. 0.24.0 gated `connect` on the PREVIOUS connection's
+ * advertised list — which never contains it — so every reconnect failed client-side
+ * with "unknown method: connect" and the app could not get back online until restarted.
+ */
+export function clientSideGate(
+  method: string,
+  features: GatewayFeatures | undefined,
+  unsupported: ReadonlySet<string>,
+): 'cached' | 'not-advertised' | null {
+  if (isHandshakeMethod(method)) return null
+  if (unsupported.has(method)) return 'cached'
+  if (advertisesMethod(features, method) === false) return 'not-advertised'
+  return null
+}
+
 /** Additive wire contracts this gateway supports, e.g. `session-scoped-chat-metadata`. */
 export function hasCapability(features: GatewayFeatures | undefined, capability: string): boolean {
   return Array.isArray(features?.capabilities) && features.capabilities.includes(capability)
