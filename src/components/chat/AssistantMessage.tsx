@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { ChevronDown, ChevronRight, BrainCircuit, CheckCircle2, XCircle, Loader2, Clock, Hourglass, Terminal, PenLine, FileText, Globe, Plug, Bot, Wrench, FolderSearch, AlertTriangle, Zap, ThumbsUp, ThumbsDown } from 'lucide-react'
+import { ChevronDown, ChevronRight, BrainCircuit, CheckCircle2, XCircle, Loader2, Clock, Hourglass, Terminal, PenLine, FileText, Globe, Plug, Bot, Wrench, FolderSearch, AlertTriangle, ThumbsUp, ThumbsDown } from 'lucide-react'
 import type { ChatMessage, ContextOverflowInfo, ToolCall, SubThread } from '../../lib/types'
 import { useExtensionsStore } from '../../store/extensions'
 import { useOllamaProgress } from '../../store/ollamaProgress'
@@ -27,6 +27,7 @@ import { ScriptJobCard } from './ScriptJobCard'
 import { parseJobId } from '../../lib/scriptJobs'
 import { ArtifactStrip } from './ArtifactStrip'
 import { extractArtifacts } from '../../lib/artifacts'
+import { extractTextToolAttempts, summarizeAttempt, type TextToolAttempt } from '../../lib/textToolCalls'
 import {
   toolResultView, resultFields, argSummary, commandSummary, commandLineCount, tryPrettyJson,
   type ResultField,
@@ -42,61 +43,6 @@ function stripProtocolTags(text: string): string {
     .replace(/<final[^>]*>/gi, '')     // opening <final> or <final_answer attr="">
     .replace(/^<final\S*/i, '')        // bare <final… with no > (split across stream deltas)
     .trim()
-}
-
-// ── Gateway XML action tags ───────────────────────────────────────────────────
-// Models running inside Openclaw emit XML tags to invoke gateway actions.
-// Two forms:
-//   Self-closing:    <cron action="list" />
-//   Content-bearing: <edit>path: "..." edits: ...</edit>
-
-interface GatewayAction {
-  resource: string
-  action: string
-  attrs: Record<string, string>
-  content?: string  // present for content-bearing tags
-}
-
-// Known content-bearing gateway action tags
-const CONTENT_TAGS = new Set(['edit', 'write', 'create', 'bash', 'shell', 'read', 'search', 'delete', 'move'])
-const CONTENT_TAG_RE = new RegExp(`<(${[...CONTENT_TAGS].join('|')})([^>]*)>([\\s\\S]*?)<\\/\\1>`, 'gi')
-// Captures self-closing gateway action tags.
-// The attribute group uses quote-aware alternation so values containing "/"
-// (e.g. file paths, JSON with "/" characters) are captured correctly.
-const SELFCLOSE_TAG_RE = /<([a-zA-Z][a-zA-Z0-9_-]*)((?:\s+[a-zA-Z][a-zA-Z0-9_-]*=(?:"[^"]*"|'[^']*'))*)\s*\/>/g
-
-function parseAttrs(raw: string): Record<string, string> {
-  const out: Record<string, string> = {}
-  // Handle both quoting styles independently so single-quoted values can contain
-  // double quotes (e.g. patch='{"key":"val"}') and vice versa.
-  const re = /([a-zA-Z][a-zA-Z0-9_-]*)=(?:"([^"]*)"|'([^']*)')/g
-  let m
-  while ((m = re.exec(raw)) !== null) out[m[1]] = m[2] ?? m[3]
-  return out
-}
-
-function extractGatewayActions(content: string): { actions: GatewayAction[]; text: string } {
-  const actions: GatewayAction[] = []
-
-  // Content-bearing tags first
-  let text = content.replace(CONTENT_TAG_RE, (_, resource, attrStr, body) => {
-    const attrs = parseAttrs(attrStr ?? '')
-    const action = attrs.action ?? ''
-    const { action: _a, ...rest } = attrs
-    actions.push({ resource: resource.toLowerCase(), action, attrs: rest, content: body.trim() })
-    return ''
-  })
-
-  // Self-closing tags
-  text = text.replace(SELFCLOSE_TAG_RE, (_, resource, attrStr) => {
-    const attrs = parseAttrs(attrStr)
-    const action = attrs.action ?? ''
-    const { action: _a, ...rest } = attrs
-    actions.push({ resource, action, attrs: rest })
-    return ''
-  })
-
-  return { actions, text: text.trim() }
 }
 
 // ── Edit block renderer ───────────────────────────────────────────────────────
@@ -142,79 +88,70 @@ function EditBlock({ content }: { content: string }) {
   )
 }
 
-// ── Generic gateway action pill (self-closing / unknown content tags) ─────────
+// ── Tool calls written as text ────────────────────────────────────────────────
+// A model sometimes writes an action into its reply instead of calling a tool. No
+// gateway executes those, so this says plainly that nothing ran — showing the raw XML
+// was confusing, and the old action pill (lightning icon, accent colour) implied it had
+// run. See lib/textToolCalls.ts for where the tags come from.
 
-function looksLikeJson(v: string): boolean {
-  const t = v.trim()
-  return (t.startsWith('{') || t.startsWith('[')) && (t.endsWith('}') || t.endsWith(']'))
-}
-
-function prettyJson(v: string): string {
-  try { return JSON.stringify(JSON.parse(v), null, 2) } catch { return v }
-}
-
-function ActionPill({ resource, action, scalarAttrs, jsonAttrs, inlineContent }: {
-  resource: string
-  action: string
-  scalarAttrs: [string, string][]
-  jsonAttrs: [string, string][]
-  inlineContent?: string
-}) {
-  const [expanded, setExpanded] = useState(false)
-  const hasExpando = jsonAttrs.length > 0
+function TextToolNotice({ attempts }: { attempts: TextToolAttempt[] }) {
+  const [open, setOpen] = useState<Set<number>>(new Set())
+  if (attempts.length === 0) return null
+  const toggle = (i: number) => setOpen(s => { const n = new Set(s); n.has(i) ? n.delete(i) : n.add(i); return n })
+  const plural = attempts.length > 1
 
   return (
-    <div style={{ border: '1px solid color-mix(in srgb, var(--accent) 20%, var(--border))', borderRadius: 'var(--radius)', overflow: 'hidden' }}>
-      {/* Header row */}
-      <div
-        className="flex items-center gap-2 px-3 py-1.5 text-xs"
-        style={{ background: 'color-mix(in srgb, var(--accent) 7%, var(--bg-elevated))', cursor: hasExpando ? 'pointer' : 'default' }}
-        onClick={() => hasExpando && setExpanded(v => !v)}
-      >
-        <Zap size={11} style={{ color: 'var(--accent)', flexShrink: 0 }} />
-        <span style={{ color: 'var(--accent)', fontWeight: 600 }}>{resource}</span>
-        {action && <><span style={{ color: 'var(--text-secondary)', opacity: 0.4 }}>·</span><span className="font-mono" style={{ color: 'var(--text-secondary)' }}>{action}</span></>}
-        {scalarAttrs.map(([k, v]) => (
-          <span key={k} className="font-mono" style={{ color: 'var(--text-secondary)', opacity: 0.7 }}>
-            {k}=<span style={{ color: 'var(--text-primary)' }}>{v.length > 48 ? v.slice(0, 48) + '…' : v}</span>
-          </span>
-        ))}
-        {inlineContent && !action && (
-          <span className="font-mono truncate flex-1" style={{ color: 'var(--text-secondary)', opacity: 0.6 }}>
-            {inlineContent.slice(0, 60)}{inlineContent.length > 60 ? '…' : ''}
-          </span>
-        )}
-        {hasExpando && (
-          <ChevronDown size={11} style={{ color: 'var(--text-secondary)', marginLeft: 'auto', flexShrink: 0, transform: expanded ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
-        )}
-      </div>
-      {/* JSON payload(s) */}
-      {expanded && jsonAttrs.map(([k, v]) => (
-        <div key={k} style={{ borderTop: '1px solid var(--border)' }}>
-          <div className="px-3 pt-1.5 pb-0.5 text-xs font-semibold" style={{ color: 'var(--text-secondary)', background: 'var(--bg-elevated)' }}>{k}</div>
-          <pre style={{ margin: 0, padding: '6px 12px 8px', fontSize: 11, fontFamily: 'monospace', background: 'var(--bg-primary)', color: 'var(--text-primary)', whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflowX: 'auto' }}>
-            {prettyJson(v)}
-          </pre>
+    <div className="mb-2 rounded text-xs" style={{ border: '1px solid var(--warning)', background: 'var(--bg-elevated)' }}>
+      <div className="flex items-start gap-2 px-3 pt-2 pb-1.5" style={{ color: 'var(--warning)' }}>
+        <AlertTriangle size={13} style={{ flexShrink: 0, marginTop: 1 }} />
+        <div style={{ minWidth: 0 }}>
+          <div className="font-semibold">Written as text — nothing was run</div>
+          <div style={{ color: 'var(--text-secondary)', lineHeight: 1.5, marginTop: 2 }}>
+            The model wrote {plural ? 'these actions' : 'this action'} into its reply instead of calling a tool, so the
+            gateway never executed {plural ? 'them' : 'it'}. Ask it to use its tools, or do it yourself.
+          </div>
         </div>
-      ))}
-    </div>
-  )
-}
-
-function GatewayActionBlock({ actions }: { actions: GatewayAction[] }) {
-  if (actions.length === 0) return null
-  return (
-    <div className="mb-2 flex flex-col gap-1.5">
-      {actions.map((a, i) => {
-        if (a.content !== undefined && a.resource === 'edit') {
-          return <EditBlock key={i} content={a.content} />
-        }
-        const scalarAttrs = Object.entries(a.attrs).filter(([, v]) => !looksLikeJson(v))
-        const jsonAttrs   = Object.entries(a.attrs).filter(([, v]) =>  looksLikeJson(v))
-        return (
-          <ActionPill key={i} resource={a.resource} action={a.action} scalarAttrs={scalarAttrs} jsonAttrs={jsonAttrs} inlineContent={a.content} />
-        )
-      })}
+      </div>
+      <div className="flex flex-col" style={{ borderTop: '1px solid var(--border)' }}>
+        {attempts.map((a, i) => {
+          const isOpen = open.has(i)
+          const hasDetail = (a.paths?.length ?? 0) > 0 || !!a.body || Object.keys(a.attrs).length > 0
+          return (
+            <div key={i} style={{ borderTop: i ? '1px solid var(--border)' : 'none' }}>
+              <button
+                onClick={() => hasDetail && toggle(i)}
+                className="flex items-center gap-2 px-3 py-1.5 w-full text-left"
+                style={{ background: 'none', border: 'none', cursor: hasDetail ? 'pointer' : 'default', color: 'var(--text-primary)' }}
+              >
+                {hasDetail
+                  ? (isOpen ? <ChevronDown size={11} style={{ flexShrink: 0, color: 'var(--text-secondary)' }} /> : <ChevronRight size={11} style={{ flexShrink: 0, color: 'var(--text-secondary)' }} />)
+                  : <span style={{ width: 11, flexShrink: 0 }} />}
+                <span className="font-mono px-1.5 rounded" style={{ background: 'var(--bg-primary)', color: 'var(--text-secondary)', fontSize: 10, flexShrink: 0 }}>{a.tag}</span>
+                <span className="truncate font-mono" style={{ minWidth: 0 }}>{summarizeAttempt(a)}</span>
+              </button>
+              {isOpen && (
+                <div className="px-3 pb-2">
+                  {a.paths && a.paths.length > 0 && (
+                    <ul className="font-mono" style={{ margin: 0, paddingLeft: 18, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+                      {a.paths.map(p => <li key={p}>{p}</li>)}
+                    </ul>
+                  )}
+                  {a.tag === 'edit' && a.body
+                    ? <><div style={{ color: 'var(--text-secondary)', margin: '2px 0 4px' }}>Proposed edit — not applied</div><EditBlock content={a.body} /></>
+                    : a.body && (
+                      <pre className="font-mono" style={{ margin: 0, padding: '6px 8px', borderRadius: 4, background: 'var(--bg-primary)', color: 'var(--text-primary)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{a.body}</pre>
+                    )}
+                  {Object.keys(a.attrs).length > 0 && (
+                    <div className="font-mono" style={{ color: 'var(--text-secondary)', marginTop: 4 }}>
+                      {Object.entries(a.attrs).map(([k, v]) => <div key={k}>{k}={v}</div>)}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
     </div>
   )
 }
@@ -298,7 +235,7 @@ interface Props { message: ChatMessage; showTools?: boolean; showReasoning?: boo
 export function AssistantMessage({ message, showTools = true, showReasoning = true, convId, isLast = false }: Props) {
   const sessionKey = useChatStore(s => s.conversations.find(c => c.id === convId)?.sessionKey || undefined)
   const stripped = stripProtocolTags(message.content)
-  const { actions: gatewayActions, text: noActions } = extractGatewayActions(stripped)
+  const { attempts: textAttempts, text: noActions } = extractTextToolAttempts(stripped)
   const { thinking: inlineThinking, text: afterThink } = extractThinkTags(noActions)
   // Structured questions the model asked (Claude-Code-style). Lifted out of the
   // transcript and rendered as interactive option buttons below the answer.
@@ -363,7 +300,7 @@ export function AssistantMessage({ message, showTools = true, showReasoning = tr
   if (chatMode === 'basic') {
     const cur = currentActivity(message, promptProgress)
     const steps = completedSteps(message)
-    const hasDetails = hasReasoning || hasTools || hasThreads || gatewayActions.length > 0
+    const hasDetails = hasReasoning || hasTools || hasThreads || textAttempts.length > 0
     return (
       <div className="flex justify-start animate-fade-in">
         <div className="max-w-[85%] min-w-0 w-full">
@@ -456,7 +393,7 @@ export function AssistantMessage({ message, showTools = true, showReasoning = tr
                   {/* Full advanced view for this message — the header toggles are disabled
                       in Basic mode, so Details is not gated by them. */}
                   {hasReasoning && <ReasoningBlock text={allReasoning} streaming={false} answerStarted durationMs={message.reasoningDurationMs} />}
-                  {gatewayActions.length > 0 && <GatewayActionBlock actions={gatewayActions} />}
+                  {textAttempts.length > 0 && <TextToolNotice attempts={textAttempts} />}
                   {hasThreads && <ThreadsBlock threads={threads} />}
                   {hasTools && <ToolCallsBlock calls={visibleToolCalls} />}
                 </div>
@@ -510,9 +447,9 @@ export function AssistantMessage({ message, showTools = true, showReasoning = tr
           />
         )}
 
-        {/* Gateway XML action tags */}
-        {gatewayActions.length > 0 && (
-          <GatewayActionBlock actions={gatewayActions} />
+        {/* Actions the model wrote as text — never executed */}
+        {textAttempts.length > 0 && (
+          <TextToolNotice attempts={textAttempts} />
         )}
 
         {/* Tool calls */}
