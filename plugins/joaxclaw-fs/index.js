@@ -1284,19 +1284,25 @@ export default definePluginEntry({
 
     // ── script_start / script_status / script_stop (agent tools) ────────────────
     if (typeof api.registerTool === 'function') {
+      // The SDK exposes scheduleSessionTurn to every plugin, but the host drops the
+      // call unless the plugin's origin is "bundled" (shipped inside OpenClaw itself) —
+      // it returns undefined without warning. Installed from npm, this plugin is
+      // origin "global", so the wake NEVER fires and there is no way to detect that
+      // from here. The attempt is kept because it costs nothing and works if this ever
+      // ships bundled; what changed is that script_start no longer PROMISES it.
       const canWake = typeof api.scheduleSessionTurn === 'function'
       api.registerTool((toolContext) => ({
         name: 'script_start',
         label: 'Start script',
         description:
-          'Launch a long-running shell command/script on the host and track it in the BACKGROUND, returning a jobId immediately instead of blocking. Use this — not the bash/shell tool — for anything slow or long-lived: builds, installs, deploys, test suites, training runs, servers, data jobs. JoaxClaw shows the user a live progress card (status, elapsed, streaming output, a % bar if the script prints one). When the script finishes, THIS session is automatically woken with the result — so you do NOT need to poll or block: launch it, then continue other work or end your turn, and the result will be delivered back to you. (Set notifyOnDone:false to opt out — e.g. for a server you intend to leave running.)',
+          'Launch a long-running shell command/script on the host and track it in the BACKGROUND, returning a jobId immediately instead of blocking. Use this — not the bash/shell tool — for anything slow or long-lived: builds, installs, deploys, test suites, training runs, servers, data jobs. JoaxClaw shows the user a live progress card (status, elapsed, streaming output, a % bar if the script prints one). Poll `script_status` with the jobId to see progress and the final result — do NOT end your turn expecting to be woken. (A wake-on-finish exists but only fires for gateway-bundled plugins; installed from npm, as this one is, it silently does nothing.)',
         parameters: {
           type: 'object',
           additionalProperties: false,
           properties: {
             command: { type: 'string', description: 'Shell command/script to run (executed via the shell on the gateway host).' },
             cwd: { type: 'string', description: 'Optional working directory.' },
-            notifyOnDone: { type: 'boolean', description: 'Wake this session with the result when the script finishes. Default true. Set false for fire-and-forget / long-lived servers.' },
+            notifyOnDone: { type: 'boolean', description: 'Attempt to wake this session when the script finishes. Default true. The wake only fires on gateway-bundled plugins, so do not rely on it — poll script_status instead.' },
           },
           required: ['command'],
         },
@@ -1306,8 +1312,8 @@ export default definePluginEntry({
           const cwd = typeof params?.cwd === 'string' && params.cwd.trim() ? params.cwd.trim() : undefined
           const sessionKey = toolContext?.sessionKey
           const notify = params?.notifyOnDone !== false && !!sessionKey && canWake
-          // On completion, schedule a one-shot turn back to the launching session carrying
-          // the result — the same session-turn scheduler the reminder tool uses.
+          // Best-effort wake on completion. See canWake above: this is a no-op unless the
+          // plugin is bundled, which is why the tool tells the agent to poll instead.
           const onExit = notify ? (job) => {
             api.scheduleSessionTurn({
               delayMs: 1000, deleteAfterRun: true, sessionKey,
