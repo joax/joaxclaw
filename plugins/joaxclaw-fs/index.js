@@ -18,7 +18,7 @@
 
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
-import { buildLaunchPrompt, compileProcessToJob, parseCompiledProcess } from './launchPrompt.js'
+import { buildLaunchPrompt, buildLaunchRunRecord, canReplaceRunRecord, compileProcessToJob, parseCompiledProcess } from './launchPrompt.js'
 import os from 'node:os'
 import https from 'node:https'
 import { execFile, spawn } from 'node:child_process'
@@ -74,6 +74,19 @@ function isValidId(id) {
 function teamsDir() { return path.join(resolveStateDir(), 'teams') }
 function processesDir() { return path.join(resolveStateDir(), 'processes') }
 function runsDir() { return path.join(processesDir(), '.runs') }
+
+// A launch the app did not start leaves no trace: run records are written by the app, so
+// a team started from Slack or a schedule is invisible afterwards. `teams.launchPrompt`
+// is the one call every headless launch makes, so it records the attempt there.
+// The record's shape and the rule for replacing one live in launchPrompt.js, under test.
+async function recordLaunchAttempt(processId, task) {
+  const file = path.join(runsDir(), processId + '.json')
+  try {
+    if (!canReplaceRunRecord(await readTextOrNull(file))) return
+    await fs.mkdir(runsDir(), { recursive: true })
+    await fs.writeFile(file, JSON.stringify(buildLaunchRunRecord(processId, task), null, 2), 'utf8')
+  } catch { /* best-effort: a record that cannot be written must never fail the launch */ }
+}
 function skillsDir() { return path.join(resolveStateDir(), 'skills') }
 
 // Memory skills are written to <stateDir>/skills/<slug>/SKILL.md — the same directory
@@ -878,6 +891,10 @@ export default definePluginEntry({
             `team ${JSON.stringify(id)} has no compiled graph — open it in JoaxClaw once to compile it`,
           ))
         }
+        // Recorded before responding so a run started immediately after cannot race it.
+        // This side effect is why the method is write-scoped.
+        await recordLaunchAttempt(def.id, task || undefined)
+
         respond(true, {
           ok: true,
           id: def.id,
@@ -888,7 +905,7 @@ export default definePluginEntry({
           prompt: buildLaunchPrompt(def, compileProcessToJob(def), task || undefined),
         })
       } catch (err) { failed(respond, err) }
-    }, { scope: READ_SCOPE })
+    }, { scope: WRITE_SCOPE })
 
     api.registerGatewayMethod('teams.delete', async ({ params, respond }) => {
       const id = params?.id
