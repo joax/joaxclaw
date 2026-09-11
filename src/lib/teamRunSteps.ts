@@ -50,12 +50,17 @@ export function stepStatuses(
 
   const running = run.status === 'running'
   const failed = run.status === 'error' || run.status === 'failed'
+  const finished = run.status === 'done'
+  // A record that is none of those is an attempt, not a run — a launch prompt handed to
+  // an agent that has not spawned the team lead yet. Marking its steps done would claim
+  // work that never happened.
+  if (!running && !failed && !finished) return {}
   const done = Math.max(0, Math.floor(run.stepsDone) || 0)
 
   // Where the flow currently sits. Past the end of a looping team this wraps.
   const cursor = done % stepCount
   // A finished run has every step behind it; a run still on its first pass has `done`.
-  const completedThisPass = running || failed ? cursor : stepCount
+  const completedThisPass = finished ? stepCount : cursor
 
   const out: Record<number, StepStatus> = {}
   for (let i = 0; i < stepCount; i++) {

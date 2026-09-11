@@ -4,7 +4,10 @@ import { buildLaunchPrompt, compileProcessToJob } from '../processCompiler'
 // a headless run and an in-app run of the same team have to behave the same way, and a
 // silent divergence here is exactly the kind nobody would think to look for.
 // Plain ESM, no types — the same module the plugin loads at runtime.
-import { buildLaunchPrompt as jsBuild, compileProcessToJob as jsCompile, parseCompiledProcess } from '../../../plugins/joaxclaw-fs/launchPrompt.js'
+import {
+  buildLaunchPrompt as jsBuild, compileProcessToJob as jsCompile, parseCompiledProcess,
+  buildLaunchRunRecord, canReplaceRunRecord,
+} from '../../../plugins/joaxclaw-fs/launchPrompt.js'
 import type { ProcessDef } from '../processParser'
 
 const linear: ProcessDef = {
@@ -105,5 +108,62 @@ describe('parseCompiledProcess', () => {
     )
     expect('workspace' in def).toBe(false)
     expect('outputContract' in def).toBe(false)
+  })
+})
+
+describe('the run record a headless launch leaves behind', () => {
+  it('records an attempt, not a run', () => {
+    // Status matters: the sequence view reads `status` and `stepsDone` literally, so
+    // claiming 'running' or a completed step would show work the gateway never did.
+    const rec = buildLaunchRunRecord('inbox-triage', undefined, 1_700_000_000_000)
+    expect(rec.status).toBe('idle')
+    expect(rec.stepsDone).toBe(0)
+    expect(rec.startedAt).toBe(1_700_000_000_000)
+    expect(rec.log).toHaveLength(1)
+  })
+
+  it('keeps the objective so the rail says what was asked for', () => {
+    expect(buildLaunchRunRecord('x', 'Clear the backlog').objective).toBe('Clear the backlog')
+    expect('objective' in buildLaunchRunRecord('x', undefined)).toBe(false)
+  })
+
+  it('is a ProcessRun the app can read straight back', async () => {
+    // The plugin writes this file and the app parses it into a ProcessRun. The compiler
+    // cannot check that — the plugin module is plain JS, so its return type is `any` and
+    // a cast would assert nothing. So read the interface itself: a field renamed on
+    // either side shows up here instead of as a run record the rail cannot render.
+    const { readFileSync } = await import('node:fs')
+    const src = readFileSync('src/store/processes.ts', 'utf8')
+    const body = src.slice(src.indexOf('export interface ProcessRun'))
+    const fields = [...body.slice(0, body.indexOf('\n}')).matchAll(/^  (\w+)(\??):/gm)]
+    expect(fields.length).toBeGreaterThan(5)
+
+    const optional = new Set(fields.filter(f => f[2] === '?').map(f => f[1]))
+    const known = new Set(fields.map(f => f[1]))
+    const rec = buildLaunchRunRecord('x', 'go')
+
+    // Every key written must be a field ProcessRun declares…
+    expect(Object.keys(rec).filter(k => !known.has(k))).toEqual([])
+    // …and every required field must be written, or the app reads back undefined.
+    expect([...known].filter(k => !optional.has(k) && !(k in rec))).toEqual([])
+  })
+
+  it('never overwrites a run that is still going', () => {
+    // A second agent asking for the prompt mid-run must not wipe the live run's record.
+    expect(canReplaceRunRecord(JSON.stringify({ status: 'running' }))).toBe(false)
+  })
+
+  it('replaces a finished, failed or earlier attempt', () => {
+    for (const status of ['done', 'error', 'idle']) {
+      expect(canReplaceRunRecord(JSON.stringify({ status }))).toBe(true)
+    }
+  })
+
+  it('replaces a record it cannot read, rather than refusing forever', () => {
+    // A half-written or older-format file would otherwise block every future launch
+    // record for that team — worse than losing a record nothing can parse.
+    expect(canReplaceRunRecord('{not json')).toBe(true)
+    expect(canReplaceRunRecord(null)).toBe(true)
+    expect(canReplaceRunRecord('')).toBe(true)
   })
 })
