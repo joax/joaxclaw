@@ -7,6 +7,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **An agent can start a team on its own now.** Ask an agent on Slack, or a scheduled automation, to run one of your teams and — until now — nothing happened. The skill told agents to call `teams.run`, and told them *"the desktop app picks up the request, runs the team"*: that call only wrote a request file and returned `ok`, so unless JoaxClaw happened to be open and watching, the team never started and the agent had no way to know. There is a stranded request of exactly that kind sitting on the gateway this was found on. The gateway can now hand out everything needed to start a team — `teams.launchPrompt` returns the finished Team Lead prompt and the agent it must be given to — and the caller starts it with the ordinary spawn tool every agent already has. The run then proceeds on the gateway like any other, and carries a label the app recognises, so opening JoaxClaw later adopts the run and shows its progress. `teams.run` keeps its old meaning for the case it suits: queueing a task for you to review and start yourself.
+
+- **`script_start` no longer promises a wake-up it can't deliver.** The tool told agents that when a long-running script finished, *"THIS session is automatically woken with the result — so you do NOT need to poll or block: launch it, then continue other work or end your turn"*. That wake has never fired. The scheduler behind it is offered to every plugin, but the gateway drops the call unless the plugin ships **bundled inside OpenClaw itself**; installed from npm, as this one is, it returns without warning and without scheduling anything. So an agent that took the tool at its word ended its turn and the result never arrived — the failure being silence, which is the hardest kind to notice. The tool now tells agents to poll `script_status`, and says why. The wake attempt stays in the code because it costs nothing and would work if the plugin were ever bundled; it simply isn't advertised any more.
+
 ---
 
 ## [0.25.0] - 2026-09-10
