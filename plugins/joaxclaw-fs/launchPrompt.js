@@ -121,3 +121,43 @@ export function parseCompiledProcess(text, fallbackId) {
   if (controller) def.controllerAgentId = controller
   return def
 }
+
+/**
+ * The run record written when a launch prompt is handed out.
+ *
+ * It records an ATTEMPT, not a run. A caller can fetch a prompt and never spawn the team
+ * lead, so the status is 'idle' and no step is claimed done — the app's sequence view
+ * reads those fields literally and would otherwise light up work that never happened.
+ * When JoaxClaw next connects it adopts the real session and overwrites this.
+ *
+ * The shape is ProcessRun (src/store/processes.ts) — the app parses this file straight
+ * into one, so a field that does not belong there has no way to be read.
+ */
+export function buildLaunchRunRecord(processId, objective, now = Date.now()) {
+  return {
+    processId,
+    startedAt: now,
+    status: 'idle',
+    stepsDone: 0,
+    outputBuffer: '',
+    ...(objective ? { objective } : {}),
+    log: [{ ts: now, text: 'Launch prompt issued to an agent — the run starts when it spawns the team lead.' }],
+  }
+}
+
+/**
+ * Whether a new attempt record may replace what is already on disk.
+ *
+ * A run in flight must survive: fetching a prompt while the team is mid-run (a second
+ * agent asking, a retry, a schedule overlapping) must not wipe the record of the run
+ * that is actually going. Anything else — finished, failed, an earlier attempt, or a
+ * file too corrupt to read — is safe to replace.
+ */
+export function canReplaceRunRecord(existingText) {
+  if (!existingText) return true
+  try {
+    return JSON.parse(existingText)?.status !== 'running'
+  } catch {
+    return true
+  }
+}
