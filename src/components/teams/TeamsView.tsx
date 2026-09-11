@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import {
   Plus, RefreshCw, UsersRound, Play, X, Trash2, ChevronDown,
   Upload, Download, GripVertical, Loader2, CheckCircle2, XCircle,
-  Clock, ArrowRight, ArrowLeft, FileText, AlertTriangle, GitBranch,
-  Wrench, BarChart2, BookOpen, History, Bot,
+  Clock, FileText, AlertTriangle,
+  History, Bot, Pencil,
 } from 'lucide-react'
 import { useIsNarrow } from '../../lib/useIsNarrow'
 import { useTeamsStore } from '../../store/teams'
@@ -12,13 +12,12 @@ import { useAgentsStore } from '../../store/agents'
 import { useConnectionStore } from '../../store/connection'
 import { RemotePluginNotice } from '../common/RemotePluginNotice'
 import { Btn } from '../ui/Btn'
-import { ProcessMonitor } from '../processes/ProcessMonitor'
-import { ProcessGraphEditor } from '../processes/ProcessGraphEditor'
 import type { ProcessDef } from '../../lib/processParser'
-import { serializeProcess } from '../../lib/processParser'
 import type { TeamBlueprint, TeamMemberDef, TeamRevision, TeamRoute, TeamBranch } from '../../lib/teamBlueprint'
-import { bumpBlueprint, newBlueprint, MAX_REVISIONS, BRANCH_END } from '../../lib/teamBlueprint'
+import { bumpBlueprint, newBlueprint, BRANCH_END } from '../../lib/teamBlueprint'
 import { validateTeamForLaunch } from '../../lib/teamValidation'
+import { TeamSequence } from './TeamSequence'
+import { describeRun, fmtElapsed, stepStatuses } from '../../lib/teamRunSteps'
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
 
@@ -36,11 +35,6 @@ function StatusDot({ status }: { status: string }) {
   return <Clock size={11} style={{ color: statusColor(status) }} />
 }
 
-function fmtDuration(ms: number): string {
-  const s = Math.floor(ms / 1000)
-  if (s < 60) return `${s}s`
-  return `${Math.floor(s / 60)}m ${s % 60}s`
-}
 
 function fmtDate(ts: number): string {
   const d = new Date(ts)
@@ -677,10 +671,23 @@ function TeamBuilder({
 
 // ── Sidebar item ──────────────────────────────────────────────────────────────
 
+// The one line under a team's name in the list: its size, and what it is doing.
+function teamRowState(bp: TeamBlueprint, run: ProcessRun | undefined): string {
+  const steps = `${bp.members.length} step${bp.members.length === 1 ? '' : 's'}`
+  if (!run) return `${steps} · never run`
+  if (run.status === 'running') {
+    const at = bp.members.length ? (Math.max(0, run.stepsDone) % bp.members.length) + 1 : 0
+    return at ? `running · step ${at} of ${bp.members.length}` : 'running'
+  }
+  const when = fmtDate(run.finishedAt ?? run.startedAt)
+  if (run.status === 'error') return `failed ${when}`
+  return `${steps} · ran ${when}`
+}
+
 function TeamItem({
-  bp, active, runStatus, onClick, onDelete,
+  bp, active, runStatus, run, onClick, onDelete,
 }: {
-  bp: TeamBlueprint; active: boolean; runStatus?: string
+  bp: TeamBlueprint; active: boolean; runStatus?: string; run?: ProcessRun
   onClick: () => void; onDelete: () => Promise<boolean>
 }) {
   const [phase, setPhase] = useState<'idle' | 'confirm' | 'deleting'>('idle')
@@ -743,6 +750,11 @@ function TeamItem({
           {phase === 'deleting' && <span style={{ fontSize: 10 }}>Deleting…</span>}
         </button>
       </div>
+
+      {/* What state this team is in, without opening it. */}
+      <div style={{ fontSize: 11, color: 'var(--text-secondary)', paddingLeft: 14, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {teamRowState(bp, run)}
+      </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginLeft: 17 }}>
         <span style={{ fontSize: 11, color: 'var(--text-secondary)', opacity: 0.6 }}>
           {bp.members.length} member{bp.members.length !== 1 ? 's' : ''}
@@ -759,43 +771,20 @@ function TeamItem({
 
 // ── Workflow pill preview ─────────────────────────────────────────────────────
 
-function WorkflowPreview({ bp }: { bp: TeamBlueprint }) {
-  const routedIds = new Set((bp.routes ?? []).map(r => r.afterMemberId))
-  return (
-    <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6 }}>
-      {bp.members.map((m, i) => (
-        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <div style={{
-            padding: '3px 9px', fontSize: 11, borderRadius: 'var(--radius)',
-            border: `1px solid ${routedIds.has(m.agentId) ? 'color-mix(in srgb, var(--accent) 40%, transparent)' : 'var(--border)'}`,
-            background: routedIds.has(m.agentId) ? 'color-mix(in srgb, var(--accent) 8%, var(--bg-elevated))' : 'var(--bg-elevated)',
-            color: 'var(--text-secondary)',
-          }}>
-            {m.reviewBefore && i > 0 && <span style={{ opacity: 0.5, marginRight: 4 }}>🔍</span>}
-            {routedIds.has(m.agentId) && <GitBranch size={9} style={{ marginRight: 4, verticalAlign: 'middle', color: 'var(--accent)', opacity: 0.7 }} />}
-            {m.role || m.agentId}
-          </div>
-          {i < bp.members.length - 1 && (
-            <ArrowRight size={11} style={{ color: 'var(--text-secondary)', opacity: 0.3 }} />
-          )}
-        </div>
-      ))}
-    </div>
-  )
-}
 
 // ── Team detail panel ─────────────────────────────────────────────────────────
 
-type DetailTab = 'build' | 'graph' | 'monitor' | 'docs' | 'history'
-
-const TAB_META: Record<DetailTab, { icon: React.ReactNode; label: string; title?: string }> = {
-  build:   { icon: <Wrench size={12} />,    label: 'Build',   title: 'Edit Blueprint — canonical source of truth (.team.json)' },
-  graph:   { icon: <GitBranch size={12} />, label: 'Graph',   title: 'Edit compiled execution graph — changes diverge from Blueprint' },
-  monitor: { icon: <BarChart2 size={12} />, label: 'Monitor' },
-  docs:    { icon: <BookOpen size={12} />,  label: 'Docs' },
-  history: { icon: <History size={12} />,   label: 'History', title: 'View save history for this team' },
-}
-
+// One page per team, in two states.
+//
+// It used to be five tabs — Build, Graph, Monitor, Docs, History — for a single object,
+// with the thing people do most (run it with a task) buried inside the editing form. Two
+// of those tabs edited the same team through different representations, and the second
+// could disagree with the first; the tooltip said so and the model carried a flag to
+// track it. That representation is gone: the sequence below IS the team, and the
+// executable graph is generated from it.
+//
+//   reading  — task box and Run at the top, the sequence, runs down the side
+//   editing  — the same sequence, editable in place
 function TeamDetail({
   blueprint, compiledDef, onUpdated,
 }: {
@@ -804,42 +793,43 @@ function TeamDetail({
   onUpdated: (bp: TeamBlueprint) => void
 }) {
   const { runs, startRun, stopRun } = useProcessesStore()
-  const { saveCompiledDef, exportBundle, loadRevisions, revisions, runRequests, refreshRunRequest, consumeRunRequest } = useTeamsStore()
+  const { exportBundle, loadRevisions, revisions, runRequests, refreshRunRequest, consumeRunRequest, importBundle } = useTeamsStore()
   const { agents } = useAgentsStore()
+  const narrow = useIsNarrow()
   const run = runs[blueprint.id]
   const teamRevisions = revisions[blueprint.id] ?? []
   const runRequest = runRequests[blueprint.id] ?? null
 
-  // Initialise directly to 'monitor' if a run is already in progress — avoids a
-  // flash of the Build tab when navigating back while a team process is running.
-  const [tab, setTab] = useState<DetailTab>(() =>
-    useProcessesStore.getState().runs[blueprint.id]?.status === 'running' ? 'monitor' : 'build'
-  )
+  const [editing, setEditing] = useState(false)
   const [isStarting, setIsStarting] = useState(false)
-  // The task for THIS run — the variable input that makes the team reusable. Pre-filled
-  // with the team's last-used task (from its most recent run) so re-running is one click.
+  const [showHistory, setShowHistory] = useState(false)
+  // The task for THIS run — what makes a reusable team concrete. Pre-filled with the
+  // team's last-used task so re-running is one click.
   const [task, setTask] = useState<string>(() => useProcessesStore.getState().runs[blueprint.id]?.objective ?? '')
-  const [graphSaveError, setGraphSaveError] = useState<string | null>(null)
   const [diskRun, setDiskRun] = useState<ProcessRun | null>(null)
   const importRef = useRef<HTMLInputElement>(null)
-  // Nonce of the run request we've already applied, so it's handled exactly once.
   const handledNonceRef = useRef<string | null>(null)
-  const { importBundle } = useTeamsStore()
-
-  useEffect(() => {
-    if (run?.status === 'running') setTab('monitor')
-  }, [run?.status])
+  // Re-renders while a run is live so the elapsed time on the active step advances.
+  const [, tick] = useState(0)
 
   useEffect(() => {
     setDiskRun(null)
+    setEditing(false)
+    setShowHistory(false)
     handledNonceRef.current = null
-    // Re-seed the task box with the newly-selected team's last-used task.
     setTask(useProcessesStore.getState().runs[blueprint.id]?.objective ?? '')
   }, [blueprint.id])
 
-  // Poll for an agent's run request (teams.run) while this team is open and idle, so it
-  // surfaces live in the Task box without the user reloading.
   const running = run?.status === 'running'
+
+  useEffect(() => {
+    if (!running) return
+    const iv = setInterval(() => tick(n => n + 1), 1000)
+    return () => clearInterval(iv)
+  }, [running])
+
+  // Poll for an agent's run request (teams.run) while this team is open and idle, so it
+  // surfaces live in the task box without a reload.
   useEffect(() => {
     if (running) return
     const iv = setInterval(() => { void refreshRunRequest(blueprint.id) }, 5000)
@@ -847,41 +837,34 @@ function TeamDetail({
   }, [blueprint.id, running, refreshRunRequest])
 
   useEffect(() => {
-    if (tab !== 'history') return
+    if (!showHistory) return
     void loadRevisions(blueprint.id)
-  }, [tab, blueprint.id, loadRevisions])
+  }, [showHistory, blueprint.id, loadRevisions])
 
+  // A run from a previous app session lives on disk, not in memory.
   useEffect(() => {
-    if (tab !== 'history' || run) return
+    if (run) return
     let cancelled = false
-
-    // Load persisted run from disk in case it's not in memory (e.g. after app restart)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const fileApi = (window as any)?.api?.file as { read: (p: string) => Promise<{ ok: boolean; text?: string }> } | null
     void fileApi?.read(`${runsDir()}/${blueprint.id}.json`).then(res => {
       if (cancelled || !res.ok || !res.text) return
-      try {
-        setDiskRun(JSON.parse(res.text) as ProcessRun)
-      } catch {
-        // Ignore malformed persisted run files.
-      }
+      try { setDiskRun(JSON.parse(res.text) as ProcessRun) } catch { /* malformed run file */ }
     })
-
     return () => { cancelled = true }
-  }, [tab, blueprint.id, run])
+  }, [blueprint.id, run])
 
+  const lastRun = run ?? diskRun ?? undefined
   const controllerAgent = agents.find(a => a.id === blueprint.controllerAgentId)
-  const isRunning = run?.status === 'running'
   const launchValidation = validateTeamForLaunch(blueprint, compiledDef)
 
-  // A team is "templated" when a member task or its output contract references {objective}.
-  // Those teams need a task to fill the placeholder; teams with fully baked-in tasks don't.
+  // A team is "templated" when a member task or its output contract references
+  // {objective}: those need a task, teams with baked-in tasks don't.
   const usesObjective = blueprint.members.some(m => m.task?.includes('{objective}'))
     || (blueprint.outputContract?.includes('{objective}') ?? false)
   const taskMissing = usesObjective && !task.trim()
-  const canRun = launchValidation.valid && !taskMissing
+  const canRun = launchValidation.valid && !taskMissing && !!compiledDef
 
-  // `override` is the explicit task to launch with (used by autorun, where the task-box
-  // state hasn't flushed yet); falls back to the current box contents.
   const handleRun = async (override?: string) => {
     const t = (override ?? task).trim()
     if (!launchValidation.valid || (usesObjective && !t) || !compiledDef) return
@@ -891,13 +874,11 @@ function TeamDetail({
       await startRun(blueprint.id, compiledDef, blueprint.controllerAgentId, t)
     } finally {
       setIsStarting(false)
-      // Clear any agent request even if the launch errored, so it can't loop on re-open.
       if (hadRequest) await consumeRunRequest(blueprint.id)
     }
   }
 
-  // Apply an incoming agent run request once: drop its task into the box, and auto-launch
-  // if it asked to. Non-autorun requests just pre-fill + show a banner for the user.
+  // Apply an agent's run request once: drop its task in, and launch if it asked to.
   useEffect(() => {
     if (!runRequest || runRequest.nonce === handledNonceRef.current || running) return
     handledNonceRef.current = runRequest.nonce
@@ -905,8 +886,6 @@ function TeamDetail({
     if (runRequest.autorun) void handleRun(runRequest.task)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runRequest, running])
-
-  const handleStop = () => stopRun(blueprint.id)
 
   const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -917,424 +896,236 @@ function TeamDetail({
     e.target.value = ''
   }
 
-  const handleGraphSave = async (updated: ProcessDef) => {
-    setGraphSaveError(null)
-    const ok = await saveCompiledDef(updated)
-    if (!ok) {
-      setGraphSaveError('Failed to save graph — check that the file system is accessible')
-      return
-    }
-    onUpdated({ ...blueprint, graphCustomized: true, updatedAt: Date.now() })
-  }
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
-
-      {/* ── Compact header ───────────────────────────────────────────────────── */}
-      <div style={{
-        padding: '10px 16px 0',
-        background: 'var(--bg-surface)',
-        borderBottom: '1px solid var(--border)',
-        flexShrink: 0,
-      }}>
-        {/* Row 1: name + badges + actions */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-          {/* Name */}
-          <h2 style={{
-            fontSize: 14, fontWeight: 600, color: 'var(--text-primary)',
-            margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1,
-          }}>{blueprint.name}</h2>
-
-          {/* Version badge */}
-          <span style={{
-            fontSize: 10, padding: '1px 6px', borderRadius: 4, flexShrink: 0,
-            background: 'color-mix(in srgb, var(--accent) 12%, var(--bg-elevated))',
-            border: '1px solid color-mix(in srgb, var(--accent) 30%, transparent)',
-            color: 'var(--accent)', fontWeight: 600,
-          }}>v{blueprint.version}</span>
-
-          {/* graphCustomized badge */}
-          {blueprint.graphCustomized && (
-            <span style={{
-              fontSize: 10, padding: '1px 6px', borderRadius: 4, flexShrink: 0,
-              background: 'color-mix(in srgb, var(--warning) 10%, var(--bg-elevated))',
-              border: '1px solid color-mix(in srgb, var(--warning) 30%, transparent)',
-              color: 'var(--warning)',
-            }} title="Graph has been manually edited in the Graph tab">graph edited</span>
-          )}
-
-          {/* Meta chips */}
-          <span style={{
-            fontSize: 10, color: 'var(--text-secondary)', opacity: 0.55,
-            flexShrink: 0, whiteSpace: 'nowrap',
-          }}>
-            {blueprint.members.length} member{blueprint.members.length !== 1 ? 's' : ''}
-            {controllerAgent && ` · ${controllerAgent.identity?.name ?? controllerAgent.id}`}
+  // ── Editing ───────────────────────────────────────────────────────────────
+  if (editing) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
+        <div style={{
+          padding: '10px 20px', borderBottom: '1px solid var(--border)', background: 'var(--bg-surface)',
+          display: 'flex', alignItems: 'center', gap: 9, flexShrink: 0,
+        }}>
+          <Pencil size={13} style={{ color: 'var(--accent)', flexShrink: 0 }} />
+          <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            Editing {blueprint.name}
           </span>
-
-          {/* Divider */}
-          <div style={{ width: 1, height: 14, background: 'var(--border)', flexShrink: 0 }} />
-
-          {/* Action buttons */}
-          <input ref={importRef} type="file" accept=".team.json,.json,.md" style={{ display: 'none' }} onChange={handleImport} />
-          <Btn size="sm" variant="ghost" icon={<Upload size={11} />} onClick={() => importRef.current?.click()} title="Import team" />
-          <Btn size="sm" variant="ghost" icon={<Download size={11} />} onClick={() => exportBundle(blueprint.id)} title="Export as .team.json" />
-          {isRunning ? (
-            <Btn size="sm" variant="outline" icon={<X size={12} />} onClick={handleStop}
-              style={{ color: 'var(--danger)', borderColor: 'var(--danger)' }}>Stop</Btn>
-          ) : (
-            <Btn size="sm" loading={isStarting} icon={<Play size={12} />} onClick={() => handleRun()}
-              disabled={!canRun || isStarting}
-              title={launchValidation.valid ? (taskMissing ? 'Enter a task for this run' : undefined) : launchValidation.errors[0]}>
-              Run
-            </Btn>
-          )}
         </div>
-
-        {/* Description (only if present) */}
-        {blueprint.description && (
-          <p style={{
-            fontSize: 11, color: 'var(--text-secondary)', margin: '0 0 6px',
-            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-            opacity: 0.7,
-          }}>{blueprint.description}</p>
-        )}
-
-        {/* Run status — inline, only when active and not on monitor */}
-        {run && run.status !== 'idle' && tab !== 'monitor' && (
-          <div
-            onClick={() => setTab('monitor')}
-            style={{
-              display: 'inline-flex', alignItems: 'center', gap: 6,
-              margin: '2px 0 6px', padding: '3px 10px',
-              borderRadius: 20, cursor: 'pointer', fontSize: 11,
-              background: `color-mix(in srgb, ${statusColor(run.status)} 10%, var(--bg-elevated))`,
-              border: `1px solid color-mix(in srgb, ${statusColor(run.status)} 25%, transparent)`,
-              color: statusColor(run.status),
-            }}
-          >
-            <StatusDot status={run.status} />
-            {run.status === 'running' && <>{run.currentAgent ?? 'Starting…'} — <u>view</u></>}
-            {run.status === 'done'    && <>Done · {run.stepsDone} steps · {fmtDuration((run.finishedAt ?? Date.now()) - run.startedAt)} — <u>view</u></>}
-            {run.status === 'error'   && <>Error: {run.error ?? 'unknown'} — <u>view</u></>}
-          </div>
-        )}
-
-        {/* Tab bar — flush with bottom border */}
-        <div style={{ display: 'flex', gap: 2, marginTop: 4 }}>
-          {(Object.entries(TAB_META) as [DetailTab, typeof TAB_META[DetailTab]][]).map(([t, meta]) => {
-            const active = tab === t
-            const hasRunDot = t === 'monitor' && run && run.status !== 'idle'
-            return (
-              <button
-                key={t}
-                title={meta.title}
-                onClick={() => setTab(t)}
-                style={{
-                  display: 'flex', alignItems: 'center', gap: 5,
-                  padding: '5px 10px 6px',
-                  background: active
-                    ? 'color-mix(in srgb, var(--accent) 10%, var(--bg-elevated))'
-                    : 'none',
-                  border: 'none',
-                  borderRadius: '6px 6px 0 0',
-                  borderBottom: `2px solid ${active ? 'var(--accent)' : 'transparent'}`,
-                  cursor: 'pointer',
-                  fontSize: 12, fontWeight: active ? 600 : 400,
-                  color: active ? 'var(--accent)' : 'var(--text-secondary)',
-                  marginBottom: -1,
-                  transition: 'color 0.12s, background 0.12s',
-                }}
-              >
-                <span style={{ opacity: active ? 1 : 0.6 }}>{meta.icon}</span>
-                {meta.label}
-                {/* Graph tab: show source/artifact context badge */}
-                {t === 'graph' && active && (
-                  <span style={{
-                    fontSize: 9, padding: '1px 4px', borderRadius: 3, marginLeft: 2,
-                    background: 'color-mix(in srgb, var(--warning) 15%, transparent)',
-                    color: 'var(--warning)', fontWeight: 600, letterSpacing: '0.03em',
-                  }}>compiled</span>
-                )}
-                {t === 'build' && active && (
-                  <span style={{
-                    fontSize: 9, padding: '1px 4px', borderRadius: 3, marginLeft: 2,
-                    background: 'color-mix(in srgb, var(--accent) 15%, transparent)',
-                    color: 'var(--accent)', fontWeight: 600, letterSpacing: '0.03em',
-                  }}>source</span>
-                )}
-                {/* Monitor dot */}
-                {hasRunDot && (
-                  <span style={{
-                    width: 6, height: 6, borderRadius: '50%',
-                    background: statusColor(run!.status), flexShrink: 0,
-                  }} />
-                )}
-              </button>
-            )
-          })}
+        <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+          <TeamBuilder
+            initialBlueprint={blueprint}
+            teamId={blueprint.id}
+            onSaved={bp => { onUpdated(bp); setEditing(false) }}
+            onCancel={() => setEditing(false)}
+          />
         </div>
       </div>
+    )
+  }
 
-      {/* ── Task for this run ────────────────────────────────────────────────── */}
-      {!isRunning && (
+  const statuses = stepStatuses(lastRun, blueprint.members.length)
+  const runLine = describeRun(run, blueprint.members)
+
+  const sequence = (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.06em', color: 'var(--text-secondary)' }}>THE TEAM</span>
+        <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+          {blueprint.members.length} step{blueprint.members.length === 1 ? '' : 's'}
+          {controllerAgent ? `, run in order by ${controllerAgent.name ?? controllerAgent.id}` : ''}
+        </span>
+      </div>
+      <TeamSequence blueprint={blueprint} status={running || lastRun ? statuses : undefined} />
+    </div>
+  )
+
+  return (
+    <div style={{ display: 'flex', height: '100%', minHeight: 0 }}>
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+
+        {/* Header */}
         <div style={{
-          padding: '8px 16px', flexShrink: 0,
-          borderBottom: '1px solid var(--border)', background: 'var(--bg-surface)',
+          padding: '14px 20px 12px', borderBottom: '1px solid var(--border)',
+          background: 'var(--bg-surface)', display: 'flex', alignItems: 'flex-start', gap: 10, flexShrink: 0,
         }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-            <span style={{
-              fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em',
-              color: 'var(--text-secondary)',
-            }}>Task for this run</span>
-            {usesObjective && (
-              <span style={{ fontSize: 10, color: 'var(--accent)', opacity: 0.85 }}>
-                · fills <code style={{ fontFamily: 'monospace' }}>{'{objective}'}</code> in this team
-              </span>
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <h2 style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-primary)', margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {blueprint.name}
+              </h2>
+              <span style={{
+                fontSize: 10, padding: '1px 6px', borderRadius: 4, flexShrink: 0, fontWeight: 600,
+                background: 'color-mix(in srgb, var(--accent) 12%, var(--bg-elevated))',
+                border: '1px solid color-mix(in srgb, var(--accent) 30%, transparent)', color: 'var(--accent)',
+              }}>v{blueprint.version}</span>
+            </div>
+            {blueprint.description && (
+              <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 3, lineHeight: 1.5 }}>
+                {blueprint.description}
+              </div>
             )}
           </div>
+          <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+            <Btn size="sm" variant="outline" icon={<Pencil size={12} />} onClick={() => setEditing(true)}>Edit</Btn>
+            <Btn size="sm" variant="ghost" title="Export this team" icon={<Download size={12} />} onClick={() => void exportBundle(blueprint.id)} />
+            <Btn size="sm" variant="ghost" title="Import a team bundle" icon={<Upload size={12} />} onClick={() => importRef.current?.click()} />
+            <input ref={importRef} type="file" accept=".json" style={{ display: 'none' }} onChange={handleImport} />
+          </div>
+        </div>
 
-          {/* Agent-requested run (via teams.run) — pre-filled above; offer to run or dismiss.
-              Shown for autorun requests too: if autorun couldn't launch (e.g. failed
-              validation) the request lingers, so the user still sees and can act on it. */}
-          {runRequest && (
+        <div style={{ flex: 1, overflowY: 'auto', minHeight: 0, padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 18 }}>
+
+          {/* The run, or the way to start one — always the first thing on the page. */}
+          {running ? (
             <div style={{
-              display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6,
-              padding: '5px 10px', borderRadius: 'var(--radius)', fontSize: 11,
-              background: 'color-mix(in srgb, var(--accent) 10%, var(--bg-elevated))',
-              border: '1px solid color-mix(in srgb, var(--accent) 30%, transparent)',
-              color: 'var(--accent)',
+              border: '1px solid var(--accent)', borderRadius: 'var(--radius)',
+              background: 'color-mix(in srgb, var(--accent) 9%, transparent)',
+              padding: '11px 13px', display: 'flex', alignItems: 'center', gap: 11,
             }}>
-              <Bot size={12} style={{ flexShrink: 0 }} />
-              <span style={{ flex: 1 }}>An agent asked to run this team with the task below.</span>
-              <Btn size="sm" disabled={!canRun || isStarting} onClick={() => handleRun()}>Run</Btn>
-              <Btn size="sm" variant="ghost" onClick={() => consumeRunRequest(blueprint.id)}>Dismiss</Btn>
+              <Loader2 size={15} className="animate-spin" style={{ color: 'var(--accent)', flexShrink: 0 }} />
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)' }}>{runLine}</div>
+                {run?.objective && (
+                  <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 2, lineHeight: 1.5 }}>{run.objective}</div>
+                )}
+              </div>
+              <span style={{ fontSize: 12, color: 'var(--text-secondary)', flexShrink: 0 }}>
+                {fmtElapsed(Date.now() - (run?.startedAt ?? Date.now()))}
+              </span>
+              <Btn size="sm" variant="danger" onClick={() => stopRun(blueprint.id)}>Stop</Btn>
             </div>
-          )}
-
-          <textarea
-            value={task}
-            onChange={e => setTask(e.target.value)}
-            onKeyDown={e => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && canRun) { e.preventDefault(); void handleRun() } }}
-            placeholder={usesObjective
-              ? 'What should the team do this run? (required — this team uses {objective})'
-              : 'Optional: a goal for this run. Leave blank to run the team’s built-in tasks.'}
-            rows={2}
-            style={{
-              width: '100%', resize: 'vertical', boxSizing: 'border-box',
-              padding: '6px 8px', fontSize: 12, lineHeight: 1.5, fontFamily: 'inherit',
-              borderRadius: 'var(--radius)', color: 'var(--text-primary)',
-              background: 'var(--bg-elevated)',
-              border: `1px solid ${taskMissing ? 'color-mix(in srgb, var(--warning) 45%, var(--border))' : 'var(--border)'}`,
-            }}
-          />
-        </div>
-      )}
-
-      {/* ── Validation error — compact inline bar ────────────────────────────── */}
-      {!launchValidation.valid && !isRunning && (
-        <div style={{
-          padding: '4px 16px', flexShrink: 0, fontSize: 11,
-          background: 'color-mix(in srgb, var(--warning) 6%, var(--bg-surface))',
-          borderBottom: '1px solid color-mix(in srgb, var(--warning) 18%, transparent)',
-          color: 'var(--warning)', display: 'flex', alignItems: 'center', gap: 6,
-        }}>
-          <AlertTriangle size={10} style={{ flexShrink: 0 }} />
-          <span>
-            <strong>Can't run</strong> — {launchValidation.errors[0]}
-            {launchValidation.errors.length > 1 && ` (+${launchValidation.errors.length - 1} more)`}
-          </span>
-        </div>
-      )}
-
-      {/* ── Graph tab: artifact warning (only when graph is customized) ───────── */}
-      {tab === 'graph' && blueprint.graphCustomized && (
-        <div style={{
-          padding: '4px 16px', flexShrink: 0, fontSize: 11,
-          background: 'color-mix(in srgb, var(--warning) 5%, var(--bg-surface))',
-          borderBottom: '1px solid color-mix(in srgb, var(--warning) 15%, transparent)',
-          color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 6,
-        }}>
-          <AlertTriangle size={10} style={{ color: 'var(--warning)', flexShrink: 0 }} />
-          <span>Graph has been manually edited and diverges from the Blueprint. Save from <strong>Build</strong> to regenerate.</span>
-        </div>
-      )}
-
-      {/* ── Graph save error ─────────────────────────────────────────────────── */}
-      {tab === 'graph' && graphSaveError && (
-        <div style={{
-          padding: '5px 16px', flexShrink: 0, fontSize: 11,
-          background: 'color-mix(in srgb, var(--danger) 8%, var(--bg-surface))',
-          borderBottom: '1px solid color-mix(in srgb, var(--danger) 20%, transparent)',
-          color: 'var(--danger)', display: 'flex', alignItems: 'center', gap: 6,
-        }}>
-          <AlertTriangle size={10} style={{ flexShrink: 0 }} />
-          <span style={{ flex: 1 }}>{graphSaveError}</span>
-          <button onClick={() => setGraphSaveError(null)}
-            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--danger)', opacity: 0.6, padding: 0 }}>
-            <X size={11} />
-          </button>
-        </div>
-      )}
-
-      {/* ── Content ──────────────────────────────────────────────────────────── */}
-      <div style={{ flex: 1, minHeight: 0, overflow: (tab === 'monitor' || tab === 'graph') ? 'hidden' : 'auto' }}>
-        {tab === 'build' && (
-          <>
-            {/* Workflow preview — shown here in context, not in the header */}
-            {blueprint.members.length > 0 && (
-              <div style={{
-                padding: '10px 20px 8px',
-                borderBottom: '1px solid var(--border)',
-                background: 'var(--bg-surface)',
-              }}>
-                <WorkflowPreview bp={blueprint} />
-              </div>
-            )}
-            <TeamBuilder
-              key={blueprint.id + '-' + blueprint.version}
-              initialBlueprint={blueprint}
-              teamId={blueprint.id}
-              graphCustomized={blueprint.graphCustomized}
-              onSaved={onUpdated}
-            />
-          </>
-        )}
-
-        {tab === 'graph' && compiledDef ? (
-          <ProcessGraphEditor
-            key={blueprint.id + '-graph'}
-            def={compiledDef}
-            onSave={handleGraphSave}
-            onClose={() => setTab('build')}
-          />
-        ) : tab === 'graph' && (
-          <div style={{ display: 'flex', flex: 1, alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-secondary)', fontSize: 13 }}>
-            Save the team first to view and edit the compiled graph.
-          </div>
-        )}
-
-        {tab === 'monitor' && (
-          <ProcessMonitor
-            def={compiledDef ?? { id: blueprint.id, name: blueprint.name, agents: [], workflow: { startAgent: '', transitions: [] }, path: '', body: '', raw: '' }}
-            run={run}
-            onStop={handleStop}
-          />
-        )}
-
-        {tab === 'docs' && (
-          <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 16 }}>
-            {blueprint.workspace && (
-              <div>
-                <p style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', marginBottom: 6 }}>Shared Workspace</p>
-                <p style={{ fontSize: 13, color: 'var(--text-primary)', lineHeight: 1.6, fontFamily: 'monospace' }}>{blueprint.workspace}</p>
-              </div>
-            )}
-            {blueprint.outputContract && (
-              <div>
-                <p style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', marginBottom: 6 }}>Output Contract</p>
-                <p style={{ fontSize: 13, color: 'var(--text-primary)', lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>{blueprint.outputContract}</p>
-              </div>
-            )}
+          ) : (
             <div>
-              <p style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', marginBottom: 6 }}>
-                Blueprint Source <span style={{ fontWeight: 400, textTransform: 'none', opacity: 0.6 }}>{blueprint.id}.team.json</span>
-              </p>
-              <pre style={{ fontSize: 11, fontFamily: 'monospace', color: 'var(--text-secondary)', background: 'var(--bg-elevated)', padding: 12, borderRadius: 'var(--radius)', overflowX: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
-                {JSON.stringify(blueprint, null, 2)}
-              </pre>
-            </div>
-            {compiledDef && (
-              <div>
-                <p style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', marginBottom: 6 }}>
-                  Compiled Execution Artifact <span style={{ fontWeight: 400, textTransform: 'none', opacity: 0.6 }}>{blueprint.id}.md</span>
-                  {blueprint.graphCustomized && <span style={{ marginLeft: 6, color: 'var(--warning)', fontWeight: 400 }}>⚠ diverges from source</span>}
-                </p>
-                <pre style={{ fontSize: 11, fontFamily: 'monospace', color: 'var(--text-secondary)', background: 'var(--bg-elevated)', padding: 12, borderRadius: 'var(--radius)', overflowX: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
-                  {serializeProcess(compiledDef)}
-                </pre>
+              <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.06em', color: 'var(--text-secondary)', marginBottom: 7 }}>
+                WHAT SHOULD THE TEAM DO?
               </div>
-            )}
-          </div>
-        )}
-
-        {tab === 'history' && (
-          <div style={{ padding: '16px 20px', overflowY: 'auto', height: '100%', display: 'flex', flexDirection: 'column', gap: 20 }}>
-
-            {/* ── Last Run ──────────────────────────────────────────────────── */}
-            {(() => {
-              const lastRun = run ?? diskRun
-              if (!lastRun) return (
-                <div style={{ textAlign: 'center', color: 'var(--text-secondary)', fontSize: 12, padding: '20px 0', opacity: 0.5 }}>
-                  No runs recorded yet.
+              {runRequest && (
+                <div style={{
+                  fontSize: 11, color: 'var(--accent)', marginBottom: 6,
+                  display: 'flex', alignItems: 'center', gap: 6,
+                }}>
+                  <Bot size={12} /> An agent asked for this run.
                 </div>
-              )
-              const elapsed = (lastRun.finishedAt ?? Date.now()) - lastRun.startedAt
-              const runColor = lastRun.status === 'done' ? 'var(--success)' : lastRun.status === 'error' ? 'var(--danger)' : 'var(--text-secondary)'
-              return (
-                <div>
-                  <p style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', margin: '0 0 8px' }}>
-                    Last Run
-                  </p>
-                  <div style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius)', overflow: 'hidden', background: 'var(--bg-elevated)' }}>
-                    {/* Run header */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderBottom: '1px solid var(--border)', background: `color-mix(in srgb, ${runColor} 6%, var(--bg-elevated))` }}>
-                      <StatusDot status={lastRun.status} />
-                      <span style={{ fontSize: 12, fontWeight: 600, color: runColor }}>
-                        {lastRun.status === 'done' ? 'Completed' : lastRun.status === 'error' ? 'Failed' : lastRun.status === 'idle' ? 'Stopped' : 'Running'}
-                      </span>
-                      <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>in {fmtDuration(elapsed)}</span>
-                      <span style={{ fontSize: 11, color: 'var(--text-secondary)', opacity: 0.6, marginLeft: 'auto' }}>{fmtDate(lastRun.startedAt)}</span>
-                    </div>
-                    {/* Steps + error */}
-                    <div style={{ padding: '8px 14px', display: 'flex', gap: 16, fontSize: 11, color: 'var(--text-secondary)', borderBottom: lastRun.log.length > 0 ? '1px solid var(--border)' : undefined }}>
-                      <span>{lastRun.stepsDone} step{lastRun.stepsDone !== 1 ? 's' : ''} completed</span>
-                      {lastRun.error && <span style={{ color: 'var(--danger)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{lastRun.error}</span>}
-                    </div>
-                    {/* Activity log */}
-                    {lastRun.log.length > 0 && (
-                      <div style={{ padding: '8px 14px', display: 'flex', flexDirection: 'column', gap: 3, maxHeight: 200, overflowY: 'auto' }}>
-                        {lastRun.log.map((entry, i) => (
-                          <div key={i} style={{ display: 'flex', gap: 8, fontSize: 11 }}>
-                            <span style={{ fontFamily: 'monospace', color: 'var(--text-secondary)', opacity: 0.5, flexShrink: 0, fontSize: 10 }}>
-                              {fmtDate(entry.ts).split(' ').pop()}
-                            </span>
-                            <span style={{ color: 'var(--text-secondary)' }}>{entry.text}</span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )
-            })()}
-
-            {/* ── Blueprint revisions ───────────────────────────────────────── */}
-            <div>
-              <p style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', margin: '0 0 8px' }}>
-                Blueprint Revisions
-              </p>
-              <p style={{ fontSize: 11, color: 'var(--text-secondary)', margin: '0 0 10px', opacity: 0.6 }}>
-                Last {MAX_REVISIONS} saved revisions. Newest first.
-              </p>
-              {teamRevisions.length === 0 ? (
-                <div style={{ textAlign: 'center', color: 'var(--text-secondary)', fontSize: 12, padding: '16px 0', opacity: 0.5 }}>
-                  No revisions recorded yet — history is captured on every save.
+              )}
+              <div style={{ display: 'flex', gap: 8, alignItems: 'stretch' }}>
+                <textarea
+                  value={task}
+                  onChange={e => setTask(e.target.value)}
+                  placeholder={usesObjective ? 'The task for this run…' : 'Optional — this team has its own tasks built in'}
+                  rows={2}
+                  style={{
+                    flex: 1, padding: '9px 11px', fontSize: 13, lineHeight: 1.5, resize: 'vertical',
+                    borderRadius: 'var(--radius)', border: '1px solid var(--border)',
+                    background: 'var(--bg-surface)', color: 'var(--text-primary)', outline: 'none',
+                    fontFamily: 'inherit',
+                  }}
+                />
+                <Btn
+                  size="md"
+                  loading={isStarting}
+                  disabled={!canRun}
+                  icon={<Play size={13} />}
+                  title={!launchValidation.valid ? launchValidation.errors.join(' · ') : taskMissing ? 'This team needs a task' : undefined}
+                  onClick={() => void handleRun()}
+                >
+                  Run
+                </Btn>
+              </div>
+              {!launchValidation.valid ? (
+                <div style={{ fontSize: 11, color: 'var(--danger)', marginTop: 6 }}>
+                  {launchValidation.errors.join(' · ')}
                 </div>
               ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  {[...teamRevisions].reverse().map((r, i, arr) => (
-                    <RevisionRow
-                      key={i}
-                      revision={r}
-                      isCurrent={r.blueprint.version === blueprint.version}
-                      prevRevision={arr[i + 1] ?? null}
-                    />
-                  ))}
+                <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 6 }}>
+                  Runs on the gateway — you can close JoaxClaw and it keeps going.
                 </div>
               )}
             </div>
+          )}
 
+          {sequence}
+
+          {/* On a phone the runs rail folds in here rather than existing twice. */}
+          {narrow && <TeamRuns blueprint={blueprint} lastRun={lastRun} revisions={teamRevisions} showHistory={showHistory} onToggleHistory={() => setShowHistory(v => !v)} />}
+        </div>
+      </div>
+
+      {!narrow && (
+        <div style={{
+          width: 288, flexShrink: 0, borderLeft: '1px solid var(--border)',
+          background: 'var(--bg-surface)', padding: '16px 14px', overflowY: 'auto',
+        }}>
+          <TeamRuns blueprint={blueprint} lastRun={lastRun} revisions={teamRevisions} showHistory={showHistory} onToggleHistory={() => setShowHistory(v => !v)} />
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Runs and versions — what used to be the Monitor and History tabs. Monitor's live view
+// now happens on the sequence itself, so what is left here is the record: when it ran,
+// how long it took, and how it ended.
+function TeamRuns({
+  blueprint, lastRun, revisions, showHistory, onToggleHistory,
+}: {
+  blueprint: TeamBlueprint
+  lastRun: ProcessRun | undefined
+  revisions: TeamRevision[]
+  showHistory: boolean
+  onToggleHistory: () => void
+}) {
+  const label = (r: ProcessRun): string =>
+    r.status === 'running' ? 'Running now'
+      : r.finishedAt ? fmtDate(r.finishedAt)
+      : fmtDate(r.startedAt)
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.06em', color: 'var(--text-secondary)' }}>RUNS</div>
+
+      {lastRun ? (
+        <div style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '9px 11px', display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+            <StatusDot status={lastRun.status} />
+            <span style={{ fontSize: 12, color: 'var(--text-primary)' }}>{label(lastRun)}</span>
+            <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text-secondary)' }}>
+              {fmtElapsed((lastRun.finishedAt ?? Date.now()) - lastRun.startedAt)}
+            </span>
+          </div>
+          {lastRun.objective && (
+            <div style={{ fontSize: 11, color: 'var(--text-secondary)', lineHeight: 1.5 }}>{lastRun.objective}</div>
+          )}
+          {lastRun.error && (
+            <div style={{ fontSize: 11, color: 'var(--danger)', lineHeight: 1.5 }}>{lastRun.error}</div>
+          )}
+        </div>
+      ) : (
+        <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Never run.</div>
+      )}
+
+      <div style={{ marginTop: 6, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
+        <button
+          onClick={onToggleHistory}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: 0,
+            background: 'none', border: 'none', cursor: 'pointer', fontSize: 12, color: 'var(--text-secondary)',
+          }}
+        >
+          <History size={13} />
+          Version {blueprint.version}
+          <span style={{ marginLeft: 'auto', color: 'var(--accent)' }}>{showHistory ? 'Hide' : 'History'}</span>
+        </button>
+
+        {showHistory && (
+          <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {revisions.length === 0 ? (
+              <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>No earlier versions saved.</span>
+            ) : revisions.map((rev, i) => (
+              <RevisionRow
+                key={rev.savedAt}
+                revision={rev}
+                isCurrent={i === 0}
+                prevRevision={revisions[i + 1] ?? null}
+              />
+            ))}
           </div>
         )}
       </div>
@@ -1342,7 +1133,6 @@ function TeamDetail({
   )
 }
 
-// ── New team modal ─────────────────────────────────────────────────────────────
 
 function NewTeamModal({ onCreated, onCancel }: { onCreated: (bp: TeamBlueprint) => void; onCancel: () => void }) {
   return (
@@ -1378,96 +1168,6 @@ function NewTeamModal({ onCreated, onCancel }: { onCreated: (bp: TeamBlueprint) 
 // The desktop TeamDetail is a 5-tab builder (canvas editing). On a phone that doesn't
 // fit, so this is a read-and-run view: the flow as a vertical list of members, a task
 // box, and Run/Stop. Structural editing stays on desktop.
-function MobileTeamDetail({ blueprint, compiledDef, onBack, onOpenChat }: {
-  blueprint: TeamBlueprint
-  compiledDef: ProcessDef | undefined
-  onBack: () => void
-  onOpenChat?: () => void
-}) {
-  const { runs, startRun, stopRun } = useProcessesStore()
-  const { agents } = useAgentsStore()
-  const run = runs[blueprint.id]
-  const running = run?.status === 'running'
-  const [task, setTask] = useState(run?.objective ?? '')
-  const [starting, setStarting] = useState(false)
-
-  const agentName = (id: string) => { const a = agents.find(x => x.id === id); return a?.identity?.name ?? a?.name ?? id }
-  const validation = validateTeamForLaunch(blueprint, compiledDef)
-  const usesObjective = blueprint.members.some(m => m.task?.includes('{objective}')) || (blueprint.outputContract?.includes('{objective}') ?? false)
-  const canRun = validation.valid && !(usesObjective && !task.trim())
-
-  const handleRun = async () => {
-    if (!canRun || !compiledDef) return
-    setStarting(true)
-    try { await startRun(blueprint.id, compiledDef, blueprint.controllerAgentId, task.trim()) }
-    finally { setStarting(false) }
-  }
-
-  return (
-    <div className="flex flex-col h-full min-h-0">
-      <div className="flex items-center gap-2 px-3 py-3 shrink-0" style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-surface)' }}>
-        <button onClick={onBack} aria-label="Back to teams" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 32, height: 32, marginLeft: -4, borderRadius: 'var(--radius)', border: 'none', background: 'transparent', color: 'var(--text-primary)', cursor: 'pointer', flexShrink: 0 }}>
-          <ArrowLeft size={18} />
-        </button>
-        <div className="min-w-0 flex-1">
-          <div className="text-sm font-semibold truncate" style={{ color: 'var(--text-primary)' }}>{blueprint.name}</div>
-          <div className="text-xs truncate" style={{ color: 'var(--text-secondary)' }}>Lead: {agentName(blueprint.controllerAgentId)}</div>
-        </div>
-        <StatusDot status={run?.status ?? 'idle'} />
-      </div>
-
-      <div className="flex-1 overflow-y-auto p-4" style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-        {/* Run */}
-        <div>
-          <label className="text-xs font-semibold uppercase" style={{ color: 'var(--text-secondary)', letterSpacing: '0.05em' }}>Task</label>
-          <textarea
-            value={task} onChange={e => setTask(e.target.value)} rows={2}
-            placeholder={usesObjective ? 'What should the team do this run?' : 'Optional task…'}
-            style={{ width: '100%', marginTop: 6, padding: '10px', borderRadius: 'var(--radius)', border: '1px solid var(--border)', background: 'var(--bg-elevated)', color: 'var(--text-primary)', outline: 'none', resize: 'vertical', fontFamily: 'inherit' }}
-          />
-          <div className="flex items-center gap-2 mt-2">
-            {running
-              ? <Btn size="sm" variant="outline" icon={<XCircle size={12} />} onClick={() => stopRun(blueprint.id)}>Stop</Btn>
-              : <Btn size="sm" icon={<Play size={12} />} loading={starting} disabled={!canRun} onClick={handleRun}>Run</Btn>}
-            {running && onOpenChat && <Btn size="sm" variant="ghost" onClick={onOpenChat}>Open run in chat</Btn>}
-          </div>
-          {!validation.valid && <p className="text-xs mt-1.5" style={{ color: 'var(--danger)' }}>{validation.errors.join(' · ') || 'Not runnable — check the blueprint on desktop.'}</p>}
-        </div>
-
-        {/* Flow */}
-        <div>
-          <div className="text-xs font-semibold uppercase mb-2" style={{ color: 'var(--text-secondary)', letterSpacing: '0.05em' }}>Flow · {blueprint.members.length} members</div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {blueprint.members.map((m, i) => (
-              <div key={i} className="flex gap-3 p-3 rounded" style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)' }}>
-                <div style={{ flexShrink: 0, width: 24, height: 24, borderRadius: 12, background: 'var(--bg-elevated)', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 600 }}>{i + 1}</div>
-                <div className="min-w-0 flex-1">
-                  <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
-                    {m.reviewBefore && i > 0 && <span title="Review gate" style={{ marginRight: 4 }}>🔍</span>}
-                    {m.role || m.agentId}
-                  </div>
-                  <div className="text-xs" style={{ color: 'var(--text-secondary)' }}>{agentName(m.agentId)}</div>
-                  {m.task && <div className="text-xs mt-1" style={{ color: 'var(--text-secondary)', opacity: 0.85, lineHeight: 1.5 }}>{m.task}</div>}
-                </div>
-              </div>
-            ))}
-          </div>
-          {blueprint.routes?.length ? (
-            <p className="text-xs mt-2" style={{ color: 'var(--text-secondary)' }}>
-              <GitBranch size={11} style={{ verticalAlign: 'middle', marginRight: 4 }} />
-              {blueprint.routes.length} conditional route{blueprint.routes.length > 1 ? 's' : ''} — view/edit on desktop.
-            </p>
-          ) : null}
-        </div>
-
-        <p className="text-xs" style={{ color: 'var(--text-secondary)', opacity: 0.6, lineHeight: 1.5 }}>
-          Editing a team's structure (members, routes, graph) is done on the desktop app. Here you can review the flow and run it.
-        </p>
-      </div>
-    </div>
-  )
-}
-
 export function TeamsView({ onOpenChat }: { onOpenChat?: () => void } = {}) {
   const { blueprints, compiledDefs, loading, error, needsPlugin, load, deleteTeam, importBundle } = useTeamsStore()
   const { runs, _startEventListening } = useProcessesStore()
@@ -1573,6 +1273,7 @@ export function TeamsView({ onOpenChat }: { onOpenChat?: () => void } = {}) {
             <TeamItem
               key={bp.id} bp={bp} active={bp.id === selectedId}
               runStatus={runs[bp.id]?.status}
+              run={runs[bp.id]}
               onClick={() => setSelectedId(bp.id)}
               onDelete={async () => {
                 const ok = await deleteTeam(bp.id)
@@ -1589,15 +1290,6 @@ export function TeamsView({ onOpenChat }: { onOpenChat?: () => void } = {}) {
       {showDetail && (
       <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', background: 'var(--bg-primary)' }}>
         {selectedBp ? (
-          narrow ? (
-            <MobileTeamDetail
-              key={selectedBp.id}
-              blueprint={selectedBp}
-              compiledDef={selectedDef}
-              onOpenChat={onOpenChat}
-              onBack={() => setSelectedId(null)}
-            />
-          ) : (
           <TeamDetail
             key={selectedBp.id}
             blueprint={selectedBp}
@@ -1608,7 +1300,6 @@ export function TeamsView({ onOpenChat }: { onOpenChat?: () => void } = {}) {
               setSelectedId(updated.id)
             }}
           />
-          )
         ) : (
           <div style={{ display: 'flex', flex: 1, flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12 }}>
             <UsersRound size={40} style={{ color: 'var(--text-secondary)', opacity: 0.2 }} />
