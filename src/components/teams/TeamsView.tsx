@@ -681,6 +681,9 @@ function teamRowState(bp: TeamBlueprint, run: ProcessRun | undefined): string {
   }
   const when = fmtDate(run.finishedAt ?? run.startedAt)
   if (run.status === 'error') return `failed ${when}`
+  // An attempt recorded by teams.launchPrompt — a prompt was handed out, but nothing has
+  // reported back. Saying it "ran" would be a claim the record does not support.
+  if (run.status === 'idle' && !run.finishedAt) return `${steps} · launch requested ${when}`
   return `${steps} · ran ${when}`
 }
 
@@ -1072,8 +1075,16 @@ function TeamRuns({
   showHistory: boolean
   onToggleHistory: () => void
 }) {
+  // A record with status 'idle' is a launch the app never saw start: teams.launchPrompt
+  // writes one when an agent asks for a team's prompt from Slack or a schedule, so a
+  // headless run leaves a trace instead of nothing. It is an attempt, not a run — so it
+  // gets no duration, which would otherwise tick up forever against a run that may never
+  // have begun.
+  const pending = (r: ProcessRun): boolean => r.status === 'idle' && !r.finishedAt
+
   const label = (r: ProcessRun): string =>
     r.status === 'running' ? 'Running now'
+      : pending(r) ? 'Launch requested'
       : r.finishedAt ? fmtDate(r.finishedAt)
       : fmtDate(r.startedAt)
 
@@ -1087,7 +1098,9 @@ function TeamRuns({
             <StatusDot status={lastRun.status} />
             <span style={{ fontSize: 12, color: 'var(--text-primary)' }}>{label(lastRun)}</span>
             <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text-secondary)' }}>
-              {fmtElapsed((lastRun.finishedAt ?? Date.now()) - lastRun.startedAt)}
+              {pending(lastRun)
+                ? fmtDate(lastRun.startedAt)
+                : fmtElapsed((lastRun.finishedAt ?? Date.now()) - lastRun.startedAt)}
             </span>
           </div>
           {lastRun.objective && (
@@ -1095,6 +1108,11 @@ function TeamRuns({
           )}
           {lastRun.error && (
             <div style={{ fontSize: 11, color: 'var(--danger)', lineHeight: 1.5 }}>{lastRun.error}</div>
+          )}
+          {pending(lastRun) && lastRun.log.length > 0 && (
+            <div style={{ fontSize: 11, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+              {lastRun.log[lastRun.log.length - 1].text}
+            </div>
           )}
         </div>
       ) : (
