@@ -49,6 +49,13 @@ describe('stepStatuses', () => {
     expect(stepStatuses(run({ stepsDone: 0 }), 3, NOW)[0].timing).toBe('1m 30s')
   })
 
+  it('shows nothing for a launch that has not started yet', () => {
+    // teams.launchPrompt records an ATTEMPT with status 'idle' when an agent asks for a
+    // team's prompt. Until it spawns the team lead no step has run, and marking them all
+    // done would claim work that never happened.
+    expect(stepStatuses(run({ status: 'idle', stepsDone: 0 }), 3, NOW)).toEqual({})
+  })
+
   it('is empty without a run, or for a team with no steps', () => {
     expect(stepStatuses(undefined, 3, NOW)).toEqual({})
     expect(stepStatuses(run(), 0, NOW)).toEqual({})
