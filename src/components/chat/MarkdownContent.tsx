@@ -5,6 +5,7 @@ import { AudioPlayer } from './AudioPlayer'
 import { WorkspaceImage, VideoPlayer, IMAGE_EXT, VIDEO_EXT, toFileUrl } from './WorkspaceMedia'
 import { DiffView } from './DiffView'
 import { repairDetachedTableRows } from '../../lib/markdownRepair'
+import { splitHtmlBlocks, preserveLineBreaks, type HtmlSegment } from '../../lib/htmlBlocks'
 
 const AUDIO_EXT = /\.(mp3|ogg|wav|m4a|aac|opus|webm|flac)(\?[^\s]*)?$/i
 const LOCAL_PATH = /^(\/|~\/|file:\/\/)/
@@ -205,19 +206,79 @@ const components: Components = {
   }
 }
 
+// ── HTML blocks models write ─────────────────────────────────────────────────
+// <details> and <progress> are parsed into data (lib/htmlBlocks.ts) and drawn here as
+// components. Raw HTML never reaches the DOM — react-markdown still escapes every other
+// tag — so a model can't inject markup, scripts or event handlers through these.
+
+function DetailsBlock({ summary, body, open }: Extract<HtmlSegment, { kind: 'details' }>) {
+  return (
+    <details
+      open={open}
+      style={{ margin: '0.6em 0', border: '1px solid var(--border)', borderRadius: 'var(--radius)', background: 'var(--bg-elevated)' }}
+    >
+      <summary style={{ cursor: 'pointer', padding: '6px 10px', fontWeight: 600, fontSize: '0.92em', color: 'var(--text-primary)' }}>
+        {summary}
+      </summary>
+      <div style={{ padding: '0 12px 6px', borderTop: '1px solid var(--border)' }}>
+        {/* Back through markdown, so a plan written as a list — or as plain lines — reads
+            as one. Nested blocks inside the body are handled by this same component. */}
+        <MarkdownContent text={preserveLineBreaks(body)} />
+      </div>
+    </details>
+  )
+}
+
+function ProgressBar({ value, max, label }: Extract<HtmlSegment, { kind: 'progress' }>) {
+  const indeterminate = value === null
+  const pct = indeterminate ? 0 : Math.round((value / max) * 100)
+  // Whole-number steps read as "2/3"; fractions of 1 read as a percentage.
+  const count = indeterminate ? '' : Number.isInteger(value) && Number.isInteger(max) && max > 1 ? `${value}/${max}` : `${pct}%`
+  return (
+    <div
+      role="progressbar"
+      aria-label={label}
+      aria-valuemin={0}
+      aria-valuemax={max}
+      {...(indeterminate ? {} : { 'aria-valuenow': value })}
+      style={{ margin: '0.6em 0' }}
+    >
+      {(label || count) && (
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, fontSize: '0.85em', color: 'var(--text-secondary)', marginBottom: 4 }}>
+          <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
+          {count && <span style={{ flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>{count}</span>}
+        </div>
+      )}
+      <div style={{ height: 6, borderRadius: 3, background: 'var(--bg-primary)', border: '1px solid var(--border)', overflow: 'hidden' }}>
+        <div
+          className={indeterminate ? 'animate-pulse' : undefined}
+          style={{ height: '100%', width: indeterminate ? '100%' : `${pct}%`, background: 'var(--accent)', opacity: indeterminate ? 0.35 : 1, transition: 'width 0.3s' }}
+        />
+      </div>
+    </div>
+  )
+}
+
 export function MarkdownContent({ text, streaming }: Props) {
   // Models write long tables as one header plus detached per-section runs of rows,
   // which GFM parses as a paragraph of pipes. Re-attach them before rendering — a
   // no-op for every well-formed document. See lib/markdownRepair.ts.
   const source = repairDetachedTableRows(text)
+  // <details> and <progress> become components; everything else stays markdown. A
+  // reply with neither is a single markdown segment, rendered exactly as before.
+  const segments = splitHtmlBlocks(source, { streaming })
   return (
     <div
       className={streaming ? 'streaming-cursor' : ''}
       style={{ lineHeight: 1.7, wordBreak: 'break-word', minWidth: 0 }}
     >
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
-        {source}
-      </ReactMarkdown>
+      {segments.map((seg, i) =>
+        seg.kind === 'markdown'
+          ? <ReactMarkdown key={i} remarkPlugins={[remarkGfm]} components={components}>{seg.text}</ReactMarkdown>
+          : seg.kind === 'details'
+            ? <DetailsBlock key={i} {...seg} />
+            : <ProgressBar key={i} {...seg} />
+      )}
     </div>
   )
 }
