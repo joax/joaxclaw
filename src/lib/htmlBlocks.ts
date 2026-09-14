@@ -62,7 +62,9 @@ function toNumber(v: string | undefined): number | null {
   return Number.isFinite(n) ? n : null
 }
 
-function progressFrom(attrs: Record<string, string>): HtmlSegment {
+export type ProgressSegment = Extract<HtmlSegment, { kind: 'progress' }>
+
+function progressFrom(attrs: Record<string, string>): ProgressSegment {
   // HTML semantics: max defaults to 1; no value means indeterminate.
   const rawMax = toNumber(attrs.max)
   const max = rawMax !== null && rawMax > 0 ? rawMax : 1
@@ -134,4 +136,35 @@ export function splitHtmlBlocks(text: string, opts?: { streaming?: boolean }): H
     else merged.push(seg)
   }
   return merged.length ? merged : [{ kind: 'markdown', text: '' }]
+}
+
+/** A bar's fill, 0–100, or null when it has no value (indeterminate). */
+export function progressPct(p: ProgressSegment): number | null {
+  return p.value === null ? null : (p.value / p.max) * 100
+}
+
+/** The count beside a bar: whole-number steps read as "2/3", fractions of 1 as a percentage. */
+export function progressCount(p: ProgressSegment): string | null {
+  if (p.value === null) return null
+  return Number.isInteger(p.value) && Number.isInteger(p.max) && p.max > 1
+    ? `${p.value}/${p.max}`
+    : `${Math.round((p.value / p.max) * 100)}%`
+}
+
+/**
+ * The first <progress> bar in `text` (outside fenced code) and the text without it. A
+ * progress card pins its bar above the note, so the note is shown without it.
+ */
+export function takeFirstProgress(text: string): { progress: ProgressSegment | null; rest: string } {
+  const parts = text.split(FENCE_SPLIT_RE)
+  for (let i = 0; i < parts.length; i++) {
+    const part = parts[i]
+    if (!part || IS_FENCE_RE.test(part)) continue
+    PROGRESS_RE.lastIndex = 0
+    const m = PROGRESS_RE.exec(part)
+    if (!m) continue
+    parts[i] = part.slice(0, m.index) + part.slice(m.index + m[0].length)
+    return { progress: progressFrom(parseAttrs(m[1])), rest: parts.join('').trim() }
+  }
+  return { progress: null, rest: text }
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { splitHtmlBlocks, preserveLineBreaks } from '../htmlBlocks'
+import { splitHtmlBlocks, preserveLineBreaks, takeFirstProgress, progressCount, progressPct } from '../htmlBlocks'
 
 // A reply carried a <progress> bar and a <details> plan, and the chat showed both as
 // literal tags: react-markdown escapes raw HTML. Rendering raw HTML would hand model
@@ -126,5 +126,37 @@ describe('preserveLineBreaks', () => {
   it('leaves paragraph breaks and fenced code alone', () => {
     expect(preserveLineBreaks('a\n\nb')).toBe('a\n\nb')
     expect(preserveLineBreaks('```\nx\ny\n```')).toBe('```\nx\ny\n```')
+  })
+})
+
+describe('takeFirstProgress', () => {
+  it('lifts the first bar out and returns the note without it', () => {
+    const { progress, rest } = takeFirstProgress('<progress aria-label="CI · 4/6" value="4" max="6"></progress>\n\nBuilding.')
+    expect(progress).toEqual({ kind: 'progress', value: 4, max: 6, label: 'CI · 4/6' })
+    expect(rest).toBe('Building.')
+  })
+
+  it('takes only the first bar', () => {
+    const { rest } = takeFirstProgress('<progress value="1" max="2"/> a <progress value="2" max="2"/>')
+    expect(rest).toBe('a <progress value="2" max="2"/>')
+  })
+
+  it('leaves text with no bar, or a bar only inside code, untouched', () => {
+    expect(takeFirstProgress('just a note')).toEqual({ progress: null, rest: 'just a note' })
+    const fenced = '```\n<progress value="1" max="2"></progress>\n```'
+    expect(takeFirstProgress(fenced)).toEqual({ progress: null, rest: fenced })
+  })
+})
+
+describe('progressCount / progressPct', () => {
+  const bar = (value: number | null, max: number) => ({ kind: 'progress' as const, value, max })
+  it('reads whole-number steps as a count and fractions as a percentage', () => {
+    expect(progressCount(bar(2, 3))).toBe('2/3')
+    expect(progressCount(bar(0.4, 1))).toBe('40%')
+    expect(progressCount(bar(null, 3))).toBeNull()
+  })
+  it('fills in proportion, and not at all when indeterminate', () => {
+    expect(progressPct(bar(1, 4))).toBe(25)
+    expect(progressPct(bar(null, 4))).toBeNull()
   })
 })
