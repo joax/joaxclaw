@@ -7,6 +7,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Your agent's plan, above the chat.** On OpenClaw 2026.8 and later, agents keep a *progress card* for longer jobs: a checklist of steps, a short status note, or both, updated as the work moves on. OpenClaw's own apps show it beside the session. JoaxClaw showed nothing, so models took to writing progress bars into their replies instead. The card now sits under the context bar as a single line: the step being worked on, a progress bar, and a count such as *2/3*. Click it to open the full plan and the note. It updates live while the agent works, and it's still there when you reopen a chat. It uses the same bar as the context meter, and the progress bars that appear in replies now use it too, so all three look alike. Older gateways don't have progress cards, so nothing changes there.
+
 ### Fixed
 
 - **Collapsible sections and progress bars in replies now render.** Models sometimes write a little HTML where markdown has no equivalent — a `<details>` block to fold away a plan, a `<progress>` bar for *"Automated monitoring · 2/3"* — and the chat showed the raw tags. These two are now drawn properly: the plan folds under its summary line, with its steps still formatted, and the progress bar shows its label and count. The same applies to Markdown files opened in the Files drawer. Only these tags are recognised, and only the attributes that matter (`value`, `max`, the label, `open`) are read. Every other bit of HTML is still shown as text rather than run, so a reply can't slip a script or an event handler into the app. Tags inside a code block are left alone, and a block that is still streaming stays hidden until it is complete, instead of flashing up as half-written markup.

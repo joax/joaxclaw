@@ -5,7 +5,8 @@ import { AudioPlayer } from './AudioPlayer'
 import { WorkspaceImage, VideoPlayer, IMAGE_EXT, VIDEO_EXT, toFileUrl } from './WorkspaceMedia'
 import { DiffView } from './DiffView'
 import { repairDetachedTableRows } from '../../lib/markdownRepair'
-import { splitHtmlBlocks, preserveLineBreaks, type HtmlSegment } from '../../lib/htmlBlocks'
+import { splitHtmlBlocks, preserveLineBreaks, progressPct, progressCount, type HtmlSegment, type ProgressSegment } from '../../lib/htmlBlocks'
+import { ProgressTrack } from '../ui/ProgressTrack'
 
 const AUDIO_EXT = /\.(mp3|ogg|wav|m4a|aac|opus|webm|flac)(\?[^\s]*)?$/i
 const LOCAL_PATH = /^(\/|~\/|file:\/\/)/
@@ -229,31 +230,19 @@ function DetailsBlock({ summary, body, open }: Extract<HtmlSegment, { kind: 'det
   )
 }
 
-function ProgressBar({ value, max, label }: Extract<HtmlSegment, { kind: 'progress' }>) {
-  const indeterminate = value === null
-  const pct = indeterminate ? 0 : Math.round((value / max) * 100)
-  // Whole-number steps read as "2/3"; fractions of 1 read as a percentage.
-  const count = indeterminate ? '' : Number.isInteger(value) && Number.isInteger(max) && max > 1 ? `${value}/${max}` : `${pct}%`
+function ProgressBar(seg: ProgressSegment) {
+  const count = progressCount(seg)
   return (
-    <div
-      role="progressbar"
-      aria-label={label}
-      aria-valuemin={0}
-      aria-valuemax={max}
-      {...(indeterminate ? {} : { 'aria-valuenow': value })}
-      style={{ margin: '0.6em 0' }}
-    >
-      {(label || count) && (
+    <div style={{ margin: '0.6em 0' }}>
+      {(seg.label || count) && (
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, fontSize: '0.85em', color: 'var(--text-secondary)', marginBottom: 4 }}>
-          <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
-          {count && <span style={{ flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>{count}</span>}
+          <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{seg.label}</span>
+          {count && <span className="font-mono" style={{ flexShrink: 0 }}>{count}</span>}
         </div>
       )}
-      <div style={{ height: 6, borderRadius: 3, background: 'var(--bg-primary)', border: '1px solid var(--border)', overflow: 'hidden' }}>
-        <div
-          className={indeterminate ? 'animate-pulse' : undefined}
-          style={{ height: '100%', width: indeterminate ? '100%' : `${pct}%`, background: 'var(--accent)', opacity: indeterminate ? 0.35 : 1, transition: 'width 0.3s' }}
-        />
+      {/* The same track as the context bar and the progress card, so all three read alike. */}
+      <div style={{ display: 'flex' }}>
+        <ProgressTrack pct={progressPct(seg)} label={seg.label} />
       </div>
     </div>
   )
