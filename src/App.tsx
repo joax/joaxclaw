@@ -34,6 +34,7 @@ import { isElectron } from './lib/platform'
 import { useUpdaterStore } from './store/updater'
 import { useConnectionStore, restoreConnectionsFromBackup } from './store/connection'
 import { useQuestionsStore } from './store/questions'
+import { useProgressCardsStore } from './store/progressCards'
 import { useMetricsStore } from './store/metrics'
 import { useSettingsStore, ZOOM_STEP, restoreProfileFromBackup } from './store/settings'
 import { useExtensionsStore } from './store/extensions'
@@ -122,6 +123,9 @@ export default function App() {
       // question asked while the app was closed is already in hand when the chat opens,
       // and so the question.* broadcasts are subscribed for the whole session.
       useQuestionsStore.getState().start()
+      // Progress cards: re-read the ones on screen, since they may have moved while this
+      // client was away, and keep the progressCard.changed broadcast subscribed.
+      useProgressCardsStore.getState().start()
     }
   }, [status])
 
