@@ -9,6 +9,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Slack and WhatsApp conversations update live again.** Messages that came through a channel (someone writing to your agent in Slack or WhatsApp, and its reply there) often didn't show up in JoaxClaw until the app was reloaded. Two things were wrong. The app asked the gateway for live session updates once per run, but the gateway ties that request to a single connection, so after the first reconnect (the laptop sleeping, a network blip, a gateway restart) the updates silently stopped. And even while updates were arriving, the app ignored the one that carries new messages. It now renews the request on every connection, and adds new messages to an open conversation as they arrive, without switching away from the chat you're in.
+
 - **Adding Slack, and most other channels, works on OpenClaw 2026.9.** On 2026.9, almost every channel (Slack, Discord, WhatsApp, Signal, Microsoft Teams and more; Telegram is the exception) is its own plugin, which has to be installed before the channel can do anything. The *Add a channel* form didn't know that. It took your keys and saved them, and with no plugin to use them nothing ever connected. The form now checks whether the channel's plugin is on your gateway. When it isn't, the form installs it in one click (for official plugins, on an admin connection) or shows the command to run on the gateway host. Slack also gets a choice between Socket Mode and an HTTP Request URL. Each mode asks only for the keys it uses (the form used to demand an app-level token even for HTTP, which doesn't have one), and the choice is saved. A bot token pasted where the app-level token goes, or the other way round, is now caught in the form.
 
 ---
