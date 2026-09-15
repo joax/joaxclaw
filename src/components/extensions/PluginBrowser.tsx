@@ -117,7 +117,8 @@ export function PluginBrowser({ onClose, installedIds }: { onClose: () => void; 
 // token to acknowledge it with. Echoing that token automatically would defeat the point:
 // it is the record that a person saw this and agreed. `widened` is why it re-asks — a
 // plugin cannot quietly grow its reach across an update on consent given for less.
-function ConsentDialog() {
+/** The plugin consent prompt. Also shown by the channel form when it installs a channel plugin. */
+export function ConsentDialog() {
   const { consent, busy, acceptConsent, dismissConsent } = usePluginCatalogStore()
   if (!consent) return null
   const { challenge, pkg, declared } = consent
