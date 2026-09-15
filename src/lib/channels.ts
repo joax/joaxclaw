@@ -129,6 +129,12 @@ export interface CredField {
   placeholder?: string
   help?: string
   required?: boolean
+  // Modes this field belongs to (see ChannelDef.modes). Omitted means every mode.
+  modes?: string[]
+  // The shape a typed value must have, and what to say when it doesn't. Catches a token
+  // pasted into the wrong field here, instead of as a connection failure later.
+  pattern?: RegExp
+  patternHint?: string
 }
 
 export type ChannelSetup =
@@ -147,12 +153,32 @@ export interface ChannelDef {
   fields: CredField[]
   // Doc slug under https://docs.openclaw … /channels/<docs>
   docs?: string
-  // External/downloadable plugin that must be installed before use.
-  needsPlugin?: boolean
+  // The plugin that provides this channel. On OpenClaw 2026.9 nearly every channel ships
+  // as its own plugin (Telegram is the exception); older gateways bundled most of them.
+  // The form checks plugins.list and offers to install the plugin when it's missing.
+  plugin?: ChannelPlugin
+  // Connection modes that need different credentials (Slack: Socket Mode or HTTP). The
+  // chosen mode is saved as the channel's `mode`, and only its fields are shown and required.
+  modes?: ChannelMode[]
 }
+
+export interface ChannelPlugin {
+  /** Runtime plugin id, as plugins.list and plugins.install know it. */
+  id: string
+  /** npm package to install, when known. */
+  spec?: string
+  /** An official OpenClaw plugin, which plugins.install can add in one step. */
+  official: boolean
+}
+
+export interface ChannelMode { id: string; label: string; help: string }
 
 const ref = (id: string, label: string, kind: CredField['kind'], placeholder: string, help?: string, required = true): CredField =>
   ({ key: id, label, kind, placeholder, help, required })
+
+// Official OpenClaw channel plugins install as `@openclaw/<id>` (the gateway's own
+// catalog, checked on 2026.9.4).
+const official = (id: string): ChannelPlugin => ({ id, spec: `@openclaw/${id}`, official: true })
 
 // The catalog. Channels with `fields` get first-class forms; the rest are
 // still fully creatable via the raw credential editor in the panel.
@@ -163,7 +189,7 @@ export const CHANNELS: ChannelDef[] = [
     fields: [ref('botToken', 'Bot token', 'secret', '123456:ABC-DEF…', 'From @BotFather → /newbot')],
   },
   {
-    id: 'discord', label: 'Discord', color: '#5865f2', setup: 'token', docs: 'discord',
+    id: 'discord', label: 'Discord', color: '#5865f2', setup: 'token', docs: 'discord', plugin: official('discord'),
     blurb: 'Discord Bot API + Gateway. Servers, channels, and DMs.',
     fields: [
       ref('token', 'Bot token', 'secret', 'your-bot-token', 'Developer Portal → Bot → Reset Token'),
@@ -171,23 +197,31 @@ export const CHANNELS: ChannelDef[] = [
     ],
   },
   {
-    id: 'slack', label: 'Slack', color: '#4a154b', setup: 'token', docs: 'slack',
-    blurb: 'Bolt SDK workspace app. Socket Mode (app + bot token) or HTTP (signing secret).',
+    id: 'slack', label: 'Slack', color: '#4a154b', setup: 'token', docs: 'slack', plugin: official('slack'),
+    blurb: 'A Slack workspace app: channels, DMs and slash commands.',
+    modes: [
+      { id: 'socket', label: 'Socket Mode', help: 'Recommended. The gateway connects out to Slack, so it needs no public URL. Uses a bot token and an app-level token.' },
+      { id: 'http', label: 'HTTP Request URL', help: 'Slack sends events to your gateway, so it must be reachable from the internet. Uses a bot token and the signing secret.' },
+    ],
     fields: [
-      ref('appToken', 'App-level token', 'secret', 'xapp-…', 'Socket Mode — starts with xapp-'),
-      ref('botToken', 'Bot token', 'secret', 'xoxb-…', 'Starts with xoxb-'),
-      ref('signingSecret', 'Signing secret', 'secret', '…', 'HTTP mode only', false),
+      { key: 'botToken', label: 'Bot token', kind: 'secret', placeholder: 'xoxb-…', required: true,
+        help: 'OAuth & Permissions → Bot User OAuth Token', pattern: /^xoxb-/, patternHint: 'Bot tokens start with xoxb-.' },
+      { key: 'appToken', label: 'App-level token', kind: 'secret', placeholder: 'xapp-…', required: true, modes: ['socket'],
+        help: 'Basic Information → App-Level Tokens, with the connections:write scope', pattern: /^xapp-/, patternHint: 'App-level tokens start with xapp-.' },
+      { key: 'signingSecret', label: 'Signing secret', kind: 'secret', placeholder: '…', required: true, modes: ['http'],
+        help: 'Basic Information → App Credentials → Signing Secret' },
+      { key: 'webhookPath', label: 'Events path', kind: 'text', placeholder: '/slack/events', required: false, modes: ['http'],
+        help: 'Where Slack posts events on your gateway. Leave blank for /slack/events.' },
     ],
   },
   {
-    id: 'whatsapp', label: 'WhatsApp', color: '#25d366', setup: 'qr', docs: 'whatsapp',
+    id: 'whatsapp', label: 'WhatsApp', color: '#25d366', setup: 'qr', docs: 'whatsapp', plugin: official('whatsapp'),
     blurb: 'Baileys (WhatsApp Web). Requires QR pairing — no token. State stored on disk.',
     fields: [],
-    needsPlugin: true,
   },
   {
-    id: 'feishu', label: 'Feishu / Lark', color: '#00d6b9', setup: 'token', docs: 'feishu',
-    blurb: 'Feishu/Lark bot via WebSocket (bundled plugin).',
+    id: 'feishu', label: 'Feishu / Lark', color: '#00d6b9', setup: 'token', docs: 'feishu', plugin: official('feishu'),
+    blurb: 'Feishu/Lark bot via WebSocket.',
     fields: [
       ref('appId', 'App ID', 'text', 'cli_xxx'),
       ref('appSecret', 'App secret', 'secret', '…'),
@@ -196,7 +230,7 @@ export const CHANNELS: ChannelDef[] = [
     ],
   },
   {
-    id: 'sms', label: 'SMS (Twilio)', color: '#f22f46', setup: 'token', docs: 'sms',
+    id: 'sms', label: 'SMS (Twilio)', color: '#f22f46', setup: 'token', docs: 'sms', plugin: official('sms'),
     blurb: 'Twilio-backed SMS through the Gateway webhook.',
     fields: [
       ref('accountSid', 'Account SID', 'text', 'ACxxxxxxxx…'),
@@ -207,30 +241,33 @@ export const CHANNELS: ChannelDef[] = [
   },
   {
     id: 'qqbot', label: 'QQ Bot', color: '#12b7f5', setup: 'token', docs: 'qqbot',
-    blurb: 'QQ Bot API. Private chat, group chat, rich media (bundled plugin).',
+    // Published by Tencent Connect, not OpenClaw, so it installs from its package name.
+    plugin: { id: 'openclaw-qqbot', spec: '@tencent-connect/openclaw-qqbot', official: false },
+    blurb: 'QQ Bot API. Private chat, group chat, rich media.',
     fields: [
       ref('appId', 'App ID', 'text', 'YOUR_APP_ID'),
       ref('clientSecret', 'App secret', 'secret', 'YOUR_APP_SECRET'),
     ],
   },
   // ── Advanced (raw-config) channels ──────────────────────────────────────────
-  { id: 'signal',          label: 'Signal',          color: '#3a76f0', setup: 'advanced', docs: 'signal',          blurb: 'signal-cli. Privacy-focused.', fields: [] },
-  { id: 'imessage',        label: 'iMessage',        color: '#34da50', setup: 'advanced', docs: 'imessage',        blurb: 'Native macOS via the imsg bridge on a signed-in Mac.', fields: [] },
-  { id: 'matrix',          label: 'Matrix',          color: '#0dbd8b', setup: 'advanced', docs: 'matrix',          blurb: 'Matrix protocol (downloadable plugin).', fields: [], needsPlugin: true },
-  { id: 'mattermost',      label: 'Mattermost',      color: '#0058cc', setup: 'advanced', docs: 'mattermost',      blurb: 'Bot API + WebSocket (downloadable plugin).', fields: [], needsPlugin: true },
-  { id: 'msteams',         label: 'Microsoft Teams', color: '#6264a7', setup: 'advanced', docs: 'msteams',         blurb: 'Bot Framework; enterprise support (bundled plugin).', fields: [] },
-  { id: 'googlechat',      label: 'Google Chat',     color: '#34a853', setup: 'advanced', docs: 'googlechat',      blurb: 'Google Chat app via HTTP webhook (downloadable plugin).', fields: [], needsPlugin: true },
-  { id: 'line',            label: 'LINE',            color: '#06c755', setup: 'advanced', docs: 'line',            blurb: 'LINE Messaging API bot (downloadable plugin).', fields: [], needsPlugin: true },
-  { id: 'irc',             label: 'IRC',             color: '#888888', setup: 'advanced', docs: 'irc',             blurb: 'Classic IRC servers; channels + DMs.', fields: [] },
-  { id: 'nostr',           label: 'Nostr',           color: '#8e44ad', setup: 'advanced', docs: 'nostr',           blurb: 'Decentralized DMs via NIP-04 (bundled plugin).', fields: [] },
-  { id: 'nextcloud-talk',  label: 'Nextcloud Talk',  color: '#0082c9', setup: 'advanced', docs: 'nextcloud-talk',  blurb: 'Self-hosted chat via Nextcloud Talk (bundled plugin).', fields: [] },
-  { id: 'synology-chat',   label: 'Synology Chat',   color: '#b5b5b5', setup: 'advanced', docs: 'synology-chat',   blurb: 'Synology NAS Chat via webhooks (bundled plugin).', fields: [] },
-  { id: 'twitch',          label: 'Twitch',          color: '#9146ff', setup: 'advanced', docs: 'twitch',          blurb: 'Twitch chat via IRC connection (bundled plugin).', fields: [] },
-  { id: 'tlon',            label: 'Tlon',            color: '#000000', setup: 'advanced', docs: 'tlon',            blurb: 'Urbit-based messenger (bundled plugin).', fields: [] },
-  { id: 'zalo',            label: 'Zalo',            color: '#0068ff', setup: 'advanced', docs: 'zalo',            blurb: "Zalo Bot API; Vietnam's popular messenger (bundled plugin).", fields: [] },
-  { id: 'zalouser',        label: 'Zalo Personal',   color: '#0068ff', setup: 'qr',       docs: 'zalouser',        blurb: 'Zalo personal account via QR login (bundled plugin).', fields: [] },
-  { id: 'wechat',          label: 'WeChat',          color: '#07c160', setup: 'qr',       docs: 'wechat',          blurb: 'Tencent iLink Bot via QR login; private chats only (external plugin).', fields: [], needsPlugin: true },
-  { id: 'yuanbao',         label: 'Yuanbao',         color: '#1d6dff', setup: 'advanced', docs: 'yuanbao',         blurb: 'Tencent Yuanbao bot (external plugin).', fields: [], needsPlugin: true },
+  { id: 'signal',          label: 'Signal',          color: '#3a76f0', setup: 'advanced', docs: 'signal',          plugin: official('signal'),          blurb: 'signal-cli. Privacy-focused.', fields: [] },
+  { id: 'imessage',        label: 'iMessage',        color: '#34da50', setup: 'advanced', docs: 'imessage',        plugin: official('imessage'),        blurb: 'Native macOS via the imsg bridge on a signed-in Mac.', fields: [] },
+  { id: 'matrix',          label: 'Matrix',          color: '#0dbd8b', setup: 'advanced', docs: 'matrix',          plugin: official('matrix'),          blurb: 'Matrix protocol.', fields: [] },
+  { id: 'mattermost',      label: 'Mattermost',      color: '#0058cc', setup: 'advanced', docs: 'mattermost',      plugin: official('mattermost'),      blurb: 'Bot API + WebSocket.', fields: [] },
+  { id: 'msteams',         label: 'Microsoft Teams', color: '#6264a7', setup: 'advanced', docs: 'msteams',         plugin: official('msteams'),         blurb: 'Bot Framework; enterprise support.', fields: [] },
+  { id: 'googlechat',      label: 'Google Chat',     color: '#34a853', setup: 'advanced', docs: 'googlechat',      plugin: official('googlechat'),      blurb: 'Google Chat app via HTTP webhook.', fields: [] },
+  { id: 'line',            label: 'LINE',            color: '#06c755', setup: 'advanced', docs: 'line',            plugin: official('line'),            blurb: 'LINE Messaging API bot.', fields: [] },
+  { id: 'irc',             label: 'IRC',             color: '#888888', setup: 'advanced', docs: 'irc',             plugin: official('irc'),             blurb: 'Classic IRC servers; channels + DMs.', fields: [] },
+  { id: 'nostr',           label: 'Nostr',           color: '#8e44ad', setup: 'advanced', docs: 'nostr',           plugin: official('nostr'),           blurb: 'Decentralized DMs via NIP-04.', fields: [] },
+  { id: 'nextcloud-talk',  label: 'Nextcloud Talk',  color: '#0082c9', setup: 'advanced', docs: 'nextcloud-talk',  plugin: official('nextcloud-talk'),  blurb: 'Self-hosted chat via Nextcloud Talk.', fields: [] },
+  { id: 'synology-chat',   label: 'Synology Chat',   color: '#b5b5b5', setup: 'advanced', docs: 'synology-chat',   plugin: official('synology-chat'),   blurb: 'Synology NAS Chat via webhooks.', fields: [] },
+  { id: 'twitch',          label: 'Twitch',          color: '#9146ff', setup: 'advanced', docs: 'twitch',          plugin: official('twitch'),          blurb: 'Twitch chat via IRC connection.', fields: [] },
+  { id: 'tlon',            label: 'Tlon',            color: '#000000', setup: 'advanced', docs: 'tlon',            plugin: official('tlon'),            blurb: 'Urbit-based messenger.', fields: [] },
+  { id: 'zalo',            label: 'Zalo',            color: '#0068ff', setup: 'advanced', docs: 'zalo',            plugin: official('zalo'),            blurb: "Zalo Bot API; Vietnam's popular messenger.", fields: [] },
+  { id: 'zalouser',        label: 'Zalo Personal',   color: '#0068ff', setup: 'qr',       docs: 'zalouser',        plugin: official('zalouser'),        blurb: 'Zalo personal account via QR login.', fields: [] },
+  // Not in OpenClaw's catalog: install per the channel's own docs.
+  { id: 'wechat',          label: 'WeChat',          color: '#07c160', setup: 'qr',       docs: 'wechat',          plugin: { id: 'wechat', official: false }, blurb: 'Tencent iLink Bot via QR login; private chats only.', fields: [] },
+  { id: 'yuanbao',         label: 'Yuanbao',         color: '#1d6dff', setup: 'advanced', docs: 'yuanbao',         plugin: { id: 'openclaw-plugin-yuanbao', spec: 'openclaw-plugin-yuanbao', official: false }, blurb: 'Tencent Yuanbao bot.', fields: [] },
 ]
 
 export const CHANNEL_BY_ID = new Map(CHANNELS.map(c => [c.id, c]))
@@ -253,6 +290,74 @@ export function isSecretRef(v: unknown): v is SecretRef {
 export function fieldLiteral(raw: Record<string, unknown>, key: string): string {
   const v = raw[key]
   return typeof v === 'string' ? v : ''
+}
+
+// ── Modes and saving (curated form) ──────────────────────────────────────────
+
+/** The mode an existing channel is in, or the first (recommended) mode for a new one. */
+export function initialMode(def: ChannelDef, raw: Record<string, unknown>): string | undefined {
+  if (!def.modes?.length) return undefined
+  const ids = def.modes.map(m => m.id)
+  if (typeof raw.mode === 'string' && ids.includes(raw.mode)) return raw.mode
+  // Configured before the form wrote a mode: a signing secret with no app token is HTTP.
+  if (raw.signingSecret && !raw.appToken && ids.includes('http')) return 'http'
+  return ids[0]
+}
+
+/** The fields shown, and checked, for a mode. */
+export function fieldsForMode(def: ChannelDef, mode: string | undefined): CredField[] {
+  return def.fields.filter(f => !f.modes || !mode || f.modes.includes(mode))
+}
+
+/**
+ * The settings to save from the curated form, or what's wrong with it. Only the chosen
+ * mode's fields are written and required. Fields from another mode are left alone, since
+ * config.patch merges. An untouched SecretRef is kept as it is.
+ */
+export function buildCredentialSettings(
+  def: ChannelDef, mode: string | undefined, values: Record<string, string>, raw: Record<string, unknown>,
+): { settings: Record<string, unknown> } | { error: string } {
+  const fields = fieldsForMode(def, mode)
+  const settings: Record<string, unknown> = {}
+  for (const f of fields) {
+    const v = values[f.key]?.trim() ?? ''
+    if (isSecretRef(raw[f.key]) && v === '') { settings[f.key] = raw[f.key]; continue }
+    if (v === '') continue
+    if (f.pattern && !f.pattern.test(v)) return { error: `${f.label}: ${f.patternHint ?? 'unexpected format.'}` }
+    settings[f.key] = v
+  }
+  const missing = fields.find(f => f.required && !settings[f.key])
+  if (missing) {
+    const modeLabel = def.modes?.find(m => m.id === mode)?.label
+    return { error: `${missing.label} is required${modeLabel ? ` for ${modeLabel}` : ''}.` }
+  }
+  if (mode && def.modes?.length) settings.mode = mode
+  return { settings }
+}
+
+// ── Channel plugins ───────────────────────────────────────────────────────────
+
+export type PluginInstallState = 'installed' | 'disabled' | 'missing'
+
+/**
+ * Whether a channel's plugin is on the gateway, from a plugins.list result. Newer
+ * gateways list uninstalled catalog plugins too (`installed: false`, state
+ * `not-installed`), so being in the list isn't enough. Matches by runtime id or package.
+ */
+export function pluginInstallState(listResult: unknown, plugin: ChannelPlugin): PluginInstallState {
+  const list = (listResult as { plugins?: unknown } | null)?.plugins
+  const entries = Array.isArray(list) ? list : []
+  const hit = entries.find((e): e is Record<string, unknown> =>
+    !!e && typeof e === 'object'
+    && ((e as Record<string, unknown>).id === plugin.id || (!!plugin.spec && (e as Record<string, unknown>).packageName === plugin.spec)))
+  if (!hit || hit.installed === false || hit.state === 'not-installed') return 'missing'
+  if (hit.enabled === false || hit.state === 'disabled') return 'disabled'
+  return 'installed'
+}
+
+/** The command that installs a channel's plugin on the gateway host, when the package is known. */
+export function pluginInstallCommand(plugin: ChannelPlugin): string | null {
+  return plugin.spec ? `openclaw plugins install ${plugin.spec}` : null
 }
 
 // ── Delivery targets ──────────────────────────────────────────────────────────
