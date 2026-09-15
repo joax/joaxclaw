@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell, Tray, Menu, nativeImage, session, dialog } from 'electron'
+import { app, BrowserWindow, ipcMain, shell, Tray, Menu, nativeImage, session, dialog, powerMonitor } from 'electron'
 import { join, dirname } from 'path'
 import { readFile, writeFile, mkdir, readdir, unlink, rm } from 'fs/promises'
 import { existsSync, statSync, createReadStream, watch, type FSWatcher } from 'fs'
@@ -141,6 +141,7 @@ function createWindow(): void {
     return { action: 'deny' }
   })
 
+  wireRecovery(mainWindow, 'main window', () => { if (mainWindow) loadRenderer(mainWindow) })
   loadRenderer(mainWindow)
   mainWindow.webContents.on('destroyed', () => cleanupSocket(mainWindow!.webContents.id))
 }
@@ -169,6 +170,48 @@ function wireMaximizeEvents(win: BrowserWindow): void {
   win.on('enter-full-screen', push)
   win.on('leave-full-screen', push)
   win.webContents.on('did-finish-load', push)
+}
+
+// ── Recovering a window that stopped drawing ─────────────────────────────────
+// Left running overnight, the app could wake from hibernation to a black window: the
+// renderer and GPU processes were alive and idle and the gateway still connected, but
+// the GPU context was lost across the suspend and nothing asked the window to paint
+// again. So every window is asked to repaint after resume and after a GPU process exit
+// (see whenReady and the child-process-gone handler), and each window gets two
+// recoveries of its own: reload a renderer that crashed or was killed, and retry a page
+// that failed to load. Reloading is safe: the renderer's state lives on the gateway and
+// in storage, and a pop-out is deep-linked by its URL, so it comes back to the same
+// chat or file.
+
+function repaintAllWindows(): void {
+  for (const w of BrowserWindow.getAllWindows()) {
+    if (!w.isDestroyed()) w.webContents.invalidate()
+  }
+}
+
+const MAX_LOAD_RETRIES = 5
+
+function wireRecovery(win: BrowserWindow, label: string, reload: () => void): void {
+  let loadRetries = 0
+  win.webContents.on('render-process-gone', (_e, details) => {
+    // A clean exit is ordinary teardown (a window closing, the app quitting), not a crash.
+    if (details.reason === 'clean-exit' || isQuitting) return
+    console.warn(`[recovery] ${label}: renderer gone (${details.reason}, exit ${details.exitCode}), reloading`)
+    setTimeout(() => { if (!win.isDestroyed()) reload() }, 500)
+  })
+  win.webContents.on('did-fail-load', (_e, code, description, url, isMainFrame) => {
+    // -3 (ERR_ABORTED) is a navigation replaced by another one, such as a dev-server
+    // reload. That isn't a failure.
+    if (!isMainFrame || code === -3 || win.isDestroyed()) return
+    if (loadRetries >= MAX_LOAD_RETRIES) {
+      console.warn(`[recovery] ${label}: giving up loading ${url} (${code} ${description})`)
+      return
+    }
+    const delay = 1_000 * 2 ** loadRetries++
+    console.warn(`[recovery] ${label}: load failed (${code} ${description}), retrying in ${delay / 1000}s`)
+    setTimeout(() => { if (!win.isDestroyed()) reload() }, delay)
+  })
+  win.webContents.on('did-finish-load', () => { loadRetries = 0 })
 }
 
 // ── Pop-out chat windows ──────────────────────────────────────────────────────
@@ -222,7 +265,9 @@ function createChatWindow(sessionKey: string): void {
     broadcastPoppedOut()
   })
 
-  loadRenderer(win, `?popout=chat&session=${encodeURIComponent(sessionKey)}`)
+  const query = `?popout=chat&session=${encodeURIComponent(sessionKey)}`
+  wireRecovery(win, 'chat window', () => loadRenderer(win, query))
+  loadRenderer(win, query)
   broadcastPoppedOut()
 }
 
@@ -263,6 +308,7 @@ function createFileWindow(filePath: string, name?: string): void {
   win.on('closed', () => { if (fileWindows.get(filePath) === win) fileWindows.delete(filePath) })
 
   const query = `?popout=file&path=${encodeURIComponent(filePath)}${name ? `&name=${encodeURIComponent(name)}` : ''}`
+  wireRecovery(win, 'file window', () => loadRenderer(win, query))
   loadRenderer(win, query)
 }
 
@@ -290,6 +336,7 @@ function createAboutWindow(): void {
   aboutWindow.webContents.setWindowOpenHandler(({ url }) => { shell.openExternal(url); return { action: 'deny' } })
   aboutWindow.on('ready-to-show', () => aboutWindow?.show())
   aboutWindow.on('closed', () => { aboutWindow = null })
+  wireRecovery(aboutWindow, 'about window', () => { if (aboutWindow) loadRenderer(aboutWindow, '?popout=about') })
   loadRenderer(aboutWindow, '?popout=about')
 }
 
@@ -306,6 +353,12 @@ app.whenReady().then(() => {
   registerThemeIpc()
   createTray()
   createWindow()
+  // After sleep or hibernation the display stack comes back a moment after the app does,
+  // so repaint once it's likely back, and again later in case the first was too early.
+  powerMonitor.on('resume', () => {
+    setTimeout(repaintAllWindows, 3_000)
+    setTimeout(repaintAllWindows, 15_000)
+  })
   app.on('activate', () => {
     // macOS: clicking dock icon while window is hidden should show it
     if (mainWindow) {
@@ -322,6 +375,15 @@ app.on('window-all-closed', () => { /* noop */ })
 
 app.on('before-quit', () => {
   isQuitting = true
+})
+
+// The GPU process can exit on its own: a driver reset, or a context lost across
+// hibernation. Chromium starts a new one, so log it (a recurrence can then be traced)
+// and ask every window to repaint on the new process.
+app.on('child-process-gone', (_e, details) => {
+  if (details.type !== 'GPU') return
+  console.warn(`[recovery] GPU process gone (${details.reason}, exit ${details.exitCode}), repainting windows`)
+  setTimeout(repaintAllWindows, 1_000)
 })
 
 // ── IPC: App info ─────────────────────────────────────────────────────────────
