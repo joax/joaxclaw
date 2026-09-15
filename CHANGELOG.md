@@ -7,6 +7,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+---
+
+## [0.26.1] - 2026-09-15
+
 ### Fixed
 
 - **Slack and WhatsApp conversations update live again.** Messages that came through a channel (someone writing to your agent in Slack or WhatsApp, and its reply there) often didn't show up in JoaxClaw until the app was reloaded. Two things were wrong. The app asked the gateway for live session updates once per run, but the gateway ties that request to a single connection, so after the first reconnect (the laptop sleeping, a network blip, a gateway restart) the updates silently stopped. And even while updates were arriving, the app ignored the one that carries new messages. It now renews the request on every connection, and adds new messages to an open conversation as they arrive, without switching away from the chat you're in.
