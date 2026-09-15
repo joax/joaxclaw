@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { nanoid } from '../lib/nanoid'
 import type { Conversation, ChatMessage, ContextOverflowInfo, ToolCall, SubThread, MediaAttachment, ThinkingLevel } from '../lib/types'
 import { gatewayClient } from '../lib/gateway'
+import { decideIngest } from '../lib/sessionMessageIngest'
 import { describeRunFailure } from '../lib/gatewayPolicy'
 import { agentIdFromSessionKey as agentIdFromKey } from '../lib/sessionName'
 import { hasProduced } from '../lib/streamStatus'
@@ -447,6 +448,8 @@ interface ChatState {
   watchSession: (convId: string, sessionKey: string) => void
   deleteConversation: (id: string) => void
   loadSessionMessages: (sessionKey: string, agentId: string, agentName: string) => Promise<string>
+  /** A session.message event: add the new message to that session's open conversation, if it belongs there. */
+  ingestSessionMessage: (payload: unknown) => void
 }
 
 function makeTitle(text: string): string {
@@ -566,6 +569,47 @@ function extractToolCalls(msg: unknown): ToolCall[] {
       args: b['input'] !== undefined ? JSON.stringify(b['input']) : undefined,
       status: 'done' as const
     }))
+}
+
+// chat.history entries, and the message in a session.message event (same shape), as the
+// app's messages. Tool results and system entries are dropped, and so is an assistant
+// entry with nothing to show (a bare unclosed <think>).
+function toChatMessages(raw: unknown[], sessionKey: string): ChatMessage[] {
+  return raw
+    .filter((m): m is Record<string, unknown> => !!m && typeof m === 'object')
+    .filter(m => {
+      const role = m['role'] as string
+      return role === 'user' || role === 'assistant'
+    })
+    .map(m => {
+      const atts = extractAttachments(m)
+      return {
+        id: (m['id'] as string | undefined) ?? nanoid(),
+        sessionId: sessionKey,
+        role: m['role'] as 'user' | 'assistant',
+        content: extractText(m),
+        reasoning: extractReasoning(m) || undefined,
+        toolCalls: extractToolCalls(m).length ? extractToolCalls(m) : undefined,
+        attachments: atts.length ? atts : undefined,
+        model: extractModel(m),
+        createdAt: typeof m['timestamp'] === 'number'
+          ? new Date(m['timestamp']).toISOString()
+          : new Date().toISOString()
+      }
+    })
+    .filter(msg => {
+      if (msg.role !== 'assistant') return true
+      if (msg.toolCalls?.length || msg.attachments?.length || msg.reasoning) return true
+      // Keep messages that have real thinking content inside complete <think>...</think> blocks
+      const thinkContent = [...msg.content.matchAll(/<think>([\s\S]*?)<\/think>/gi)]
+        .map(m => m[1].trim()).join('')
+      if (thinkContent) return true
+      // Drop messages whose only content is a bare unclosed <think> tag (no real text, no thinking)
+      const bare = msg.content
+        .replace(/<think>[\s\S]*/gi, '')
+        .trim()
+      return bare !== ''
+    })
 }
 
 // On reload, the sub-agent "threads" (session yields) are NOT in the parent's
@@ -1141,41 +1185,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
     try {
       const history = await gatewayClient.request<{ messages: unknown[] }>('chat.history', { sessionKey })
-      const messages: ChatMessage[] = (history.messages ?? [])
-        .filter((m): m is Record<string, unknown> => !!m && typeof m === 'object')
-        .filter(m => {
-          const role = m['role'] as string
-          return role === 'user' || role === 'assistant'
-        })
-        .map(m => {
-          const atts = extractAttachments(m)
-          return {
-            id: (m['id'] as string | undefined) ?? nanoid(),
-            sessionId: sessionKey,
-            role: m['role'] as 'user' | 'assistant',
-            content: extractText(m),
-            reasoning: extractReasoning(m) || undefined,
-            toolCalls: extractToolCalls(m).length ? extractToolCalls(m) : undefined,
-            attachments: atts.length ? atts : undefined,
-            model: extractModel(m),
-            createdAt: typeof m['timestamp'] === 'number'
-              ? new Date(m['timestamp']).toISOString()
-              : new Date().toISOString()
-          }
-        })
-        .filter(msg => {
-          if (msg.role !== 'assistant') return true
-          if (msg.toolCalls?.length || msg.attachments?.length || msg.reasoning) return true
-          // Keep messages that have real thinking content inside complete <think>...</think> blocks
-          const thinkContent = [...msg.content.matchAll(/<think>([\s\S]*?)<\/think>/gi)]
-            .map(m => m[1].trim()).join('')
-          if (thinkContent) return true
-          // Drop messages whose only content is a bare unclosed <think> tag (no real text, no thinking)
-          const bare = msg.content
-            .replace(/<think>[\s\S]*/gi, '')
-            .trim()
-          return bare !== ''
-        })
+      const messages = toChatMessages(history.messages ?? [], sessionKey)
 
       // The conversation was already selected above; fill in its history and clear the
       // loading flag. Match by sessionKey so we hit it whether it was pre-existing or the
@@ -1211,7 +1221,23 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }))
       return targetId
     }
-  }
+  },
+
+  ingestSessionMessage(payload) {
+    const p = payload as { sessionKey?: unknown; message?: unknown; messageId?: unknown } | null
+    if (!p || typeof p.sessionKey !== 'string' || !p.message || typeof p.message !== 'object') return
+    const sessionKey = p.sessionKey
+    const conv = get().conversations.find(c => c.sessionKey === sessionKey)
+    const [mapped] = toChatMessages([p.message], sessionKey)
+    // The gateway's own id, so the same entry arriving twice is recognised.
+    const incoming = mapped && typeof p.messageId === 'string' ? { ...mapped, id: p.messageId } : mapped
+    const decision = decideIngest({ conversation: conv, streamAttached: !!conv && activeStreams.has(conv.id), incoming })
+    if (decision.action !== 'append' || !conv || !incoming) return
+    // Appended in place: the chat you're looking at doesn't change.
+    set(s => ({
+      conversations: s.conversations.map(c => c.id === conv.id ? { ...c, messages: [...c.messages, incoming] } : c),
+    }))
+  },
 }))
 
 // ── Gateway-restart recovery ────────────────────────────────────────────────────
@@ -1252,4 +1278,11 @@ useConnectionStore.subscribe((s, prev) => {
   if (prev.status === 'connected' && s.status !== 'connected' && s.status !== 'connecting') {
     interruptActiveStreams()
   }
+})
+
+// New transcript entries for any session: a Slack or WhatsApp message, or the agent's reply
+// there. The sessions store subscribes this connection; ingestSessionMessage decides where
+// each one goes.
+gatewayClient.on(frame => {
+  if (frame.event === 'session.message') useChatStore.getState().ingestSessionMessage(frame.payload)
 })
