@@ -141,6 +141,8 @@ export class GatewayClient {
   grantedScopes: string[] = []
   /** The gateway's version, from hello-ok (`server.version`), e.g. "2026.9.4". */
   serverVersion?: string
+  /** Increments on every successful handshake, so per-connection subscriptions can tell a reconnect happened. */
+  connectionSeq = 0
   // Multiple views observe the connection log (the connect screen and the
   // Gateway → Connection log panel), so this is a subscriber set rather than a
   // single callback — otherwise the last mounter clobbers the others.
@@ -345,6 +347,7 @@ export class GatewayClient {
     this.request<HelloOk>('connect', params as Record<string, unknown>).then((res) => {
       this.grantedScopes = Array.isArray(res?.auth?.scopes) ? res.auth!.scopes! : []
       this.features = res?.features
+      this.connectionSeq++
       const version = (res as { server?: { version?: unknown } } | undefined)?.server?.version
       this.serverVersion = typeof version === 'string' ? version : undefined
       this.policy = res?.policy

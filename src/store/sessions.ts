@@ -20,6 +20,19 @@ function saveCustomLabels(labels: Record<string, string>) {
   localStorage.setItem(CUSTOM_LABELS_KEY, JSON.stringify(labels))
 }
 
+// A one-line preview of a transcript message, for the chat list row.
+function messagePreview(message: unknown): string | undefined {
+  if (!message || typeof message !== 'object') return undefined
+  const c = (message as { content?: unknown }).content
+  const text = typeof c === 'string'
+    ? c
+    : Array.isArray(c)
+      ? c.map(b => (b && typeof b === 'object' && (b as { type?: unknown }).type === 'text' ? String((b as { text?: unknown }).text ?? '') : '')).join(' ')
+      : ''
+  const t = text.replace(/\s+/g, ' ').trim()
+  return t ? t.slice(0, 200) : undefined
+}
+
 interface SessionsState {
   sessions: Session[]
   customLabels: Record<string, string>
@@ -38,6 +51,9 @@ interface SessionsState {
   // a weaker one that arrives later.
   setDerivedName: (key: string, name: string, force?: boolean) => void
   _subscribed: boolean
+  /** The gateway connection (gatewayClient.connectionSeq) the subscription was made on. */
+  _subscribedSeq: number
+  _subscribe: () => void
   _startEventTracking: () => void
 }
 
@@ -50,15 +66,17 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
   aborting: new Set(),
   abortError: {},
   _subscribed: false,
+  _subscribedSeq: -1,
 
-  _startEventTracking() {
-    if (get()._subscribed) return
-    set({ _subscribed: true })
+  _subscribe() {
+    const seq = gatewayClient.connectionSeq
+    set({ _subscribedSeq: seq })
 
     // Subscribe AND load the first page in one request. The gateway registers the
     // subscription before projecting the list, so events can arrive while the snapshot
-    // is being built — which is why the listener below is attached first and the result
-    // is merged rather than assigned.
+    // is being built. That is why the result is merged rather than assigned. The event
+    // listener is attached in _startEventTracking, in the same tick as this request, so
+    // no event can arrive before it.
     gatewayClient
       .request<{ subscribed?: boolean; list?: { sessions?: Session[] } }>('sessions.subscribe', {
         limit: 60,
@@ -78,7 +96,20 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
           return extra.length ? { sessions: [...s.sessions, ...extra] } : {}
         })
       })
-      .catch(() => {})
+      .catch(() => {
+        // Not connected yet, or the request failed: try again on the next fetch.
+        if (get()._subscribedSeq === seq) set({ _subscribedSeq: -1 })
+      })
+  },
+
+  _startEventTracking() {
+    // The gateway keeps this subscription per CONNECTION, so it has to be renewed after
+    // every reconnect (sleep, a network blip, a gateway restart). It used to be sent once
+    // per app run, so after the first reconnect sessions.changed and session.message
+    // stopped arriving, and channel conversations only showed up after a reload.
+    if (get()._subscribedSeq !== gatewayClient.connectionSeq) get()._subscribe()
+    if (get()._subscribed) return
+    set({ _subscribed: true })
 
     gatewayClient.on((frame) => {
       // sessions.changed: update if known, add if new (e.g. created by an agent skill)
@@ -94,6 +125,21 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
           // Session created externally — add it so it appears in the UI
           return { sessions: [{ ...p, key } as Session, ...s.sessions] }
         })
+        return
+      }
+
+      // A new transcript entry (a Slack or WhatsApp message, the agent's reply there).
+      // Bump the row so the list shows the conversation moved, and add the session if
+      // this is its first message, e.g. a new DM.
+      if (frame.event === 'session.message') {
+        const p = frame.payload as { sessionKey?: string; message?: unknown } | undefined
+        const key = p?.sessionKey
+        if (!key) return
+        const preview = messagePreview(p?.message)
+        const patch: Partial<Session> = { updatedAt: Date.now(), ...(preview ? { lastMessage: preview } : {}) }
+        set(s => s.sessions.some(x => x.key === key)
+          ? { sessions: s.sessions.map(x => x.key === key ? { ...x, ...patch } : x) }
+          : { sessions: [{ key, ...patch } as Session, ...s.sessions] })
         return
       }
 
