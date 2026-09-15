@@ -7,6 +7,8 @@ import { agentIdFromSessionKey as agentIdFromKey } from '../lib/sessionName'
 import { hasProduced } from '../lib/streamStatus'
 import { reconcileStreams } from '../lib/stuckStream'
 import { useSessionsStore } from './sessions'
+import { useGatewayModelsStore } from './gatewayModels'
+import { effectiveModelRef, findGatewayModel, supportedThinkingLevels } from '../lib/gatewayModels'
 import { isSessionRunning } from '../lib/sessionRunning'
 import { useExtensionsStore } from './extensions'
 import { useConnectionStore } from './connection'
@@ -663,6 +665,21 @@ function attachRunning(messages: ChatMessage[], running: SubThread[], sessionKey
   })]
 }
 
+// A level the chat's model doesn't accept fails the whole turn at the gateway ("Thinking
+// level … is not supported"). One picked for another model before switching is left out,
+// so the model's own default applies. When support is unknown (older gateway, list not
+// loaded yet) the level is sent as before.
+function thinkingForSend(conv: Conversation): string | undefined {
+  const level = conv.thinkingLevel
+  if (!level || level === 'adaptive') return undefined
+  const session = useSessionsStore.getState().sessions.find(s => s.key === conv.sessionKey)
+  const { ref, fallbackProvider } = effectiveModelRef({
+    modelOverride: conv.modelOverride, sessionModel: session?.model, sessionProvider: session?.modelProvider,
+  })
+  const supported = supportedThinkingLevels(findGatewayModel(useGatewayModelsStore.getState().models, ref, fallbackProvider))
+  return supported && !supported.has(level) ? undefined : level
+}
+
 export const useChatStore = create<ChatState>((set, get) => ({
   conversations: [],
   activeConvId: null,
@@ -711,6 +728,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set(s => ({
       conversations: s.conversations.map(c => c.id === convId ? { ...c, thinkingLevel: value } : c)
     }))
+    // The gateway saves a level sent with a message on the session, so going back to
+    // Adaptive (sending nothing) would leave the old level in force. Clear it there too.
+    const key = get().conversations.find(c => c.id === convId)?.sessionKey
+    if (!value && key) void gatewayClient.request('sessions.patch', { key, thinkingLevel: null }).catch(() => {})
   },
 
   deleteConversation(id) {
@@ -1065,10 +1086,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
         // from events. Only a genuine send failure surfaces here, and only if the stream
         // hasn't already moved on. A fresh idempotencyKey per attempt so a retry isn't
         // deduped as the (failed) original send.
+        const thinking = thinkingForSend(conv)
         gatewayClient.request('chat.send', {
           sessionKey: key,
           message: sentText,
-          ...(conv.thinkingLevel ? { thinking: conv.thinkingLevel } : {}),
+          ...(thinking ? { thinking } : {}),
           ...(attachments?.length ? {
             attachments: attachments.map(a => ({
               type: a.type,

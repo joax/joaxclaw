@@ -526,6 +526,9 @@ export function ChatView({ solo }: { solo?: string } = {}) {
                   <ThinkingSelect
                     value={activeConv.thinkingLevel}
                     onChange={level => setThinkingLevel(activeConv.id, level)}
+                    sessionKey={activeConv.sessionKey || undefined}
+                    modelOverride={activeConv.modelOverride || undefined}
+                    agentDefault={agents.find(a => a.id === activeConv.agentId)?.model?.primary}
                   />
                 </div>
               </div>
@@ -564,6 +567,9 @@ export function ChatView({ solo }: { solo?: string } = {}) {
                 <ThinkingSelect
                   value={activeConv.thinkingLevel}
                   onChange={level => setThinkingLevel(activeConv.id, level)}
+                  sessionKey={activeConv.sessionKey || undefined}
+                  modelOverride={activeConv.modelOverride || undefined}
+                  agentDefault={agents.find(a => a.id === activeConv.agentId)?.model?.primary}
                 />
               </div>
 

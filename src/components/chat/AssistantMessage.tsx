@@ -28,6 +28,8 @@ import { parseJobId } from '../../lib/scriptJobs'
 import { ArtifactStrip } from './ArtifactStrip'
 import { extractArtifacts } from '../../lib/artifacts'
 import { extractTextToolAttempts, summarizeAttempt, type TextToolAttempt } from '../../lib/textToolCalls'
+import { ToolSearchHint } from './ToolSearchHint'
+import { useSessionsStore } from '../../store/sessions'
 import {
   toolResultView, resultFields, argSummary, commandSummary, commandLineCount, tryPrettyJson,
   type ResultField,
@@ -94,7 +96,7 @@ function EditBlock({ content }: { content: string }) {
 // was confusing, and the old action pill (lightning icon, accent colour) implied it had
 // run. See lib/textToolCalls.ts for where the tags come from.
 
-function TextToolNotice({ attempts }: { attempts: TextToolAttempt[] }) {
+function TextToolNotice({ attempts, modelRef, fallbackProvider }: { attempts: TextToolAttempt[]; modelRef?: string; fallbackProvider?: string }) {
   const [open, setOpen] = useState<Set<number>>(new Set())
   if (attempts.length === 0) return null
   const toggle = (i: number) => setOpen(s => { const n = new Set(s); n.has(i) ? n.delete(i) : n.add(i); return n })
@@ -112,6 +114,8 @@ function TextToolNotice({ attempts }: { attempts: TextToolAttempt[] }) {
           </div>
         </div>
       </div>
+      {/* The usual cause for a local model, and its one-setting fix. */}
+      <ToolSearchHint modelRef={modelRef} fallbackProvider={fallbackProvider} />
       <div className="flex flex-col" style={{ borderTop: '1px solid var(--border)' }}>
         {attempts.map((a, i) => {
           const isOpen = open.has(i)
@@ -234,6 +238,8 @@ interface Props { message: ChatMessage; showTools?: boolean; showReasoning?: boo
 
 export function AssistantMessage({ message, showTools = true, showReasoning = true, convId, isLast = false }: Props) {
   const sessionKey = useChatStore(s => s.conversations.find(c => c.id === convId)?.sessionKey || undefined)
+  // The session's provider, for a message whose model is a bare id (e.g. `qwen3.6:35b`).
+  const session = useSessionsStore(s => (sessionKey ? s.sessions.find(x => x.key === sessionKey) : undefined))
   const stripped = stripProtocolTags(message.content)
   const { attempts: textAttempts, text: noActions } = extractTextToolAttempts(stripped)
   const { thinking: inlineThinking, text: afterThink } = extractThinkTags(noActions)
@@ -393,7 +399,7 @@ export function AssistantMessage({ message, showTools = true, showReasoning = tr
                   {/* Full advanced view for this message — the header toggles are disabled
                       in Basic mode, so Details is not gated by them. */}
                   {hasReasoning && <ReasoningBlock text={allReasoning} streaming={false} answerStarted durationMs={message.reasoningDurationMs} />}
-                  {textAttempts.length > 0 && <TextToolNotice attempts={textAttempts} />}
+                  {textAttempts.length > 0 && <TextToolNotice attempts={textAttempts} modelRef={message.model || session?.model} fallbackProvider={session?.modelProvider} />}
                   {hasThreads && <ThreadsBlock threads={threads} />}
                   {hasTools && <ToolCallsBlock calls={visibleToolCalls} />}
                 </div>
@@ -449,7 +455,7 @@ export function AssistantMessage({ message, showTools = true, showReasoning = tr
 
         {/* Actions the model wrote as text — never executed */}
         {textAttempts.length > 0 && (
-          <TextToolNotice attempts={textAttempts} />
+          <TextToolNotice attempts={textAttempts} modelRef={message.model || session?.model} fallbackProvider={session?.modelProvider} />
         )}
 
         {/* Tool calls */}
