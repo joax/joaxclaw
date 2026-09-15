@@ -139,6 +139,8 @@ export class GatewayClient {
   // `auth.scopes`). Empty until the handshake completes. Used to gate admin-only UI
   // (e.g. device management) client-side; the gateway still enforces authorization.
   grantedScopes: string[] = []
+  /** The gateway's version, from hello-ok (`server.version`), e.g. "2026.9.4". */
+  serverVersion?: string
   // Multiple views observe the connection log (the connect screen and the
   // Gateway → Connection log panel), so this is a subscriber set rather than a
   // single callback — otherwise the last mounter clobbers the others.
@@ -343,6 +345,8 @@ export class GatewayClient {
     this.request<HelloOk>('connect', params as Record<string, unknown>).then((res) => {
       this.grantedScopes = Array.isArray(res?.auth?.scopes) ? res.auth!.scopes! : []
       this.features = res?.features
+      const version = (res as { server?: { version?: unknown } } | undefined)?.server?.version
+      this.serverVersion = typeof version === 'string' ? version : undefined
       this.policy = res?.policy
       const advertised = res?.features?.methods?.length ?? 0
       if (advertised) this._addLog('info', `Gateway advertises ${advertised} methods${res?.policy?.attachments?.maxBytes ? `, attachments up to ${Math.round(res.policy.attachments.maxBytes / 1048576)}MB` : ''}.`)

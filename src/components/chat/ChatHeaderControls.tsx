@@ -5,6 +5,9 @@ import { useModelsStore } from '../../store/models'
 import { loadedModelIds } from '../../lib/ollama'
 import { useMetricsStore } from '../../store/metrics'
 import { THINKING_LEVELS, type ThinkingLevel } from '../../lib/types'
+import { useSessionsStore } from '../../store/sessions'
+import { useGatewayModelsStore } from '../../store/gatewayModels'
+import { effectiveModelRef, findGatewayModel, supportedThinkingLevels } from '../../lib/gatewayModels'
 
 // ── Shared popover button shell ───────────────────────────────────────────────
 
@@ -133,9 +136,13 @@ export function ModelSelect({ value, agentDefault, onChange }: {
 
 // ── Thinking-level select ─────────────────────────────────────────────────────
 
-export function ThinkingSelect({ value, onChange }: {
+export function ThinkingSelect({ value, onChange, sessionKey, modelOverride, agentDefault }: {
   value?: ThinkingLevel
   onChange: (level: ThinkingLevel) => void
+  /** The chat's session, model override and agent default, to work out which model it runs on. */
+  sessionKey?: string
+  modelOverride?: string
+  agentDefault?: string
 }) {
   const [open, setOpen] = useState(false)
   const ref = useClickOutside(() => setOpen(false))
@@ -143,12 +150,28 @@ export function ThinkingSelect({ value, onChange }: {
   const currentLabel = THINKING_LEVELS.find(l => l.value === current)?.label ?? 'Adaptive'
   const overridden = current !== 'adaptive'
 
+  // Offer only the levels the chat's model accepts. An Ollama model takes Off to Max but
+  // not Minimal or Extra High, and a level it doesn't take fails the whole message. When
+  // support is unknown (older gateway, list not loaded yet) every level is offered.
+  const session = useSessionsStore(s => (sessionKey ? s.sessions.find(x => x.key === sessionKey) : undefined))
+  const models = useGatewayModelsStore(s => s.models)
+  useEffect(() => { useGatewayModelsStore.getState().ensure() }, [])
+  const { ref: modelRef, fallbackProvider } = effectiveModelRef({
+    modelOverride, sessionModel: session?.model, sessionProvider: session?.modelProvider, agentDefault,
+  })
+  const supported = supportedThinkingLevels(findGatewayModel(models, modelRef, fallbackProvider))
+  const accepts = (level: ThinkingLevel) => level === 'adaptive' || !supported || supported.has(level)
+  const levels = THINKING_LEVELS.filter(l => accepts(l.value) || l.value === current)
+  const unsupported = !accepts(current)
+
   return (
     <div ref={ref} style={{ position: 'relative' }}>
       <button
         onClick={() => setOpen(o => !o)}
-        title={`Thinking level for this chat: ${currentLabel}`}
-        style={{ ...triggerStyle, color: overridden ? 'var(--accent)' : 'var(--text-secondary)' }}
+        title={unsupported
+          ? `${currentLabel} isn't available for this chat's model, so its default level is used`
+          : `Thinking level for this chat: ${currentLabel}`}
+        style={{ ...triggerStyle, color: unsupported ? 'var(--warning)' : overridden ? 'var(--accent)' : 'var(--text-secondary)' }}
       >
         <Brain size={11} style={{ flexShrink: 0 }} />
         <span>{currentLabel}</span>
@@ -157,9 +180,10 @@ export function ThinkingSelect({ value, onChange }: {
 
       {open && (
         <div style={{ ...menuStyle, minWidth: 150 }}>
-          {THINKING_LEVELS.map(l => (
+          {levels.map(l => (
             <MenuRow key={l.value} selected={l.value === current} onClick={() => { onChange(l.value); setOpen(false) }}>
               <span style={{ flex: 1 }}>{l.label}</span>
+              {!accepts(l.value) && <span style={{ fontSize: 10, color: 'var(--warning)' }}>not for this model</span>}
             </MenuRow>
           ))}
         </div>
