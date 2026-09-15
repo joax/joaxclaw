@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Plus, RefreshCw, X, Play, Square, LogOut, Trash2, Pencil, QrCode,
-  CheckCircle2, AlertCircle, Bot, Search, ExternalLink, Loader2, Star, Users,
+  CheckCircle2, AlertCircle, Bot, Search, ExternalLink, Loader2, Star, Users, Copy, Check,
 } from 'lucide-react'
 import { Btn } from '../ui/Btn'
 import { Input, Textarea } from '../ui/Input'
@@ -11,8 +11,12 @@ import { gatewayClient } from '../../lib/gateway'
 import {
   CHANNELS, channelDef, isQrChannel, isSecretRef, fieldLiteral,
   scopesForChannel, buildMatch, bindingScopeLabel, bindingKey,
-  type ChannelConfig, type ChannelDef, type BindingScopeKind,
+  initialMode, fieldsForMode, buildCredentialSettings, pluginInstallState, pluginInstallCommand,
+  type ChannelConfig, type ChannelDef, type ChannelMode, type BindingScopeKind, type PluginInstallState,
 } from '../../lib/channels'
+import { usePluginCatalogStore } from '../../store/pluginCatalog'
+import type { PluginSearchPackage } from '../../lib/pluginCatalog'
+import { ConsentDialog } from '../extensions/PluginBrowser'
 import { channelPolicySpec } from '../../lib/channelPolicy'
 import { ChannelPolicyEditor } from './ChannelPolicyEditor'
 
@@ -453,7 +457,7 @@ function CatalogPicker({ configuredIds, onPick, onClose }: { configuredIds: stri
                     <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{c.label}</span>
                     {already && <span className="text-xs px-1 rounded" style={{ color: 'var(--success)', background: 'color-mix(in srgb, var(--success) 14%, transparent)' }}>configured</span>}
                     {c.setup === 'qr' && <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>QR</span>}
-                    {c.needsPlugin && <span className="text-xs" style={{ color: 'var(--warning)' }}>plugin</span>}
+                    {c.plugin && <span className="text-xs" style={{ color: 'var(--text-secondary)' }} title="Runs as a gateway plugin">plugin</span>}
                   </span>
                   <span className="block text-xs mt-0.5" style={{ color: 'var(--text-secondary)', lineHeight: 1.4 }}>{c.blurb}</span>
                 </span>
@@ -488,6 +492,8 @@ function ChannelCredentialForm({ def, existing, onBack, onClose, onSubmit }: {
     return init
   })
   const [reveal, setReveal] = useState<Record<string, boolean>>({})
+  // Connection mode, for channels that have more than one (Slack: Socket Mode or HTTP).
+  const [mode, setMode] = useState<string | undefined>(() => initialMode(def, raw))
 
   // Raw JSON editor (advanced channels, or "Advanced" toggle).
   const [showRaw, setShowRaw] = useState(!curated)
@@ -507,14 +513,10 @@ function ChannelCredentialForm({ def, existing, onBack, onClose, onSubmit }: {
     let settings: Record<string, unknown> = {}
 
     if (curated && !showRaw) {
-      for (const f of def.fields) {
-        const v = values[f.key]?.trim() ?? ''
-        // Preserve a SecretRef the user didn't touch; otherwise write the literal.
-        if (isSecretRef(raw[f.key]) && v === '') { settings[f.key] = raw[f.key]; continue }
-        if (v !== '') settings[f.key] = v
-      }
-      const missing = def.fields.find(f => f.required && !settings[f.key])
-      if (missing) { setErr(`${missing.label} is required.`); return }
+      // Only the chosen mode's fields are saved and required (see buildCredentialSettings).
+      const built = buildCredentialSettings(def, mode, values, raw)
+      if ('error' in built) { setErr(built.error); return }
+      settings = built.settings
     } else {
       try {
         const parsed = rawText.trim() ? JSON.parse(rawText) : {}
@@ -535,6 +537,7 @@ function ChannelCredentialForm({ def, existing, onBack, onClose, onSubmit }: {
   }
 
   return (
+    <>
     <Overlay onClose={onClose} title={`${existing ? 'Edit' : 'Add'} ${def.label}`} width={520} headerColor={def.color}>
       {hasPolicy && (
         <div className="flex gap-1 px-5 pt-3" style={{ borderBottom: '1px solid var(--border)' }}>
@@ -563,12 +566,7 @@ function ChannelCredentialForm({ def, existing, onBack, onClose, onSubmit }: {
       ) : (
       <div className="overflow-y-auto px-5 py-4 space-y-3" style={{ maxHeight: '60vh' }}>
         <p className="text-xs" style={{ color: 'var(--text-secondary)', lineHeight: 1.5 }}>{def.blurb}</p>
-        {def.needsPlugin && (
-          <div className="flex items-start gap-2 px-2.5 py-2 rounded text-xs" style={{ background: 'color-mix(in srgb, var(--warning) 8%, transparent)', border: '1px solid color-mix(in srgb, var(--warning) 30%, transparent)', color: 'var(--text-secondary)' }}>
-            <AlertCircle size={13} style={{ color: 'var(--warning)', flexShrink: 0, marginTop: 1 }} />
-            <span>This channel needs its plugin installed: <code>openclaw plugins install {def.id}</code></span>
-          </div>
-        )}
+        {def.plugin && <ChannelPluginSetup def={def} />}
 
         {isQrChannel(def.id) && (
           <div className="px-2.5 py-2 rounded text-xs" style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
@@ -576,7 +574,11 @@ function ChannelCredentialForm({ def, existing, onBack, onClose, onSubmit }: {
           </div>
         )}
 
-        {curated && !showRaw && def.fields.map(f => {
+        {curated && !showRaw && def.modes && (
+          <ModePicker modes={def.modes} value={mode} onChange={setMode} />
+        )}
+
+        {curated && !showRaw && fieldsForMode(def, mode).map(f => {
           const isRef = isSecretRef(raw[f.key])
           return (
             <div key={f.key}>
@@ -643,6 +645,158 @@ function ChannelCredentialForm({ def, existing, onBack, onClose, onSubmit }: {
         )}
       </div>
     </Overlay>
+    {/* Outside the Overlay: its panel is transformed, which would trap a fixed dialog inside it. */}
+    {def.plugin && <ConsentDialog />}
+    </>
+  )
+}
+
+// ── Connection mode (Slack: Socket Mode or HTTP) ─────────────────────────────
+
+function ModePicker({ modes, value, onChange }: { modes: ChannelMode[]; value?: string; onChange: (id: string) => void }) {
+  const current = modes.find(m => m.id === value) ?? modes[0]
+  return (
+    <div>
+      <label className="block text-xs mb-1" style={{ color: 'var(--text-secondary)' }}>Connection</label>
+      <div className="flex gap-1.5 flex-wrap" role="radiogroup" aria-label="Connection mode">
+        {modes.map(m => {
+          const on = m.id === current.id
+          return (
+            <button
+              key={m.id}
+              role="radio"
+              aria-checked={on}
+              onClick={() => onChange(m.id)}
+              className="text-xs px-2.5 py-1 rounded"
+              style={{
+                cursor: 'pointer',
+                border: `1px solid ${on ? 'var(--accent)' : 'var(--border)'}`,
+                background: on ? 'color-mix(in srgb, var(--accent) 14%, transparent)' : 'transparent',
+                color: on ? 'var(--text-primary)' : 'var(--text-secondary)',
+              }}
+            >
+              {m.label}
+            </button>
+          )
+        })}
+      </div>
+      <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)', opacity: 0.75, lineHeight: 1.5 }}>{current.help}</p>
+    </div>
+  )
+}
+
+// ── Channel plugin check ─────────────────────────────────────────────────────
+// On OpenClaw 2026.9 almost every channel is its own plugin. Without it the gateway
+// takes the channel's keys and does nothing with them, which is how adding Slack failed:
+// the keys were saved and nothing ever connected. So the form checks plugins.list, and
+// when the plugin is missing it offers a one-click install (official plugins, admin
+// connections) or shows the command to run on the gateway host.
+
+function ChannelPluginSetup({ def }: { def: ChannelDef }) {
+  const plugin = def.plugin!
+  const [state, setState] = useState<PluginInstallState | 'checking' | 'unknown'>('checking')
+  const [attempted, setAttempted] = useState(false)
+  const [copied, setCopied] = useState(false)
+  const busy = usePluginCatalogStore(s => s.busy)
+  const error = usePluginCatalogStore(s => s.error)
+  const installedNow = usePluginCatalogStore(s => s.justInstalled.includes(plugin.id))
+  const install = usePluginCatalogStore(s => s.install)
+
+  useEffect(() => {
+    let alive = true
+    gatewayClient.request<unknown>('plugins.list', {})
+      .then(res => { if (alive) setState(pluginInstallState(res, plugin)) })
+      .catch(() => { if (alive) setState('unknown') })
+    return () => { alive = false }
+  }, [plugin])
+
+  const tone = (c: 'warning' | 'success') => ({
+    background: `color-mix(in srgb, var(--${c}) 8%, transparent)`,
+    border: `1px solid color-mix(in srgb, var(--${c}) 30%, transparent)`,
+    color: 'var(--text-secondary)', lineHeight: 1.5,
+  })
+
+  if (installedNow) {
+    return (
+      <div className="flex items-start gap-2 px-2.5 py-2 rounded text-xs" style={tone('success')}>
+        <CheckCircle2 size={13} style={{ color: 'var(--success)', flexShrink: 0, marginTop: 1 }} />
+        <span>
+          <b style={{ color: 'var(--text-primary)' }}>{def.label} plugin installed.</b> Restart the gateway to load it
+          (Gateway tab → Restart). You can save your keys now; {def.label} connects after the restart.
+        </span>
+      </div>
+    )
+  }
+  if (state === 'checking' || state === 'installed') return null
+  if (state === 'disabled') {
+    return (
+      <div className="flex items-start gap-2 px-2.5 py-2 rounded text-xs" style={tone('warning')}>
+        <AlertCircle size={13} style={{ color: 'var(--warning)', flexShrink: 0, marginTop: 1 }} />
+        <span>
+          The {def.label} plugin is installed but switched off. Turn it on under <b>Extensions → Plugins</b>;
+          until then the gateway won't use these keys.
+        </span>
+      </div>
+    )
+  }
+
+  const command = pluginInstallCommand(plugin)
+  const canInstall = plugin.official && gatewayClient.grantedScopes.includes('operator.admin')
+  // Official plugins install by runtime id; installParamsFor turns this into
+  // { source: 'official', pluginId }.
+  const pkg: PluginSearchPackage = {
+    name: plugin.spec ?? plugin.id, displayName: def.label, family: 'code-plugin',
+    channel: 'official', isOfficial: true, runtimeId: plugin.id,
+  }
+  const copy = () => {
+    if (!command) return
+    void navigator.clipboard?.writeText(command)
+      .then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500) })
+      .catch(() => {})
+  }
+
+  return (
+    <div className="flex flex-col gap-2 px-2.5 py-2 rounded text-xs" style={tone('warning')}>
+      <div className="flex items-start gap-2">
+        <AlertCircle size={13} style={{ color: 'var(--warning)', flexShrink: 0, marginTop: 1 }} />
+        <span>
+          {state === 'missing' ? (
+            <><b style={{ color: 'var(--text-primary)' }}>The {def.label} plugin isn't installed on your gateway.</b> Install
+              it first: without it the gateway has nothing to use these keys with.</>
+          ) : (
+            <>On OpenClaw 2026.9 and later, {def.label} runs as a plugin. If it isn't installed on your gateway yet,
+              install it first.</>
+          )}
+        </span>
+      </div>
+      <div className="flex items-center gap-2 flex-wrap">
+        {canInstall && (
+          <Btn size="sm" loading={busy === pkg.name} onClick={() => { setAttempted(true); void install(pkg) }}>
+            Install {def.label} plugin
+          </Btn>
+        )}
+        {command ? (
+          <span className="flex items-center gap-1.5 min-w-0 flex-wrap">
+            {canInstall && <span>or run on the gateway host:</span>}
+            <code className="px-1.5 py-0.5 rounded font-mono" style={{ background: 'var(--bg-elevated)', color: 'var(--text-primary)', wordBreak: 'break-all' }}>
+              {command}
+            </code>
+            <button
+              onClick={copy}
+              title="Copy the command"
+              style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent)', padding: 0, display: 'inline-flex' }}
+            >
+              {copied ? <Check size={12} /> : <Copy size={12} />}
+            </button>
+          </span>
+        ) : (
+          <a href={`${DOCS_BASE}/${def.docs ?? def.id}`} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>
+            How to install it
+          </a>
+        )}
+      </div>
+      {attempted && error && busy === null && <span style={{ color: 'var(--danger)' }}>{error}</span>}
+    </div>
   )
 }
 
