@@ -1379,11 +1379,13 @@ export default definePluginEntry({
           } : undefined
           const job = startJob(command, cwd, { sessionKey, onExit })
           if (job.done && job.error) return toolText(`Could not start script: ${job.error}`)
+          // The same instruction whether or not a wake was attempted: the attempt above only
+          // fires for gateway-bundled plugins, so the agent must never be told it will be
+          // woken. Reminders use the same scheduler, so they're no fallback either.
           return toolText(
             `Script started in the background.\njobId: ${job.id}\n` +
-            (notify
-              ? `When it finishes I'll automatically wake this session with the result — don't poll or wait, just continue or end your turn.`
-              : `Don't block waiting — call script_status with this jobId to check on it, or set a reminder to come back.`),
+            `Nothing reports back on its own: call script_status with this jobId to check progress and get the result once it finishes. ` +
+            `If it will run longer than this turn, give the user the jobId so they can follow it and ask you for the result.`,
           )
         },
       }))
