@@ -245,6 +245,10 @@ export const usePluginCatalogStore = create<PluginCatalogState>((set, get) => {
       if (token !== runToken) return
       // The gateway went down before it answered: that IS the restart. Keep waiting.
       if (classifyInstallError(structured(e), errText(e)).kind === 'dropped') return
+      // Installing a plugin changes its source in the config, and the gateway restarts for
+      // that on its own; a restart request that lands in that drain is refused with
+      // reason "gateway-restarting". That is the restart happening, not a failure.
+      if ((structured(e) as { details?: { reason?: unknown } } | null)?.details?.reason === 'gateway-restarting') return
       stopRestartWait()
       useConnectionStore.getState().clearRestartExpectation()
       fail('restart', errText(e))
