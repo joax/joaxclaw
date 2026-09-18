@@ -3,7 +3,7 @@ import { nanoid } from '../lib/nanoid'
 import { gatewayClient } from '../lib/gateway'
 import type { Session } from '../lib/types'
 import {
-  actionRunsTurn, buildClearParams, buildUpdateParams, classifyGoalError, goalErrorMessage, parseGoal,
+  actionRunsTurn, buildClearParams, buildUpdateParams, classifyGoalError, goalErrorMessage, goalErrorPolicy, parseGoal,
   shouldApplyGoal, validateObjective, type GoalAction, type GoalErrorClass, type SessionGoal,
 } from '../lib/goals'
 import { useSessionsStore } from './sessions'
@@ -130,19 +130,15 @@ export const useGoalsStore = create<GoalsState>((set, get) => {
       return true
     } catch (err) {
       const cls = classifyGoalError(err)
-      if (cls === 'admitting' && !retried.admitting) {
+      const policy = goalErrorPolicy(cls, retried)
+      if (policy.next === 'resend') {
         // The gateway is still admitting this exact request; the same one again resolves it.
         await new Promise(r => setTimeout(r, RETRY_ADMITTING_MS))
         return run(convId, op, { ...retried, admitting: true })
       }
-      if (cls === 'conflict' && !retried.conflict) {
-        // The id was already used for a different request (e.g. an edited draft): this
-        // is a new intent, so it gets a new id.
-        return run(convId, reissue(op), { ...retried, conflict: true })
-      }
-      if (cls === 'rebound') void refreshGoalRows()
-      // Resend-as-is only makes sense when the gateway may not have seen it, or said to retry.
-      const retryable = cls === 'network' || cls === 'generic' || cls === 'admitting'
+      if (policy.next === 'reissue') return run(convId, reissue(op), { ...retried, conflict: true })
+      if (policy.refresh) void refreshGoalRows()
+      const retryable = policy.retryable
       finish(convId, { cls, message: goalErrorMessage(err), retryable }, retryable ? op : undefined)
       return false
     }
