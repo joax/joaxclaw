@@ -7,6 +7,7 @@ import { useChatStore } from './chat'
 import { agentIdFromSessionKey } from '../lib/sessionName'
 import {
   parseTask, parseTaskList, mergeTask, isActive, addHidden, readGatewayError, isTaskGone, isStaleCursor,
+  cancelMessage, recoveryMessage,
   ACTIVE_STATUSES, FINISHED_STATUSES, type TaskSummary, type BackgroundItem,
 } from '../lib/tasks'
 
@@ -229,7 +230,8 @@ export const useTasksStore = create<TasksState>((set, get) => {
       const r = res?.results?.[0]
       const t = parseTask(r?.task)
       if (t) merge([t])
-      if (!r?.ok) fail(key, `Couldn't ${verb}: ${r?.reason ?? 'the gateway gave no reason.'}`)
+      const msg = recoveryMessage(verb, r)
+      if (msg) fail(key, msg)
     } catch (e) {
       fail(key, `Couldn't ${verb}: ${readGatewayError(e).message}`)
     } finally {
@@ -377,9 +379,8 @@ export const useTasksStore = create<TasksState>((set, get) => {
           'tasks.cancel', { taskId: item.id }, 0)
         const t = parseTask(res?.task)
         if (t) merge([t])
-        if (!res?.cancelled) {
-          fail(item.key, `Couldn't stop it: ${res?.reason ?? (res?.found === false ? 'Task not found.' : 'the gateway gave no reason.')}`)
-        }
+        const msg = cancelMessage(res)
+        if (msg) fail(item.key, msg)
       } catch (e) {
         fail(item.key, `Couldn't stop it: ${readGatewayError(e).message}`)
       } finally {
