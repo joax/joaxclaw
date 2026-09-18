@@ -39,7 +39,9 @@ export const useOllamaProgress = create<OllamaProgressState>((set, get) => ({
     const api = ollamaApi()
     if (!api) return  // not running under Electron (e.g. plain browser dev)
     set({ _started: true })
-    api.watch().catch(() => {})
+    // Wrapped: a platform shim that returns nothing mustn't throw here (this runs from a
+    // render effect, so a throw unmounts the whole app).
+    Promise.resolve(api.watch()).catch(() => {})
     api.onProgress(p => {
       const prev = get()._timer
       if (prev) clearTimeout(prev)
