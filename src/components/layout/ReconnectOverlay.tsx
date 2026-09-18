@@ -33,7 +33,7 @@ export function ReconnectOverlay() {
           />
         </div>
 
-        <h2 className="text-lg font-semibold mb-1.5" style={{ color: 'var(--text-primary)' }}>
+        <h2 aria-live="assertive" className="text-lg font-semibold mb-1.5" style={{ color: 'var(--text-primary)' }}>
           {expected ? expected.reason : 'Reconnecting to gateway…'}
         </h2>
 
