@@ -224,6 +224,10 @@ export function refusalCopy(refusal: Refusal): RefusalCopy {
     case 'invalid-update-target':
     case 'unsupported-update-target':
       return { text: "The gateway can't install the version it was asked for. Run this on the gateway host instead:", action: 'command', command: 'openclaw update' }
+    // A package install whose package manager the gateway couldn't detect (seen live on an
+    // isolated 2026.9.3 gateway; update-command-result's hint says to update it by hand).
+    case 'not-git-install':
+      return { text: "The gateway couldn't tell how OpenClaw was installed, so it can't update itself. Update it with your package manager on the gateway host, for example:", action: 'command', command: 'npm i -g openclaw@latest && openclaw gateway restart' }
     case 'update-target-upstream-mismatch':
       return { text: 'The version it was asked for comes from a different branch than the gateway follows.', action: 'viaAgent' }
     case 'rate-limited':
@@ -443,7 +447,9 @@ export function phaseProgress(run: Pick<UpdateRun, 'phase' | 'status'> & { steps
   // A rollback marks the phase it was in "completed" (finishUpdateRunRecord), so a run that
   // didn't succeed may show no failed phase at all. The last phase it reached is where it
   // stopped.
-  if (terminal && !succeeded && !phases.some(p => p.mark === 'failed')) {
+  // Only for a run that failed or rolled back: a refused (skipped) run stopped without
+  // anything failing, and its skipped step must not read as a failure in History.
+  if ((run.status === 'failed' || run.status === 'rolled-back') && !phases.some(p => p.mark === 'failed')) {
     const last = phases.map((p, i) => (p.mark === 'done' && stepOf(p.id) ? i : -1)).filter(i => i >= 0).pop()
     if (last !== undefined) phases[last] = { ...phases[last], mark: 'failed' }
   }
