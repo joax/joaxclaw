@@ -580,6 +580,9 @@ export interface BannerInputs {
   skipped: string | null
   /** The key of the banner state the user dismissed this session. */
   dismissedKey: string | null
+  /** The automatic-update schedule, for the campaign states. */
+  schedule?: UpdateSchedule | null
+  now?: number
 }
 
 export type BannerState =
@@ -588,6 +591,7 @@ export type BannerState =
   | ({ kind: 'running'; key: string } & RunningInput)
   | { kind: 'refused'; key: string; refusal: Refusal }
   | { kind: 'result'; key: string; outcome: Outcome }
+  | { kind: 'campaign'; key: string; countdown: CampaignCountdown; target?: string; campaignId: string; holdUsed: boolean }
 
 /**
  * The one banner state to show. Precedence: running > refused > result > available.
@@ -597,6 +601,12 @@ export type BannerState =
  */
 export function bannerState(i: BannerInputs): BannerState {
   if (i.running) return { kind: 'running', key: 'running', ...i.running }
+  // An automatic update being applied is the same disconnect as ours, for every
+  // connection: non-admin ones just get no phase detail.
+  if (i.schedule?.campaign?.state === 'applying') {
+    const target = i.schedule.targetVersion ?? i.available?.latestVersion
+    return { kind: 'running', key: 'running', own: false, ...(target ? { target } : {}) }
+  }
   const s = pickBannerState(i)
   return s.kind !== 'hidden' && s.key === i.dismissedKey ? { kind: 'hidden' } : s
 }
@@ -614,6 +624,13 @@ export function availableKey(latestVersion: string): string {
 function pickBannerState(i: BannerInputs): BannerState {
   if (i.refusal) return { kind: 'refused', key: `refused:${i.refusal.reason}`, refusal: i.refusal }
   if (i.outcome) return { kind: 'result', key: outcomeKey(i.outcome), outcome: i.outcome }
+  const c = i.schedule?.campaign
+  const countdown = campaignCountdown(i.schedule ?? null, i.now ?? Date.now())
+  if (c && countdown) {
+    // Keyed by campaign, so a dismiss holds through its countdown → waiting → held changes.
+    const target = i.schedule?.targetVersion ?? i.available?.latestVersion
+    return { kind: 'campaign', key: `campaign:${c.id}`, countdown, campaignId: c.id, holdUsed: c.holdUntilMs !== undefined, ...(target ? { target } : {}) }
+  }
   if (i.available && i.skipped !== i.available.latestVersion) {
     return { kind: 'available', key: availableKey(i.available.latestVersion), available: i.available }
   }
@@ -627,11 +644,165 @@ function pickBannerState(i: BannerInputs): BannerState {
 export function bannerTone(s: BannerState): StateTone {
   switch (s.kind) {
     case 'refused': return 'failed'
+    case 'campaign': return s.countdown.kind === 'held' ? 'idle' : 'needsYou'
     case 'result':
       if (s.outcome.kind === 'back-on') return 'idle'
       return s.outcome.kind === 'failed' || s.outcome.kind === 'rolled-back' ? 'failed' : 'done'
     default: return 'working'
   }
+}
+
+// ── Automatic updates (campaigns) ─────────────────────────────────────────────────
+//
+// With update.auto.enabled, the gateway runs a campaign per new version: it waits for
+// active work to finish (waiting-for-idle), counts down 60 s, then applies. A 15 min
+// deadline (forceAtMs) starts it even if work remains. Hold defers it by an hour, once
+// per campaign; the deadline moves to holdUntilMs + 15 min (UpdateCampaignController).
+
+export type CampaignCountdown =
+  | { kind: 'waiting'; ms: number }
+  | { kind: 'countdown'; ms: number }
+  | { kind: 'held'; untilMs: number }
+
+/** What the campaign is counting down to, or null when there's no campaign to show (none, or applying). */
+export function campaignCountdown(schedule: UpdateSchedule | null, now: number): CampaignCountdown | null {
+  const c = schedule?.campaign
+  if (!c || c.state === 'applying') return null
+  if (c.holdUntilMs !== undefined && c.holdUntilMs > now) return { kind: 'held', untilMs: c.holdUntilMs }
+  if (c.state === 'countdown' && c.applyAtMs !== undefined) return { kind: 'countdown', ms: Math.max(0, c.applyAtMs - now) }
+  return { kind: 'waiting', ms: Math.max(0, c.forceAtMs - now) }
+}
+
+/** "0:48", "14:05", "75:00": minutes and seconds, clamped at 0:00. */
+export function formatClock(ms: number): string {
+  const s = Math.max(0, Math.ceil(ms / 1000))
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
+}
+
+/** "09:12", local time. */
+export function formatHm(ms: number): string {
+  const d = new Date(ms)
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+
+// ── History ───────────────────────────────────────────────────────────────────────
+
+const TRIGGER_LABEL: Record<string, string> = {
+  campaign: 'Automatic', chat: 'From a chat', 'control-ui': 'Control UI', cli: 'Command line', 'mac-app': 'Mac app',
+}
+
+/**
+ * Who started a run. JoaxClaw's own calls are recorded as `api` (it isn't a browser
+ * operator UI and passes no sessionKey), or as `campaign` when they adopt an automatic
+ * update, so the runIds this app started are what tell them apart.
+ */
+export function triggerLabel(trigger: string, runId: string, ownRunIds: readonly string[]): string {
+  if (ownRunIds.includes(runId)) return 'JoaxClaw'
+  if (trigger === 'api') return 'App or API'
+  return TRIGGER_LABEL[trigger] ?? trigger
+}
+
+const RESULT_LABEL: Record<string, string> = {
+  running: 'Running', succeeded: 'Succeeded', failed: 'Failed', 'rolled-back': 'Rolled back', skipped: 'Skipped',
+}
+
+export function resultLabel(status: string): string {
+  return RESULT_LABEL[status] ?? status
+}
+
+/** "2026.9.3 → 2026.9.4", or as much of it as the record knows. */
+export function versionLine(run: Pick<UpdateRun, 'before' | 'after' | 'target'>): string {
+  const from = run.before.version
+  // The version it aimed at, not where it ended: a rollback ends where it started.
+  const to = runTarget(run)
+  if (from && to && from !== to) return `${from} → ${to}`
+  return to ?? from ?? '—'
+}
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+/** "Today 09:12" or "Sep 11 02:00", local time. */
+export function formatWhen(ms: number, now: number): string {
+  const d = new Date(ms)
+  const n = new Date(now)
+  const today = d.getFullYear() === n.getFullYear() && d.getMonth() === n.getMonth() && d.getDate() === n.getDate()
+  return `${today ? 'Today' : `${MONTHS[d.getMonth()]} ${String(d.getDate()).padStart(2, '0')}`} ${formatHm(ms)}`
+}
+
+export type CheckValue = 'Passed' | 'Failed' | 'Not checked'
+
+/** The verification checks, in the Control UI's order. */
+export function verificationChecks(v: UpdateRun['verification']): { label: string; value: CheckValue; note?: string }[] {
+  const b = (x: boolean | undefined): CheckValue => (x === undefined ? 'Not checked' : x ? 'Passed' : 'Failed')
+  const errors = v.pluginErrors
+  return [
+    { label: 'Service', value: b(v.serviceRunning) },
+    { label: 'Version', value: b(v.versionMatch) },
+    {
+      label: 'Plugins',
+      value: errors === undefined ? 'Not checked' : errors.length ? 'Failed' : 'Passed',
+      ...(errors?.length ? { note: errors.length === 1 ? '1 error' : `${errors.length} errors` } : {}),
+    },
+    { label: 'Channels', value: b(v.channelsReady) },
+    { label: 'Ready', value: b(v.readyz) },
+  ]
+}
+
+const esc = (s: string) => s.replace(/`/g, '\\`')
+const code = (s: string) => '`' + s.replace(/`/g, "'") + '`'
+
+/**
+ * A failed run as Markdown, for pasting into an issue: the versions, who started it, the
+ * reason, the failed steps with their detail, the checks, and any repair attempts.
+ * Gateway text is escaped so a backtick in it can't break the formatting.
+ */
+export function failureMarkdown(run: UpdateRun, startedBy: string): string {
+  const lines = [
+    `### OpenClaw update: ${resultLabel(run.status).toLowerCase()}`,
+    '',
+    `- **Version:** ${esc(versionLine(run))}`,
+    `- **Started by:** ${esc(startedBy)}`,
+    `- **When:** ${new Date(run.createdAtMs).toISOString()}`,
+    ...(run.reason ? [`- **Reason:** ${code(run.reason)}`] : []),
+    `- **Run:** ${code(run.runId)}`,
+  ]
+  const failed = run.steps.filter(s => s.status === 'failed')
+  if (failed.length) {
+    lines.push('', '**Failed steps**', ...failed.map(s => `- ${code(s.step)}${s.detail ? `: ${esc(s.detail)}` : ''}`))
+  }
+  lines.push('', '**Checks**', ...verificationChecks(run.verification).map(c => `- ${c.label}: ${c.value}${c.note ? ` (${c.note})` : ''}`))
+  for (const e of run.verification.pluginErrors ?? []) lines.push(`  - ${esc(e)}`)
+  if (run.repair.length) {
+    lines.push('', '**Repair attempts**', ...run.repair.map(r => `- #${r.attempt} ${r.status}${r.summary ? `: ${esc(r.summary)}` : ''}${r.reason ? ` (${esc(r.reason)})` : ''}`))
+  }
+  if (run.nextAction) lines.push('', `**Suggested next step:** ${esc(run.nextAction)}`)
+  return lines.join('\n')
+}
+
+/** Only a failed or rolled-back run has failure details worth copying or reporting. */
+export const isFailedRun = (run: Pick<UpdateRun, 'status'>) => run.status === 'failed' || run.status === 'rolled-back'
+
+export interface ReportPreview { attemptId: string; title: string; body: string; previewDigest: string }
+
+/** `update.report {action:"preview"}` → `{status:"ready", attemptId, title, body, previewDigest}`. */
+export function parseReportPreview(raw: unknown): ReportPreview | null {
+  const r = obj(raw)
+  if (r?.status !== 'ready' || !str(r.title) || typeof r.body !== 'string' || !str(r.previewDigest)) return null
+  return { attemptId: str(r.attemptId) ?? '', title: r.title as string, body: r.body as string, previewDigest: r.previewDigest as string }
+}
+
+export interface ReportResult { status: string; message?: string; url?: string; fallbackUrl?: string }
+
+/** `update.report {action:"submit"}` → created · fallback · pending · retryable · duplicate. */
+export function parseReportResult(raw: unknown): ReportResult | null {
+  const r = obj(raw)
+  const status = str(r?.status)
+  if (!r || !status) return null
+  // Only http(s) links are ever made clickable.
+  const link = (v: unknown) => (typeof v === 'string' && /^https?:\/\//i.test(v) ? v : undefined)
+  const url = link(r.url)
+  const fallbackUrl = link(r.fallbackUrl)
+  return { status, ...(str(r.message) ? { message: r.message as string } : {}), ...(url ? { url } : {}), ...(fallbackUrl ? { fallbackUrl } : {}) }
 }
 
 /** The default release channels go unnamed; any other (beta, dev) is worth saying. */

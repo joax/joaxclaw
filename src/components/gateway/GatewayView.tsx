@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { RotateCcw, Square, CheckCircle2, XCircle, AlertCircle, RefreshCw, Eye, EyeOff, Server, Plug, Cpu, MessageSquare, MonitorSmartphone, ArrowUpCircle, ClipboardList, Puzzle, Boxes, ArrowLeft } from 'lucide-react'
+import { RotateCcw, Square, CheckCircle2, XCircle, AlertCircle, RefreshCw, Eye, EyeOff, Server, Plug, Cpu, MessageSquare, MonitorSmartphone, ArrowUpCircle, History, ClipboardList, Puzzle, Boxes, ArrowLeft } from 'lucide-react'
 import { useIsNarrow } from '../../lib/useIsNarrow'
 import Editor from '@monaco-editor/react'
 import { useConnectionStore, useIsRemoteGateway } from '../../store/connection'
@@ -17,6 +17,7 @@ import { SessionsView } from '../sessions/SessionsView'
 import { ExtensionsView } from '../extensions/ExtensionsView'
 import { ModelsView } from '../models/ModelsView'
 import { useGatewayUpdateStore } from '../../store/gatewayUpdate'
+import { useGatewaySupport } from '../../lib/useGatewaySupport'
 import { sendViaAgent } from '../../lib/agentPrompt'
 import { Card } from '../ui/Card'
 
@@ -220,6 +221,8 @@ export function GatewayView({ onOpenChat }: { onOpenChat?: () => void } = {}) {
   const gwUpdate = useGatewayUpdateStore(s => s.available)
   const gwUpdating = useGatewayUpdateStore(s => s.pending || !!s.followed)
   const checkGwUpdate = useGatewayUpdateStore(s => s.check)
+  // Update history (update.runs.list, admin, 2026.9+); it opens in the banner's overlay.
+  const updateHistory = useGatewaySupport({ methods: ['update.runs.list'], scope: 'operator.admin' }).supported
   useEffect(() => { checkGwUpdate() }, [checkGwUpdate])
 
   // Update OpenClaw itself on the gateway host: the same flow as the banner. With admin
@@ -348,6 +351,9 @@ export function GatewayView({ onOpenChat }: { onOpenChat?: () => void } = {}) {
                   title={gwUpdate ? `Update available: ${gwUpdate.currentVersion} → ${gwUpdate.latestVersion}` : 'Update OpenClaw on the gateway host'}>
                   {gwUpdate ? `Update → ${gwUpdate.latestVersion}` : 'Update'}
                 </Btn>
+                {updateHistory && (
+                  <Btn variant="outline" size="sm" icon={<History size={12} />} onClick={() => useGatewayUpdateStore.getState().openHistory()}>History</Btn>
+                )}
                 <Btn variant="outline" size="sm" icon={<RotateCcw size={12} />} loading={cmdRunning} onClick={() => runLifecycle(window.api.gateway.restart, 'openclaw gateway restart', 'This briefly drops the connection while the gateway restarts — that is expected; the app will reconnect on its own.')}>Restart</Btn>
                 <Btn variant="outline" size="sm" icon={<RotateCcw size={12} />} loading={cmdRunning} onClick={() => runLifecycle(window.api.gateway.restartSafe, 'openclaw gateway restart --safe', 'This briefly drops the connection while the gateway restarts — that is expected; the app will reconnect on its own.')}>Safe</Btn>
                 <Btn variant="danger" size="sm" icon={<Square size={12} />} loading={cmdRunning} onClick={() => runLifecycle(window.api.gateway.stop, 'openclaw gateway stop', 'This stops the gateway; the app will disconnect and stay disconnected until it is started again.')}>Stop</Btn>
