@@ -7,6 +7,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Running chats are marked in the accent colour.** A chat that's working (the Active group in the chat list, its pulsing dot, and "running" in Sessions) used to be green, the colour the app otherwise uses for "done". Working is now the accent colour everywhere, and green means finished. Pulsing dots also stop pulsing if your system asks for reduced motion.
+- **Dialogs are easier to use from the keyboard.** The Channels dialogs keep focus inside while open and return it when closed, and screen readers announce them by their title. The phone bottom sheets (More, System monitor) close with Escape.
+
 ### Fixed
 
 - **Tool calls no longer disappear when you reopen a chat.** When you reopened a chat or restarted the app, every tool call in it was gone, and so were the diffs, question cards, script cards and sub-agent tool lists built from them, even though they'd shown fine while the reply was streaming. The gateway keeps them. The app expected a different format from the one the gateway uses, and threw away the separate entries that carry each call's result. Both are read now, so a reopened chat shows each call with its arguments and its result or error, the same as it did live. Reopening a long chat also reads its last 500 messages instead of 200.
