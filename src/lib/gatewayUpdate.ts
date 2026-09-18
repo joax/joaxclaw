@@ -223,12 +223,284 @@ function withPeriod(s: string): string {
   return /[.!?:]$/.test(t) ? t : `${t}.`
 }
 
+// ── Following a run ───────────────────────────────────────────────────────────────
+//
+// The gateway keeps a ledger of update runs (UpdateRunRecordSchema, 2026.9): the phase,
+// the steps, the verification checks. `update.run.changed` (admin) says a run moved;
+// `update.runs.get` reads the whole record. Each phase is also recorded as a step named
+// after it, with its own status, which is how a finished run says where it failed.
+
+export interface UpdateRunStep {
+  step: string
+  /** pending · in_progress · completed · failed · skipped */
+  status: string
+  detail?: string
+  startedAtMs?: number
+  endedAtMs?: number
+}
+
+export interface UpdateRun {
+  runId: string
+  createdAtMs: number
+  updatedAtMs: number
+  /** chat · control-ui · cli · campaign · mac-app · api */
+  trigger: string
+  /** requested → staging → validating → [repairing] → activating → restarting → verifying → finished */
+  phase: string
+  /** running · succeeded · failed · rolled-back · skipped */
+  status: string
+  reason: string | null
+  target: { version?: string; sha?: string; channel?: string; tag?: string; kind?: string }
+  before: { version?: string; sha?: string }
+  after: { version?: string; sha?: string }
+  steps: UpdateRunStep[]
+  verification: {
+    serviceRunning?: boolean
+    versionMatch?: boolean
+    pluginErrors?: string[]
+    channelsReady?: boolean
+    readyz?: boolean
+    runningVersion?: string
+  }
+  repair: { attempt: number; status: string; summary?: string; reason?: string }[]
+  finishedAtMs: number | null
+  downtimeMs: number | null
+  /** What the gateway suggests doing next, when it has a suggestion. */
+  nextAction?: string
+}
+
+const MAX_STEPS = 128  // the schema's own cap
+
+function version(v: unknown): { version?: string; sha?: string } {
+  const r = obj(v)
+  return { ...(str(r?.version) ? { version: r!.version as string } : {}), ...(str(r?.sha) ? { sha: r!.sha as string } : {}) }
+}
+
+/**
+ * A run record from update.runs.get / runs.list / update.status. Unknown phases and
+ * statuses are kept as strings (a newer gateway may add some); only a record without a
+ * runId, phase or status is unreadable.
+ */
+export function parseRun(raw: unknown): UpdateRun | null {
+  const r = obj(raw)
+  const runId = str(r?.runId)
+  if (!r || !runId || !str(r.phase) || !str(r.status)) return null
+  const t = obj(r.target) ?? {}
+  const v = obj(r.verification) ?? {}
+  const o = obj(r.origin) ?? {}
+  const steps: UpdateRunStep[] = (Array.isArray(r.steps) ? r.steps : []).map(obj)
+    .filter((s): s is Record<string, unknown> => !!s && !!str(s.step))
+    .slice(0, MAX_STEPS)
+    .map(s => ({
+      step: s.step as string,
+      status: str(s.status) ?? 'pending',
+      ...(str(s.detail) ? { detail: s.detail as string } : {}),
+      ...(num(s.startedAtMs) !== undefined ? { startedAtMs: s.startedAtMs as number } : {}),
+      ...(num(s.endedAtMs) !== undefined ? { endedAtMs: s.endedAtMs as number } : {}),
+    }))
+  const repair = (Array.isArray(r.repair) ? r.repair : []).map(obj)
+    .filter((x): x is Record<string, unknown> => !!x)
+    .map((x, i) => ({
+      attempt: num(x.attempt) ?? i + 1,
+      status: str(x.status) ?? 'failed',
+      ...(str(x.summary) ? { summary: x.summary as string } : {}),
+      ...(str(x.reason) ? { reason: x.reason as string } : {}),
+    }))
+  const bool = (k: string) => (typeof v[k] === 'boolean' ? { [k]: v[k] as boolean } : {})
+  const pluginErrors = Array.isArray(v.pluginErrors) ? v.pluginErrors.filter((e): e is string => typeof e === 'string') : undefined
+  return {
+    runId,
+    createdAtMs: num(r.createdAtMs) ?? 0,
+    updatedAtMs: num(r.updatedAtMs) ?? num(r.createdAtMs) ?? 0,
+    trigger: str(r.trigger) ?? 'api',
+    phase: r.phase as string,
+    status: r.status as string,
+    reason: str(r.reason) ?? null,
+    target: {
+      ...(str(t.version) ? { version: t.version as string } : {}),
+      ...(str(t.sha) ? { sha: t.sha as string } : {}),
+      ...(str(t.channel) ? { channel: t.channel as string } : {}),
+      ...(str(t.tag) ? { tag: t.tag as string } : {}),
+      ...(str(t.kind) ? { kind: t.kind as string } : {}),
+    },
+    before: version(r.before),
+    after: version(r.after),
+    steps,
+    verification: {
+      ...bool('serviceRunning'), ...bool('versionMatch'), ...bool('channelsReady'), ...bool('readyz'),
+      ...(pluginErrors ? { pluginErrors } : {}),
+      ...(str(v.runningVersion) ? { runningVersion: v.runningVersion as string } : {}),
+    },
+    repair,
+    finishedAtMs: num(r.finishedAtMs) ?? null,
+    downtimeMs: num(r.downtimeMs) ?? null,
+    ...(str(o.nextAction) ? { nextAction: o.nextAction as string } : {}),
+  }
+}
+
+/** An `update.run.changed` event: `{runId, phase, status, updatedAtMs}`. */
+export function parseRunChanged(raw: unknown): { runId: string; phase: string; status: string; updatedAtMs: number } | null {
+  const r = obj(raw)
+  if (!r || !str(r.runId) || !str(r.phase) || !str(r.status)) return null
+  return { runId: r.runId as string, phase: r.phase as string, status: r.status as string, updatedAtMs: num(r.updatedAtMs) ?? 0 }
+}
+
+/**
+ * Fold an event into the record we hold. Events carry no steps, so a run first seen
+ * through an event starts as a stub, and a stale event never moves a newer record back.
+ */
+export function mergeRunChanged(run: UpdateRun | null, ev: { runId: string; phase: string; status: string; updatedAtMs: number }): UpdateRun {
+  if (run && run.runId === ev.runId) {
+    return ev.updatedAtMs < run.updatedAtMs ? run : { ...run, phase: ev.phase, status: ev.status, updatedAtMs: ev.updatedAtMs }
+  }
+  return {
+    runId: ev.runId, createdAtMs: ev.updatedAtMs, updatedAtMs: ev.updatedAtMs, trigger: 'api',
+    phase: ev.phase, status: ev.status, reason: null, target: {}, before: {}, after: {},
+    steps: [], verification: {}, repair: [], finishedAtMs: null, downtimeMs: null,
+  }
+}
+
+export const isTerminal = (status: string) => status !== 'running'
+
+const PHASE_LABEL: Record<string, string> = {
+  requested: 'Requested', staging: 'Staging', validating: 'Validating', repairing: 'Repairing',
+  activating: 'Activating', restarting: 'Restarting', verifying: 'Verifying', finished: 'Finished',
+}
+
+/** A phase's label; an unknown one is shown as the gateway named it. */
+export function phaseLabel(phase: string | undefined): string {
+  if (!phase) return 'Requested'
+  return PHASE_LABEL[phase] ?? phase.charAt(0).toUpperCase() + phase.slice(1)
+}
+
+export type PhaseMark = 'done' | 'current' | 'pending' | 'failed'
+
+export interface PhaseProgress {
+  phases: { id: string; label: string; mark: PhaseMark }[]
+  completed: number
+  total: number
+  /** 0–100, or null (indeterminate) until the first phase is known. */
+  pct: number | null
+  /** The label for "Updating to X · {current}". */
+  currentLabel: string
+}
+
+// The phases a run visibly moves through. "requested" is before the first of them and
+// "finished" after the last. Repairing is shown only when a run actually enters it.
+const VISIBLE_PHASES = ['staging', 'validating', 'activating', 'restarting', 'verifying']
+
+/**
+ * Where a run is, for the phase line: each visible phase marked done, current, pending or
+ * failed, and "n of total" complete. A phase's own step (the ledger records one per phase)
+ * is the best evidence; without steps (a run known only from events), the phase order is.
+ */
+export function phaseProgress(run: Pick<UpdateRun, 'phase' | 'status'> & { steps?: UpdateRunStep[] } | null): PhaseProgress {
+  if (!run) {
+    return { phases: VISIBLE_PHASES.map(id => ({ id, label: phaseLabel(id), mark: 'pending' as const })), completed: 0, total: VISIBLE_PHASES.length, pct: null, currentLabel: phaseLabel('requested') }
+  }
+  const steps = run.steps ?? []
+  const stepOf = (id: string) => steps.find(s => s.step === id)
+  const ids = [...VISIBLE_PHASES]
+  if (run.phase === 'repairing' || stepOf('repairing')) {
+    // The ledger repairs either a failed validation or a failed verification.
+    ids.splice(stepOf('verifying') ? ids.indexOf('verifying') + 1 : ids.indexOf('validating') + 1, 0, 'repairing')
+  }
+  const terminal = isTerminal(run.status)
+  const succeeded = run.status === 'succeeded'
+  const at = ids.indexOf(run.phase)
+  const phases = ids.map((id, i) => {
+    const step = stepOf(id)
+    let mark: PhaseMark
+    if (step?.status === 'completed' || step?.status === 'skipped') mark = 'done'
+    else if (step?.status === 'failed') mark = 'failed'
+    else if (step?.status === 'in_progress') mark = terminal ? (succeeded ? 'done' : 'failed') : 'current'
+    else if (run.phase === 'finished') mark = succeeded ? 'done' : 'pending'
+    else if (at < 0) mark = 'pending'
+    else if (i < at) mark = 'done'
+    else if (i === at) mark = terminal ? (succeeded ? 'done' : 'failed') : 'current'
+    else mark = 'pending'
+    return { id, label: phaseLabel(id), mark }
+  })
+  const completed = phases.filter(p => p.mark === 'done').length
+  return { phases, completed, total: ids.length, pct: Math.round((completed / ids.length) * 100), currentLabel: phaseLabel(run.phase) }
+}
+
+/** A run's state colour: working while running, done, failed (failed or rolled back), idle (skipped). */
+export function runTone(status: string): StateTone {
+  switch (status) {
+    case 'running': return 'working'
+    case 'succeeded': return 'done'
+    case 'failed':
+    case 'rolled-back': return 'failed'
+    default: return 'idle'
+  }
+}
+
+/** What the run was updating to, as best the record says. */
+export function runTarget(run: Pick<UpdateRun, 'target' | 'after'>): string | undefined {
+  return run.target.version ?? run.after.version ?? run.target.tag ?? (run.target.sha ? run.target.sha.slice(0, 7) : undefined)
+}
+
+// Skipped runs that are no-ops, not failures (update-outcome's SKIPPED_UPDATE_OUTCOMES,
+// plus the ledger's own non-failures).
+const NOOP_SKIPS = new Set(['managed-service-handoff-already-running', 'managed-service-handoff-cancelled', 'cancelled', 'dry-run', 'interrupted'])
+
+/** How a finished run should be reported, or null when there's nothing to report (running, or a no-op). */
+export function outcomeFromRun(run: UpdateRun, fallback: { target?: string; version?: string } = {}): Outcome | null {
+  const target = runTarget(run) ?? fallback.target ?? 'the new version'
+  switch (run.status) {
+    case 'running':
+      return null
+    case 'succeeded':
+      return { kind: 'ok', version: run.after.version ?? run.verification.runningVersion ?? run.target.version ?? fallback.version ?? target, downtimeMs: run.downtimeMs, runId: run.runId }
+    case 'rolled-back':
+      return { kind: 'rolled-back', target, ...(run.before.version ? { before: run.before.version } : {}), runId: run.runId }
+    case 'skipped':
+      if (run.reason === 'already-current') return { kind: 'already-current', version: run.before.version ?? fallback.version ?? target, runId: run.runId }
+      if (run.reason && NOOP_SKIPS.has(run.reason)) return null
+      return { kind: 'failed', target, ...(run.before.version ? { before: run.before.version } : {}), runId: run.runId }
+    default:
+      return { kind: 'failed', target, ...(run.before.version ? { before: run.before.version } : {}), runId: run.runId }
+  }
+}
+
+/** "38s", "1m 04s", "1h 02m"; empty for no measurement. */
+export function formatDowntime(ms: number | null | undefined): string {
+  if (ms == null || !Number.isFinite(ms) || ms < 0) return ''
+  const s = Math.round(ms / 1000)
+  if (s < 60) return `${s}s`
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m}m ${String(s % 60).padStart(2, '0')}s`
+  return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}m`
+}
+
+/** Plain-text banner copy for an outcome (the notification body uses it). */
+export function outcomeText(o: Outcome): string {
+  switch (o.kind) {
+    case 'ok': {
+      const down = formatDowntime(o.downtimeMs)
+      return `Gateway updated to ${o.version}${down ? ` · down for ${down}` : ''}.`
+    }
+    case 'already-current': return `The gateway is already on ${o.version}.`
+    case 'back-on': return `The gateway is back on ${o.version}.`
+    case 'failed': return `The update to ${o.target} failed.${o.before ? ` The gateway is still on ${o.before}.` : ''}`
+    case 'rolled-back': return `The update to ${o.target} didn't pass its checks and was rolled back${o.before ? ` to ${o.before}` : ''}.`
+  }
+}
+
+/** Remember a result as shown, newest last, capped so the list can't grow forever. */
+export function rememberSeen(seen: string[], runId: string, cap = 20): string[] {
+  return [...seen.filter(id => id !== runId), runId].slice(-cap)
+}
+
 /** How an update we followed ended. Shown once, in the banner. */
 export type Outcome =
   | { kind: 'ok'; version: string; downtimeMs?: number | null; runId?: string }
   | { kind: 'already-current'; version: string; runId?: string }
   /** No run record to read (an older gateway, or no admin): only the version it came back on. */
   | { kind: 'back-on'; version: string }
+  | { kind: 'failed'; target: string; before?: string; runId?: string }
+  | { kind: 'rolled-back'; target: string; before?: string; runId?: string }
 
 /**
  * The result after a reconnect when there's no run record to read. If the gateway came
@@ -241,10 +513,20 @@ export function inferOutcome(serverVersion: string | undefined, target: string |
   return { kind: 'back-on', version: serverVersion }
 }
 
+export interface RunningInput {
+  target?: string
+  /** The run's record, once known; the phase line is drawn from it. */
+  run?: UpdateRun | null
+  own?: boolean
+}
+
 export interface BannerInputs {
   available: UpdateAvailable | null
-  /** An update.run call is in flight, or the run it started hasn't ended yet. */
-  running: { target?: string; phase?: string } | null
+  /**
+   * An update is under way: our update.run is in flight, or a run we follow hasn't ended.
+   * `own` is false for a run started elsewhere (the CLI, the Control UI, a campaign).
+   */
+  running: RunningInput | null
   refusal: Refusal | null
   outcome: Outcome | null
   /** A latestVersion the user chose to skip (persisted). */
@@ -256,7 +538,7 @@ export interface BannerInputs {
 export type BannerState =
   | { kind: 'hidden' }
   | { kind: 'available'; key: string; available: UpdateAvailable }
-  | { kind: 'running'; key: string; target?: string; phase?: string }
+  | ({ kind: 'running'; key: string } & RunningInput)
   | { kind: 'refused'; key: string; refusal: Refusal }
   | { kind: 'result'; key: string; outcome: Outcome }
 
@@ -272,6 +554,11 @@ export function bannerState(i: BannerInputs): BannerState {
   return s.kind !== 'hidden' && s.key === i.dismissedKey ? { kind: 'hidden' } : s
 }
 
+function outcomeKey(o: Outcome): string {
+  const id = 'runId' in o && o.runId ? o.runId : 'version' in o ? o.version : o.target
+  return `result:${o.kind}:${id}`
+}
+
 /** The banner key of the "update available" notice for a version. */
 export function availableKey(latestVersion: string): string {
   return `available:${latestVersion}`
@@ -279,7 +566,7 @@ export function availableKey(latestVersion: string): string {
 
 function pickBannerState(i: BannerInputs): BannerState {
   if (i.refusal) return { kind: 'refused', key: `refused:${i.refusal.reason}`, refusal: i.refusal }
-  if (i.outcome) return { kind: 'result', key: `result:${i.outcome.kind}:${i.outcome.version}`, outcome: i.outcome }
+  if (i.outcome) return { kind: 'result', key: outcomeKey(i.outcome), outcome: i.outcome }
   if (i.available && i.skipped !== i.available.latestVersion) {
     return { kind: 'available', key: availableKey(i.available.latestVersion), available: i.available }
   }
@@ -288,12 +575,14 @@ function pickBannerState(i: BannerInputs): BannerState {
 
 /**
  * The banner's colour, through stateTone: working for available and running, failed for a
- * refusal, done for a success, idle for the neutral "back on {version}".
+ * refusal or a failed run, done for a success, idle for the neutral "back on {version}".
  */
 export function bannerTone(s: BannerState): StateTone {
   switch (s.kind) {
     case 'refused': return 'failed'
-    case 'result': return s.outcome.kind === 'back-on' ? 'idle' : 'done'
+    case 'result':
+      if (s.outcome.kind === 'back-on') return 'idle'
+      return s.outcome.kind === 'failed' || s.outcome.kind === 'rolled-back' ? 'failed' : 'done'
     default: return 'working'
   }
 }

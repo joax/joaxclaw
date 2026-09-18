@@ -1,14 +1,15 @@
 import { useState, type ReactNode } from 'react'
-import { Server, X, Loader2, ArrowUpCircle, AlertTriangle, CheckCircle2, Terminal } from 'lucide-react'
+import { Server, X, Loader2, ArrowUpCircle, AlertTriangle, CheckCircle2, Terminal, XCircle, Undo2 } from 'lucide-react'
 import { useConnectionStore } from '../../store/connection'
 import { useGatewayUpdateStore } from '../../store/gatewayUpdate'
-import { bannerState, bannerTone, refusalCopy, showChannel, type BannerState } from '../../lib/gatewayUpdate'
+import { bannerState, bannerTone, formatDowntime, phaseProgress, refusalCopy, runTarget, showChannel, type BannerState } from '../../lib/gatewayUpdate'
 import { toneColor, toneTint } from '../../lib/stateTone'
 import { gatewayClient } from '../../lib/gateway'
 import { useIsNarrow } from '../../lib/useIsNarrow'
 import { Btn } from '../ui/Btn'
 import { CommandHint } from '../ui/CommandHint'
 import { UpdateConfirmOverlay } from '../gateway/UpdateConfirmOverlay'
+import { PhaseLine } from '../gateway/UpdatePhases'
 
 // The gateway update banner: one place, several short states (lib/gatewayUpdate
 // bannerState). "Available" reaches every connection, from the hello-ok snapshot and the
@@ -33,7 +34,9 @@ export function GatewayUpdateBanner({ onOpenChat }: { onOpenChat?: () => void })
 
   const view = bannerState({
     available: st.available,
-    running: st.pending || st.followed ? { target: st.followed?.target } : null,
+    running: st.pending || st.followed
+      ? { target: st.followed?.target ?? (st.run ? runTarget(st.run) : undefined), run: st.run, own: st.followed?.own ?? true }
+      : null,
     refusal: st.refusal,
     outcome: st.outcome,
     skipped: st.skipped,
@@ -79,6 +82,8 @@ export function GatewayUpdateBanner({ onOpenChat }: { onOpenChat?: () => void })
       actions = <Btn size="sm" loading={agentBusy} icon={<ArrowUpCircle size={12} />} onClick={viaAgent} style={tap} {...off}>Update via agent</Btn>
     }
     if (copy.action === 'command' && copy.command) extra = <CommandHint command={copy.command} />
+  } else if (view.kind === 'running') {
+    extra = <PhaseLine progress={phaseProgress(view.run ?? null)} narrow={narrow} />
   }
 
   const dismissible = view.kind !== 'running' && view.kind !== 'hidden'
@@ -112,7 +117,7 @@ export function GatewayUpdateBanner({ onOpenChat }: { onOpenChat?: () => void })
             </div>
             <div className="flex-1 min-w-0 flex flex-col gap-1.5" style={{ paddingTop: 3 }}>
               <span className="text-sm" style={{ color: 'var(--text-primary)' }}>
-                <BannerMessage view={view} />
+                <BannerMessage view={view} narrow={narrow} />
               </span>
               {extra}
             </div>
@@ -135,7 +140,13 @@ function BannerIcon({ view, color }: { view: BannerState; color: string }) {
   switch (view.kind) {
     case 'running': return <Loader2 size={14} className="animate-spin" style={style} />
     case 'refused': return <AlertTriangle size={14} style={style} />
-    case 'result': return view.outcome.kind === 'back-on' ? <Server size={14} style={style} /> : <CheckCircle2 size={14} style={style} />
+    case 'result':
+      switch (view.outcome.kind) {
+        case 'back-on': return <Server size={14} style={style} />
+        case 'failed': return <XCircle size={14} style={style} />
+        case 'rolled-back': return <Undo2 size={14} style={style} />
+        default: return <CheckCircle2 size={14} style={style} />
+      }
     default: return <Server size={14} style={style} />
   }
 }
@@ -146,7 +157,7 @@ function lcfirst(s: string): string {
   return s ? s[0].toLowerCase() + s.slice(1) : s
 }
 
-function BannerMessage({ view }: { view: BannerState }) {
+function BannerMessage({ view, narrow }: { view: BannerState; narrow?: boolean }) {
   switch (view.kind) {
     case 'available': {
       const a = view.available
@@ -155,17 +166,33 @@ function BannerMessage({ view }: { view: BannerState }) {
         <span style={dim}> The gateway is on {a.currentVersion}.</span>
       </>
     }
-    case 'running':
+    case 'running': {
+      // A phone has room for the target only; the phase is on the line below.
+      if (narrow) return view.target ? <>Updating to <b>{view.target}</b></> : <>The gateway is updating</>
+      if (view.own === false) {
+        return <>The gateway is applying an update{view.target ? <> to <b>{view.target}</b></> : null}.<span style={dim}> JoaxClaw reconnects on its own.</span></>
+      }
+      const phase = phaseProgress(view.run ?? null).currentLabel
       return view.target
-        ? <>Updating to <b>{view.target}</b> · {view.phase ?? 'Requested'}.<span style={dim}> JoaxClaw reconnects on its own.</span></>
-        : <>The gateway is updating · {view.phase ?? 'Requested'}.<span style={dim}> JoaxClaw reconnects on its own.</span></>
+        ? <>Updating to <b>{view.target}</b> · {phase}.<span style={dim}> JoaxClaw reconnects on its own.</span></>
+        : <>The gateway is updating · {phase}.<span style={dim}> JoaxClaw reconnects on its own.</span></>
+    }
     case 'refused':
       return <>The gateway didn't update: <span style={dim}>{lcfirst(refusalCopy(view.refusal).text)}</span></>
     case 'result': {
       const o = view.outcome
       if (o.kind === 'already-current') return <>The gateway is already on {o.version}.</>
       if (o.kind === 'back-on') return <>The gateway is back on {o.version}.</>
-      return <>Gateway updated to <b>{o.version}</b>.</>
+      if (o.kind === 'failed') {
+        return <>The update to <b>{o.target}</b> failed.{o.before ? <span style={dim}> The gateway is still on {o.before}.</span> : null}</>
+      }
+      if (o.kind === 'rolled-back') {
+        return <>The update to <b>{o.target}</b> didn't pass its checks and was rolled back{o.before ? <> to {o.before}</> : null}.</>
+      }
+      {
+        const down = formatDowntime(o.downtimeMs)
+        return <>Gateway updated to <b>{o.version}</b>{down ? <span style={dim}> · down for {down}</span> : null}.</>
+      }
     }
     default:
       return null
