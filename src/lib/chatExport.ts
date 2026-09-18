@@ -233,7 +233,6 @@ function isUnsafeUrl(url: string): boolean {
     .replace(/&#(\d+);?/g, (_, d: string) => String.fromCodePoint(Number(d)))
     .replace(/&colon;/gi, ':')
     .replace(/&(?:tab|newline);/gi, '')
-  // eslint-disable-next-line no-control-regex
   return /^(?:javascript|vbscript|data):/i.test(decoded.replace(/[\s -]+/g, ''))
 }
 
