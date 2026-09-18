@@ -237,6 +237,14 @@ describe('catalog browsing', () => {
     expect(usePluginCatalogStore.getState().nextCursor).toBeNull()
   })
 
+  it('stops paging when the gateway echoes the cursor back (ClawHub failed on that page)', async () => {
+    handlers['plugins.catalog.browse'] = p => (p.cursor ? { items: [], nextCursor: p.cursor, remoteError: 'ClawHub is unavailable: fetch failed.' } : { items: [item('a')], nextCursor: 'c1' })
+    await usePluginCatalogStore.getState().loadView()
+    await usePluginCatalogStore.getState().loadMore()
+    expect(usePluginCatalogStore.getState().nextCursor).toBeNull()
+    expect(usePluginCatalogStore.getState().remoteError).toMatch(/ClawHub is unavailable/)
+  })
+
   it('never pages a search', async () => {
     handlers['plugins.catalog.browse'] = () => ({ items: [item('a')], nextCursor: 'c1' })
     usePluginCatalogStore.setState({ catalogQuery: 'slack' })

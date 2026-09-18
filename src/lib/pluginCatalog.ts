@@ -301,48 +301,73 @@ export function cardAction(entry: DiscoveryEntry, opts: { admin: boolean }): Car
  */
 export function unavailableReason(entry: DiscoveryEntry, opts: { mutationAllowed: boolean | null }): string {
   if (opts.mutationAllowed === false) return "This gateway doesn't allow plugin changes from apps. Run this on the gateway host:"
-  if (!entry.local.install) return 'Not available from the catalog.'
+  if (!installSource(entry)) return 'Not available from the catalog.'
   return "Can't be installed from here."
+}
+
+/**
+ * Where an entry installs from. `local.install` is only set for a plugin the gateway
+ * already has on disk but hasn't installed; a ClawHub entry never carries one, and
+ * installs by its `catalog.packageName`. Whether it CAN be installed is `local.action`.
+ */
+function installSource(entry: DiscoveryEntry): CatalogInstallAction | null {
+  if (entry.local.install) return entry.local.install
+  if (entry.catalog.packageName && entry.id.startsWith('ch_')) return { source: 'clawhub', packageName: entry.catalog.packageName }
+  return null
 }
 
 /** The install target for a catalog entry, at the chosen version (ClawHub only). */
 export function installTargetForEntry(entry: DiscoveryEntry, opts: { version?: string; origin?: string } = {}):
   { params: InstallParams; displayName: string; pluginId?: string; origin?: string } | null {
-  const install = entry.local.install
-  if (!install) return null
+  const install = installSource(entry)
+  if (!install || entry.local.action !== 'install') return null
   const base = { displayName: entry.catalog.name, ...(entry.local.pluginId ? { pluginId: entry.local.pluginId } : {}), ...(opts.origin ? { origin: opts.origin } : {}) }
   // The official shape is closed and has no `version`: sending one fails the whole call.
   if (install.source === 'official') return { params: { source: 'official', pluginId: install.pluginId }, ...base }
   return { params: { source: 'clawhub', packageName: install.packageName, ...(opts.version ? { version: opts.version } : {}) }, ...base }
 }
 
-/** The command to install an entry on the gateway host, for connections that can't. */
+/**
+ * The command to install an entry on the gateway host, for connections that can't. The
+ * CLI takes `clawhub:<package>` for ClawHub and a bare id for official plugins.
+ */
 export function hostInstallCommand(entry: DiscoveryEntry): string {
-  const install = entry.local.install
+  const install = installSource(entry)
   if (install?.source === 'clawhub') return `openclaw plugins install clawhub:${install.packageName}`
-  const spec = entry.catalog.packageName ?? (install?.source === 'official' ? install.pluginId : undefined) ?? entry.local.pluginId ?? entry.catalog.name
-  return `openclaw plugins install ${spec}`
+  const id = (install?.source === 'official' ? install.pluginId : undefined) ?? entry.local.pluginId ?? entry.catalog.name
+  return `openclaw plugins install ${id}`
 }
 
-/** "Needs" lines for the detail pane, from the plugin's declared configuration. */
-export function needsSummary(detail: Pick<DiscoveryDetail, 'configuration' | 'skills' | 'mcpServers'>): string[] {
+/**
+ * "Needs" lines for the detail pane, from the plugin's declared configuration. A local
+ * detail never carries configuration (the gateway only reads it from ClawHub), so for
+ * one of those an empty list says nothing, and "Nothing to configure" would be a guess.
+ */
+export function needsSummary(detail: Pick<DiscoveryDetail, 'configuration' | 'skills' | 'mcpServers'> & { origin?: DiscoveryDetail['origin'] }): string[] {
   const required = detail.configuration.filter(f => f.required)
   const keys = required.filter(f => f.sensitive)
   const settings = required.filter(f => !f.sensitive)
   const out: string[] = []
   if (keys.length) out.push(`${keys.length} API key${keys.length === 1 ? '' : 's'} (${keys.map(f => f.name).join(', ')})`)
   if (settings.length) out.push(`${settings.length} required setting${settings.length === 1 ? '' : 's'}`)
-  if (!out.length) out.push('Nothing to configure')
+  if (!out.length && detail.origin !== 'local') out.push('Nothing to configure')
   if (detail.skills.length) out.push(`Adds skills: ${detail.skills.map(s => s.name).join(', ')}`)
   if (detail.mcpServers.length) out.push(`Starts MCP servers: ${detail.mcpServers.join(', ')}`)
   return out
 }
 
-/** The amber line for a partial outage. The gateway's own text is long and technical. */
-export function summariseRemoteError(msg: string | undefined): string | null {
+/**
+ * The amber line for a ClawHub outage. The gateway's text is long and varies by view,
+ * and what's still listed varies too: Featured, Trending and Official come back empty,
+ * All keeps the installed plugins, and even Bundled is empty (its publication status
+ * can't be checked). So the line says what's actually on screen.
+ */
+export function summariseRemoteError(msg: string | undefined, itemCount: number): string | null {
   if (!msg?.trim()) return null
-  if (/^ClawHub is unavailable/i.test(msg.trim()) || /\bClawHub is unavailable\b/i.test(msg)) {
-    return "ClawHub isn't reachable right now. Showing bundled and installed plugins."
+  if (/\bClawHub is unavailable\b/i.test(msg)) {
+    return itemCount > 0
+      ? "ClawHub isn't reachable right now. Showing only what's already on this gateway."
+      : "ClawHub isn't reachable right now, so this list is empty. Try again in a moment."
   }
   return msg.trim()
 }
@@ -361,15 +386,17 @@ export function clawhubUrl(packageName: string | undefined, authorHandle?: strin
     : `https://clawhub.ai/plugins/${encodeURIComponent(packageName)}`
 }
 
-/** ClawHub's security verdict as a pane line. */
+/**
+ * ClawHub's security verdict as a pane line. The gateway passes on only `status` (plus an
+ * audit link and a summary): no date. A pass is `clean`/`pass`/`safe`, as the Control UI
+ * reads it; `blocked` (or a malicious verdict) is a block; anything else (suspicious,
+ * pending, stale, unknown) deserves a look.
+ */
 export function securityLabel(security: DiscoveryDetail['security']): { tone: PillTone; text: string } | null {
   if (!security?.status) return null
-  const s = security.status.toLowerCase()
-  if (s === 'clean') {
-    const date = security.checkedAt ? ` · ${new Date(security.checkedAt).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}` : ''
-    return { tone: 'done', text: `Verified clean${date}` }
-  }
-  if (s.includes('malicious') || s.includes('malware') || s.includes('blocked')) return { tone: 'failed', text: 'Blocked by ClawHub' }
+  const s = security.status.trim().toLowerCase()
+  if (/^(clean|pass|safe)$/.test(s)) return { tone: 'done', text: 'Verified clean' }
+  if (s === 'blocked' || s.includes('malicious') || s.includes('malware')) return { tone: 'failed', text: 'Blocked by ClawHub' }
   return { tone: 'needsYou', text: 'Review recommended' }
 }
 

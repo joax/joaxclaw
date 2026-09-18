@@ -118,15 +118,22 @@ export function PluginDetailPane({ entry, admin, connected, onBack, onManage, on
 
         {detail && (
           <>
-            <Row label="Needs">
-              <ul style={{ margin: 0, paddingLeft: 14 }}>
-                {needsSummary(detail).map(line => <li key={line}>{line}</li>)}
-              </ul>
-            </Row>
+            {needsSummary(detail).length > 0 && (
+              <Row label="Needs">
+                <ul style={{ margin: 0, paddingLeft: 14 }}>
+                  {needsSummary(detail).map(line => <li key={line}>{line}</li>)}
+                </ul>
+              </Row>
+            )}
             {security && (
               <Row label="Security">
                 <span style={{ color: toneColor(security.tone) }}>{security.text}</span>
                 {detail.security?.summary && <span style={{ color: 'var(--text-secondary)' }}> · {detail.security.summary}</span>}
+                {detail.security?.auditUrl && /^https:\/\//.test(detail.security.auditUrl) && (
+                  <a href={detail.security.auditUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 ml-1" style={{ color: 'var(--accent)' }}>
+                    Security audit <ExternalLink size={10} />
+                  </a>
+                )}
               </Row>
             )}
             {tooNew && detail.compatibility?.minGatewayVersion && (

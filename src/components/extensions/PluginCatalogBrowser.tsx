@@ -84,7 +84,7 @@ export function PluginCatalogBrowser({ onClose, onManage, onOpenChat }: {
   const selectedFromDetail = usePluginCatalogStore(s => (selectedId ? s.details[selectedId]?.plugin : undefined))
   const selected = items.find(e => e.id === selectedId) ?? selectedFromDetail ?? null
   const searching = !!catalogQuery.trim()
-  const remoteLine = summariseRemoteError(remoteError ?? undefined)
+  const remoteLine = summariseRemoteError(remoteError ?? undefined, items.length)
   const showList = !narrow || !selected
 
   const onCardAction = (entry: DiscoveryEntry) => {
@@ -176,7 +176,7 @@ export function PluginCatalogBrowser({ onClose, onManage, onOpenChat }: {
                 </div>
               )}
               {listState === 'ready' && items.length === 0 && (
-                <EmptyState icon={Puzzle} label={searching ? `Nothing matches “${catalogQuery.trim()}”.` : remoteLine && (intent === 'featured' || intent === 'trending') ? remoteLine : 'No plugins match this view.'} />
+                <EmptyState icon={Puzzle} label={searching ? `Nothing matches “${catalogQuery.trim()}”.` : remoteLine ?? 'No plugins match this view.'} />
               )}
               {listState === 'ready' && items.length > 0 && (
                 <div role="list" className="flex flex-col gap-2" onKeyDown={arrowNav('ArrowUp', 'ArrowDown')}>

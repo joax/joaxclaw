@@ -474,7 +474,10 @@ export const usePluginCatalogStore = create<PluginCatalogState>((set, get) => {
         if (seq !== viewSeq) return
         const seen = new Set(get().items.map(e => e.id))
         const more = (Array.isArray(res?.items) ? res.items : []).filter(e => !seen.has(e.id))
-        set(s => ({ items: [...s.items, ...more], nextCursor: res?.nextCursor ?? null, loadingMore: false }))
+        // When ClawHub fails on a page, the gateway echoes the cursor it was sent. Paging on
+        // it would ask for the same page forever, so that ends the list.
+        const next = res?.nextCursor && res.nextCursor !== nextCursor ? res.nextCursor : null
+        set(s => ({ items: [...s.items, ...more], nextCursor: next, loadingMore: false, ...(res?.remoteError ? { remoteError: res.remoteError } : {}) }))
       } catch (e) {
         if (seq !== viewSeq) return
         set({ loadingMore: false, listError: errText(e) })
