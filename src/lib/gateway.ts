@@ -143,6 +143,8 @@ export class GatewayClient {
   serverVersion?: string
   /** Increments on every successful handshake, so per-connection subscriptions can tell a reconnect happened. */
   connectionSeq = 0
+  /** hello-ok's `server.bootId`: new on every gateway process start, so it tells a restart from a network blip. */
+  bootId?: string
   // Multiple views observe the connection log (the connect screen and the
   // Gateway → Connection log panel), so this is a subscriber set rather than a
   // single callback — otherwise the last mounter clobbers the others.
@@ -350,6 +352,8 @@ export class GatewayClient {
       this.connectionSeq++
       const version = (res as { server?: { version?: unknown } } | undefined)?.server?.version
       this.serverVersion = typeof version === 'string' ? version : undefined
+      const bootId = (res as { server?: { bootId?: unknown } } | undefined)?.server?.bootId
+      this.bootId = typeof bootId === 'string' ? bootId : undefined
       this.policy = res?.policy
       const advertised = res?.features?.methods?.length ?? 0
       if (advertised) this._addLog('info', `Gateway advertises ${advertised} methods${res?.policy?.attachments?.maxBytes ? `, attachments up to ${Math.round(res.policy.attachments.maxBytes / 1048576)}MB` : ''}.`)
