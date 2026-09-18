@@ -460,8 +460,12 @@ interface ChatState {
    * optimistic messages removed, when the gateway refuses the start.
    */
   sendGoalStart: (convId: string, op: { objective: string; opId: string; issuedAtMs: number }) => Promise<Record<string, unknown>>
-  /** Attach a live stream for a turn a goal action starts (Resume). Returns an undo for when the action fails. */
-  beginGoalTurn: (convId: string) => () => void
+  /**
+   * Attach a live stream for a turn a goal action starts (Resume). Returns an undo for when
+   * the action fails: `definite` (the gateway refused it) always removes the placeholder;
+   * otherwise it's kept if the turn produced output after all.
+   */
+  beginGoalTurn: (convId: string) => (definite?: boolean) => void
 }
 
 function makeTitle(text: string): string {
@@ -1259,7 +1263,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   // Goals (PRD 04). A goal start is a chat.send with an intent, and the gateway refuses
   // any per-request override on it (thinking, attachments, timeout), so it can't share
-  // sendMessage's payload. It shares the session creation and the stream instead.
+  // sendMessage's payload. It shares the session creation and the stream instead. It has
+  // no init-conflict retry either: that path sends a fresh idempotency key per attempt,
+  // and a goal start's key is its operation id, which a retry must reuse unchanged.
   async sendGoalStart(convId, { objective, opId, issuedAtMs }) {
     let conv = get().conversations.find(c => c.id === convId)
     if (!conv) throw new Error('This chat is no longer open.')
@@ -1274,9 +1280,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
       conv = { ...conv, sessionKey: key }
     }
     // The goal's turns run at the session's level, so the level shown in the header is
-    // saved there first. A failure here isn't worth refusing the goal over.
+    // saved there first. Patching thinkingLevel needs operator.admin, so a write-only
+    // token starts the goal at the session's current level; a failure isn't worth
+    // refusing the goal over either.
     const thinking = thinkingForSend(conv)
-    if (thinking) await gatewayClient.request('sessions.patch', { key, thinkingLevel: thinking }).catch(() => {})
+    if (thinking && useConnectionStore.getState().grantedScopes.includes('operator.admin')) {
+      await gatewayClient.request('sessions.patch', { key, thinkingLevel: thinking }).catch(() => {})
+    }
 
     // One bubble per operation: a retry reuses the operation id and must not add another.
     const userId = `goal:${opId}`
@@ -1296,9 +1306,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
     try {
       return await gatewayClient.request<Record<string, unknown>>('chat.send', buildStartParams(key, objective, opId, issuedAtMs))
     } catch (err) {
-      // The gateway didn't take the goal, so neither the objective nor a reply is coming.
-      undoTurn()
-      set(s => ({ conversations: s.conversations.map(c => c.id !== convId ? c : { ...c, messages: c.messages.filter(m => m.id !== userId) }) }))
+      // A refusal means neither the objective nor a reply is coming. An unanswered request
+      // may have started the turn, in which case its output keeps both.
+      const definite = !!(err && typeof err === 'object' && 'gatewayError' in err)
+      undoTurn(definite)
+      const turnLive = !definite && [...(get().conversations.find(c => c.id === convId)?.messages ?? [])].reverse()
+        .some(m => m.role === 'assistant' && hasProduced(m))
+      if (!turnLive) set(s => ({ conversations: s.conversations.map(c => c.id !== convId ? c : { ...c, messages: c.messages.filter(m => m.id !== userId) }) }))
       throw err
     }
   },
@@ -1316,9 +1330,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
       conversations: s.conversations.map(c => c.id !== convId ? c : { ...c, messages: c.messages.map(m => m.id === msgId ? updater(m) : m) }),
     }))
     attachChatStream(convId, conv.sessionKey, update)
-    return () => {
+    return (definite = false) => {
       const msg = get().conversations.find(c => c.id === convId)?.messages.find(m => m.id === msgId)
-      if (msg && hasProduced(msg)) return   // the turn did start after all; keep it
+      if (!definite && msg && hasProduced(msg)) return   // the turn did start after all; keep it
       const entry = activeStreams.get(convId)
       if (entry) { activeStreams.delete(convId); entry.unsub() }
       set(s => ({ conversations: s.conversations.map(c => c.id !== convId ? c : { ...c, messages: c.messages.filter(m => m.id !== msgId) }) }))
