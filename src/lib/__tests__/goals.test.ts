@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   parseGoal, goalView, formatElapsed, availableActions, buildStartParams, buildUpdateParams,
   buildClearParams, classifyGoalError, validateObjective, eligibleSessionKey, shouldApplyGoal,
-  resumeActionFor, isOpenGoal, type SessionGoal,
+  resumeActionFor, isOpenGoal, goalErrorPolicy, type SessionGoal,
 } from '../goals'
 
 // A chat's goal lives on the gateway session row; lib/goals reads it loosely and builds
@@ -260,5 +260,30 @@ describe('isOpenGoal', () => {
     expect(isOpenGoal(goal({ status: 'paused' }))).toBe(true)
     expect(isOpenGoal(goal({ status: 'complete' }))).toBe(false)
     expect(isOpenGoal(null)).toBe(false)
+  })
+})
+
+describe('goalErrorPolicy', () => {
+  const fresh = { admitting: false, conflict: false }
+
+  it('resends a request the gateway is still admitting, once', () => {
+    expect(goalErrorPolicy('admitting', fresh).next).toBe('resend')
+    expect(goalErrorPolicy('admitting', { ...fresh, admitting: true })).toMatchObject({ next: 'stop', retryable: true })
+  })
+
+  it('gives a conflicting operation a new id, once', () => {
+    expect(goalErrorPolicy('conflict', fresh).next).toBe('reissue')
+    expect(goalErrorPolicy('conflict', { ...fresh, conflict: true })).toMatchObject({ next: 'stop', retryable: false })
+  })
+
+  it('keeps a request that may never have arrived for an unchanged Retry', () => {
+    expect(goalErrorPolicy('network', fresh)).toEqual({ next: 'stop', refresh: false, retryable: true })
+    expect(goalErrorPolicy('generic', fresh).retryable).toBe(true)
+  })
+
+  it('drops a definite refusal, and re-reads the row when the goal changed elsewhere', () => {
+    expect(goalErrorPolicy('busy', fresh)).toEqual({ next: 'stop', refresh: false, retryable: false })
+    expect(goalErrorPolicy('ineligible', fresh).retryable).toBe(false)
+    expect(goalErrorPolicy('rebound', fresh)).toEqual({ next: 'stop', refresh: true, retryable: false })
   })
 })

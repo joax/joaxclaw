@@ -284,6 +284,32 @@ export function classifyGoalError(err: unknown): GoalErrorClass {
   return 'generic'
 }
 
+export interface GoalErrorPolicy {
+  /** resend: the same request again; reissue: a new operation id; stop: show the error. */
+  next: 'resend' | 'reissue' | 'stop'
+  /** Re-read the session row: the goal changed somewhere else. */
+  refresh: boolean
+  /** Offer Retry, which resends the failed request unchanged (same id and time). */
+  retryable: boolean
+}
+
+/**
+ * What to do after a failed goal operation. Two failures retry once on their own: a
+ * request still being admitted is resent as is, and an id already used for a different
+ * request gets a new one (it's a new intent). A request that may never have reached the
+ * gateway keeps its id for Retry, so a replay can't apply it twice; a definite refusal
+ * (busy, ineligible, changed elsewhere) drops it.
+ */
+export function goalErrorPolicy(cls: GoalErrorClass, retried: { admitting: boolean; conflict: boolean }): GoalErrorPolicy {
+  if (cls === 'admitting' && !retried.admitting) return { next: 'resend', refresh: false, retryable: true }
+  if (cls === 'conflict' && !retried.conflict) return { next: 'reissue', refresh: false, retryable: false }
+  return {
+    next: 'stop',
+    refresh: cls === 'rebound',
+    retryable: cls === 'network' || cls === 'generic' || cls === 'admitting',
+  }
+}
+
 /** Keys the gateway refuses goals on: sub-agents, cron runs, heartbeats, ACP and the global session. */
 export function eligibleSessionKey(key: string): boolean {
   if (!key) return true   // a new chat: a session is created on start
