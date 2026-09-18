@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parseJobId, collectJobRefs, jobRefsForSession, type ScriptJob } from '../scriptJobs'
+import { parseJobId, collectJobRefs, jobsForSession, type ScriptJob } from '../scriptJobs'
 import type { ChatMessage, ToolCall } from '../types'
 
 describe('parseJobId', () => {
@@ -67,7 +67,7 @@ describe('collectJobRefs', () => {
     expect(refs).toEqual([{ jobId: id(1), command: './build.sh' }])
   })
 
-  it('recovers a session\'s running jobs from the host list', () => {
+  it('recovers a session\'s jobs from the host list', () => {
     const job = (over: Partial<ScriptJob>): ScriptJob =>
       ({ id: id(1), command: './build.sh', running: true, done: false, exitCode: null, startedAt: 0, finishedAt: null, elapsedMs: 0, ...over })
 
@@ -77,7 +77,10 @@ describe('collectJobRefs', () => {
       job({ id: id(3), sessionKey: 'main:chat', running: false, done: true }),      // already finished
       job({ id: id(4) }),                                                           // pre-0.11.5 plugin
     ]
-    expect(jobRefsForSession(jobs, 'main:chat')).toEqual([{ jobId: id(1), command: './build.sh' }])
+    expect(jobsForSession(jobs, 'main:chat', new Set()).map(j => j.id)).toEqual([id(1), id(3)])
+    // The transcript names a job from an old plugin that recorded no session.
+    expect(jobsForSession(jobs, 'main:chat', new Set([id(4)])).map(j => j.id)).toEqual([id(1), id(3), id(4)])
+    expect(jobsForSession(jobs, undefined, new Set())).toEqual([])
   })
 
   it('tolerates unparseable args and messages with no tool calls', () => {
