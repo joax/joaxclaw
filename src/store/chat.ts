@@ -3,6 +3,7 @@ import { nanoid } from '../lib/nanoid'
 import type { Conversation, ChatMessage, ContextOverflowInfo, ToolCall, SubThread, MediaAttachment, ThinkingLevel } from '../lib/types'
 import { gatewayClient } from '../lib/gateway'
 import { decideIngest } from '../lib/sessionMessageIngest'
+import { extractToolCalls, toolResultUpdate, applyToolResults, mergeFinalToolCalls, historyMessageId, type ToolResultUpdate } from '../lib/historyMessages'
 import { describeRunFailure } from '../lib/gatewayPolicy'
 import { agentIdFromSessionKey as agentIdFromKey } from '../lib/sessionName'
 import { hasProduced } from '../lib/streamStatus'
@@ -343,7 +344,7 @@ function attachChatStream(
     } else if (p.state === 'final') {
       const finalText = extractText(p.message)
       const finalReasoning = extractReasoning(p.message)
-      const finalToolCalls = extractToolCalls(p.message)
+      const finalToolCalls = extractToolCalls(p.message, pluginIdFor)
       const finalAttachments = extractAttachments(p.message)
       const finalModel = extractModel(p.message) ?? (p as Record<string, unknown>).model as string | undefined
       // This gateway ends the agent's run with an EMPTY `final` at a sessions_yield (the
@@ -363,7 +364,8 @@ function attachChatStream(
           ...(finalReasoning ? { reasoning: finalReasoning } : {}),
           // Freeze reasoning duration if the answer arrived only at final (no streamed deltas).
           ...((finalReasoning || m.reasoning) && m.reasoningStartedAt && !m.reasoningDurationMs ? { reasoningDurationMs: Date.now() - m.reasoningStartedAt } : {}),
-          ...(finalToolCalls.length ? { toolCalls: finalToolCalls } : {}),
+          // Merge, never replace: the live calls carry results the final message lacks.
+          ...(finalToolCalls.length ? { toolCalls: mergeFinalToolCalls(m.toolCalls, finalToolCalls) } : {}),
           ...(finalAttachments.length ? { attachments: finalAttachments } : {}),
           ...(finalModel ? { model: finalModel } : {}),
           streaming: false,
@@ -556,26 +558,21 @@ function extractAttachments(msg: unknown): MediaAttachment[] {
   return result
 }
 
-function extractToolCalls(msg: unknown): ToolCall[] {
-  if (!msg || typeof msg !== 'object') return []
-  const m = msg as Record<string, unknown>
-  if (!Array.isArray(m.content)) return []
-  const blocks = m.content as Record<string, unknown>[]
-  return blocks
-    .filter(b => b && typeof b === 'object' && b['type'] === 'tool_use')
-    .map(b => ({
-      id: String(b['id'] ?? nanoid()),
-      name: String(b['name'] ?? 'unknown'),
-      args: b['input'] !== undefined ? JSON.stringify(b['input']) : undefined,
-      status: 'done' as const
-    }))
-}
+// Which plugin a tool belongs to, as the live path tags it (see lib/historyMessages.ts).
+const pluginIdFor = (toolName: string) => useExtensionsStore.getState().toolNameMap.get(toolName)
+
+// chat.history's default is 200 entries, so a long chat opened truncated. 500 covers most
+// chats in one read; export pages through the rest (docs/prd/05-chat-export.md).
+const HISTORY_LIMIT = 500
 
 // chat.history entries, and the message in a session.message event (same shape), as the
-// app's messages. Tool results and system entries are dropped, and so is an assistant
+// app's messages. Tool results are attached to the calls they answer; system entries are
+// dropped, and so is an assistant
 // entry with nothing to show (a bare unclosed <think>).
 function toChatMessages(raw: unknown[], sessionKey: string): ChatMessage[] {
-  return raw
+  // Results arrive as their own `toolResult` rows; they're attached to their calls below.
+  const results = raw.map(toolResultUpdate).filter((u): u is ToolResultUpdate => u !== null)
+  const messages = raw
     .filter((m): m is Record<string, unknown> => !!m && typeof m === 'object')
     .filter(m => {
       const role = m['role'] as string
@@ -583,13 +580,14 @@ function toChatMessages(raw: unknown[], sessionKey: string): ChatMessage[] {
     })
     .map(m => {
       const atts = extractAttachments(m)
+      const toolCalls = extractToolCalls(m, pluginIdFor)
       return {
-        id: (m['id'] as string | undefined) ?? nanoid(),
+        id: historyMessageId(m) ?? nanoid(),
         sessionId: sessionKey,
         role: m['role'] as 'user' | 'assistant',
         content: extractText(m),
         reasoning: extractReasoning(m) || undefined,
-        toolCalls: extractToolCalls(m).length ? extractToolCalls(m) : undefined,
+        toolCalls: toolCalls.length ? toolCalls : undefined,
         attachments: atts.length ? atts : undefined,
         model: extractModel(m),
         createdAt: typeof m['timestamp'] === 'number'
@@ -610,6 +608,7 @@ function toChatMessages(raw: unknown[], sessionKey: string): ChatMessage[] {
         .trim()
       return bare !== ''
     })
+  return applyToolResults(messages, results)
 }
 
 // On reload, the sub-agent "threads" (session yields) are NOT in the parent's
@@ -633,12 +632,15 @@ async function reconstructSubThreads(parentKey: string): Promise<SubThread[]> {
       const st = r['status']
       const running = r['hasActiveRun'] === true || (typeof st === 'string' && !TERMINAL.has(st) && st !== '')
       try {
-        const h = await gatewayClient.request<{ messages: unknown[] }>('chat.history', { sessionKey: key })
+        const h = await gatewayClient.request<{ messages: unknown[] }>('chat.history', { sessionKey: key, limit: HISTORY_LIMIT })
         const msgs = (h.messages ?? []).filter((m): m is Record<string, unknown> => !!m && typeof m === 'object')
         const asst = msgs.filter(m => m['role'] === 'assistant')
         const content = asst.map(extractText).filter(Boolean).join('\n\n')
         const reasoning = asst.map(extractReasoning).filter(Boolean).join('\n') || undefined
-        const toolCalls = asst.flatMap(extractToolCalls).filter(tc => tc.name !== 'sessions_spawn')
+        const toolCalls = toChatMessages(msgs, key)
+          .filter(m => m.role === 'assistant')
+          .flatMap(m => m.toolCalls ?? [])
+          .filter(tc => tc.name !== 'sessions_spawn')
         // Drop only truly-empty finished children; keep running ones so pending yields show.
         if (!running && !content && !reasoning && !toolCalls.length) return null
         // The sub-agent's brief = its first user message; makes a far better label than the
@@ -1184,7 +1186,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
 
     try {
-      const history = await gatewayClient.request<{ messages: unknown[] }>('chat.history', { sessionKey })
+      const history = await gatewayClient.request<{ messages: unknown[] }>('chat.history', { sessionKey, limit: HISTORY_LIMIT })
       const messages = toChatMessages(history.messages ?? [], sessionKey)
 
       // The conversation was already selected above; fill in its history and clear the
@@ -1228,6 +1230,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
     if (!p || typeof p.sessionKey !== 'string' || !p.message || typeof p.message !== 'object') return
     const sessionKey = p.sessionKey
     const conv = get().conversations.find(c => c.sessionKey === sessionKey)
+    // A tool result is its own transcript entry: attach it to the call it answers.
+    const result = toolResultUpdate(p.message)
+    if (result) {
+      if (conv) set(s => ({ conversations: s.conversations.map(c => c.id === conv.id ? { ...c, messages: applyToolResults(c.messages, [result]) } : c) }))
+      return
+    }
     const [mapped] = toChatMessages([p.message], sessionKey)
     // The gateway's own id, so the same entry arriving twice is recognised.
     const incoming = mapped && typeof p.messageId === 'string' ? { ...mapped, id: p.messageId } : mapped
