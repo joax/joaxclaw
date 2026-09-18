@@ -2,8 +2,10 @@ import { create } from 'zustand'
 import { gatewayClient } from '../lib/gateway'
 import { stopJob } from '../lib/scriptJobs'
 import { useConnectionStore } from './connection'
+import { useFilesStore } from './files'
 import {
-  parseTask, parseTaskList, mergeTask, isActive, addHidden, readGatewayError, isTaskGone, cancelMessage, recoveryMessage,
+  parseTask, parseTaskList, mergeTask, isActive, addHidden, readGatewayError, isTaskGone, isStaleCursor,
+  cancelMessage, recoveryMessage,
   ACTIVE_STATUSES, FINISHED_STATUSES, type TaskSummary, type BackgroundItem,
 } from '../lib/tasks'
 
@@ -35,6 +37,10 @@ export interface TaskDrawerState {
   mode: 'list' | 'detail'
   taskId?: string
   jobId?: string
+  /** Detail opened from the list, so ← goes back to it. */
+  fromList?: boolean
+  /** Taking the whole content area, as an expanded file does. */
+  expanded?: boolean
 }
 
 interface TasksState {
@@ -45,6 +51,11 @@ interface TasksState {
   loaded: boolean
   /** The last list failure, for the drawer's list mode. The strip keeps its data. */
   error: string | null
+  /** Where "Load more" continues the finished list from, when there is more. */
+  recentCursor?: string
+  loadingMore: boolean
+  /** Tasks the gateway no longer has (deleted, or past retention). */
+  gone: Record<string, true>
   /** Per session key, the rows closed with ×. Persisted. */
   hidden: Record<string, string[]>
   /** In-flight row actions, by item key (`task:<id>` / `script:<jobId>`). */
@@ -57,6 +68,10 @@ interface TasksState {
   start: () => void
   loadGlobal: () => Promise<void>
   loadSession: (sessionKey: string) => Promise<void>
+  /** The next page of finished tasks, for the drawer's list mode. */
+  loadMore: () => Promise<void>
+  /** One task with its prompt and result (`tasks.get`), for the drawer. */
+  loadTask: (taskId: string) => Promise<void>
   ingest: (payload: unknown) => void
   /** A view showing tasks; enables the fallback poll on gateways without the `task` event. */
   watch: (sessionKey?: string) => () => void
@@ -70,6 +85,7 @@ interface TasksState {
   openDrawer: (taskId: string) => void
   openJob: (jobId: string) => void
   openList: () => void
+  toggleExpanded: () => void
   closeDrawer: () => void
 }
 
@@ -104,8 +120,8 @@ async function listTasks(params: Record<string, unknown>) {
 }
 
 /** Finished tasks, newest end first. `sortBy` is 2026.8+; the schema is closed, so older gateways reject it. */
-async function listRecent() {
-  const params = { status: FINISHED_STATUSES, limit: RECENT_LIMIT }
+async function listRecent(cursor?: string) {
+  const params = { status: FINISHED_STATUSES, limit: RECENT_LIMIT, ...(cursor ? { cursor } : {}) }
   try {
     return await listTasks({ ...params, sortBy: 'endedAt' })
   } catch (e) {
@@ -125,6 +141,12 @@ const watchers = new Map<string, number>()
 
 const canList = () => gatewayClient.connected && gatewayClient.hasMethod('tasks.list')
 
+// The Files drawer and the task drawer share the right-hand slot: opening one closes the other.
+const closeFiles = () => {
+  const files = useFilesStore.getState()
+  if (files.open) files.closeDrawer()
+}
+
 export const useTasksStore = create<TasksState>((set, get) => {
   const merge = (tasks: TaskSummary[]) => {
     if (!tasks.length) return
@@ -136,12 +158,11 @@ export const useTasksStore = create<TasksState>((set, get) => {
   }
 
   const remove = (taskId: string) => set(s => {
-    if (!s.byId[taskId]) return s
     const byId = { ...s.byId }
     delete byId[taskId]
     const sessionIndex: Record<string, string[]> = {}
     for (const [k, ids] of Object.entries(s.sessionIndex)) sessionIndex[k] = ids.filter(id => id !== taskId)
-    return { byId, sessionIndex }
+    return { byId, sessionIndex, gone: { ...s.gone, [taskId]: true as const } }
   })
 
   const listen = () => {
@@ -204,6 +225,7 @@ export const useTasksStore = create<TasksState>((set, get) => {
 
   // One task, read directly: `tasks.get` also carries prompt and result.
   const refreshOne = async (taskId: string) => {
+    if (!gatewayClient.connected) return
     try {
       const res = await gatewayClient.request<{ task?: unknown }>('tasks.get', { taskId })
       const t = parseTask(res?.task)
@@ -218,6 +240,8 @@ export const useTasksStore = create<TasksState>((set, get) => {
     sessionIndex: {},
     loaded: false,
     error: null,
+    loadingMore: false,
+    gone: {},
     hidden: readHidden(),
     pending: {},
     actionError: {},
@@ -230,7 +254,7 @@ export const useTasksStore = create<TasksState>((set, get) => {
       const url = useConnectionStore.getState().connection?.url
       if (url !== connectedUrl) {
         connectedUrl = url
-        set({ byId: {}, sessionIndex: {}, loaded: false, error: null, pending: {}, actionError: {} })
+        set({ byId: {}, sessionIndex: {}, loaded: false, error: null, pending: {}, actionError: {}, recentCursor: undefined, gone: {} })
       }
       // A reconnect starts from what the gateway says now: it sends no catch-up.
       lastGlobalAt = 0
@@ -249,7 +273,7 @@ export const useTasksStore = create<TasksState>((set, get) => {
         ])
         if (id !== globalSeq) return
         merge([...active.tasks, ...recent.tasks])
-        set({ loaded: true, error: null })
+        set({ loaded: true, error: null, recentCursor: recent.nextCursor })
         // A task we still think is running but that is in neither list finished (or went)
         // while an event was dropped. Ask about each directly; there are only ever a few.
         const seen = new Set([...active.tasks, ...recent.tasks].map(t => t.id))
@@ -275,6 +299,26 @@ export const useTasksStore = create<TasksState>((set, get) => {
         // A token without operator.read, or a transient failure: the strip keeps what it had.
       }
     },
+
+    async loadMore() {
+      const { recentCursor, loadingMore } = get()
+      if (!recentCursor || loadingMore || !canList()) return
+      set({ loadingMore: true })
+      try {
+        const page = await listRecent(recentCursor)
+        merge(page.tasks)
+        set({ recentCursor: page.nextCursor, loadingMore: false })
+      } catch (e) {
+        set({ loadingMore: false })
+        const err = readGatewayError(e)
+        // Any change to the registry invalidates a tasks.list cursor. Start the list over,
+        // quietly: the rows already shown stay, and the next "Load more" continues from there.
+        if (isStaleCursor(err)) void get().loadGlobal()
+        else set({ error: err.message })
+      }
+    },
+
+    loadTask: taskId => refreshOne(taskId),
 
     ingest(payload) {
       const p = payload as { action?: unknown; task?: unknown; taskId?: unknown } | undefined
@@ -346,9 +390,24 @@ export const useTasksStore = create<TasksState>((set, get) => {
       })
     },
 
-    openDrawer: taskId => set({ drawer: { open: true, mode: 'detail', taskId } }),
-    openJob: jobId => set({ drawer: { open: true, mode: 'detail', jobId } }),
-    openList: () => set({ drawer: { open: true, mode: 'list' } }),
-    closeDrawer: () => set(s => ({ drawer: { ...s.drawer, open: false } })),
+    openDrawer: taskId => {
+      closeFiles()
+      set(s => ({ drawer: { open: true, mode: 'detail', taskId, fromList: s.drawer.open && s.drawer.mode === 'list', expanded: s.drawer.open && s.drawer.expanded } }))
+      void refreshOne(taskId)
+    },
+    openJob: jobId => {
+      closeFiles()
+      set(s => ({ drawer: { open: true, mode: 'detail', jobId, fromList: s.drawer.open && s.drawer.mode === 'list', expanded: s.drawer.open && s.drawer.expanded } }))
+    },
+    openList: () => {
+      closeFiles()
+      set(s => ({ drawer: { open: true, mode: 'list', expanded: s.drawer.open && s.drawer.expanded } }))
+    },
+    toggleExpanded: () => set(s => ({ drawer: { ...s.drawer, expanded: !s.drawer.expanded } })),
+    closeDrawer: () => set(s => ({ drawer: { ...s.drawer, open: false, expanded: false } })),
   }
+})
+
+useFilesStore.subscribe((s, prev) => {
+  if (s.open && !prev.open && useTasksStore.getState().drawer.open) useTasksStore.getState().closeDrawer()
 })

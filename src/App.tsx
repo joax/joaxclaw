@@ -27,6 +27,7 @@ import { ApprovalsBanner } from './components/layout/ApprovalsBanner'
 import { WelcomeModal } from './components/layout/WelcomeModal'
 import { BottomNav } from './components/layout/BottomNav'
 import { FileDrawer } from './components/files/FileDrawer'
+import { TaskDrawer } from './components/tasks/TaskDrawer'
 import { PanelErrorBoundary } from './components/common/PanelErrorBoundary'
 import { useIsNarrow } from './lib/useIsNarrow'
 import { useNotificationsWatcher } from './lib/useNotificationsWatcher'
@@ -55,6 +56,7 @@ export default function App() {
   const narrow = useIsNarrow()
   // An expanded file takes over the content area (the drawer is a sibling of <main>).
   const filesExpanded = useFilesStore(s => s.open && s.expanded)
+  const tasksExpanded = useTasksStore(s => s.drawer.open && !!s.drawer.expanded)
   useNotificationsWatcher()
   const { status, connection, reconnecting } = useConnectionStore()
   const { start: startMetrics, stop: stopMetrics } = useMetricsStore()
@@ -218,7 +220,7 @@ export default function App() {
             content area rather than covering the chat with an overlay. */}
         <main
           className="flex-1 min-w-0 flex flex-col relative"
-          style={{ background: 'var(--bg-primary)', ...(filesExpanded ? { display: 'none' } : {}) }}
+          style={{ background: 'var(--bg-primary)', ...(filesExpanded || (tasksExpanded && !narrow) ? { display: 'none' } : {}) }}
         >
           <ThemeBackground slot="app" />
           <div className="relative z-[1] flex-1 min-w-0 min-h-0 flex flex-col">
@@ -248,6 +250,11 @@ export default function App() {
         {!showConnect && !reconnecting && (
           <PanelErrorBoundary label="Files">
             <FileDrawer onOpenChat={() => setSection('chat')} />
+          </PanelErrorBoundary>
+        )}
+        {!showConnect && !reconnecting && (
+          <PanelErrorBoundary label="Background tasks">
+            <TaskDrawer onOpenChat={() => setSection('chat')} />
           </PanelErrorBoundary>
         )}
       </div>
