@@ -171,6 +171,254 @@ export function trustLabel(pkg: PluginSearchPackage): string {
   return 'Community'
 }
 
+// ── The catalog (plugins.catalog.*, OpenClaw 2026.9) ─────────────────────────────
+//
+// Browsing used to be one ClawHub search box. 2026.9 has a real catalog: bundled and
+// ClawHub plugins together, featured/trending/official lists, categories, and — the part
+// search never had — each entry's state on THIS gateway (`local`), so a card can say
+// Installed or Needs setup instead of guessing from the extensions list.
+//
+// Shapes are from the gateway's protocol schema (packages/gateway-protocol/src/schema/
+// plugins.ts). All objects are closed.
+
+export type CatalogIntent = 'featured' | 'trending' | 'official' | 'bundled' | 'all'
+
+export interface CatalogCategory {
+  slug: string
+  label: string
+  description: string
+  icon: string
+  order: number
+}
+
+export type LocalState = 'enabled' | 'disabled' | 'needs-setup' | 'not-installed' | 'error'
+
+export type CatalogInstallAction =
+  | { source: 'clawhub'; packageName: string }
+  | { source: 'official'; pluginId: string }
+
+export interface DiscoveryEntry {
+  /** `ch_…` for ClawHub, `local_…` for bundled/installed-only. What `plugins.catalog.get` takes. */
+  id: string
+  catalog: {
+    name: string
+    packageName?: string
+    summary?: string
+    family?: 'code-plugin' | 'bundle-plugin'
+    author?: string
+    official: boolean
+    categories: string[]
+    icon?: string
+    imageUrl?: string
+    latestVersion?: string
+    downloads?: number
+    installs?: number
+    verificationTier?: string
+    publishedToClawHub?: boolean
+  }
+  local: {
+    present: boolean
+    installed: boolean
+    enabled: boolean
+    state: LocalState
+    pluginId?: string
+    install?: CatalogInstallAction
+    action: 'install' | 'manage' | 'unavailable'
+  }
+}
+
+export interface DiscoveryDetail {
+  origin: 'clawhub' | 'local'
+  packageName?: string
+  /** An object here, unlike the entry's plain `catalog.author` string. */
+  author?: { handle?: string; displayName?: string; imageUrl?: string }
+  topics: string[]
+  createdAt?: number
+  updatedAt?: number
+  readme?: string
+  compatibility?: { pluginApiRange?: string; builtWithOpenClawVersion?: string; pluginSdkVersion?: string; minGatewayVersion?: string }
+  configuration: { name: string; description?: string; required: boolean; sensitive: boolean }[]
+  mcpServers: string[]
+  skills: { name: string; description?: string }[]
+  versions: { version: string; createdAt: number; changelog: string; tags: string[] }[]
+  verification?: { tier: string; summary?: string; scanStatus?: string }
+  security?: { status: string; auditUrl?: string; verdict?: string; summary?: string; guidance?: string; checkedAt?: number }
+}
+
+export interface BrowseResult {
+  items: DiscoveryEntry[]
+  nextCursor?: string
+  remoteError?: string
+}
+
+/** Browse params for a view. A search can't take a cursor (the gateway refuses the pair). */
+export function browseParams(v: { intent: CatalogIntent; category?: string | null; query?: string; cursor?: string; pageSize?: number }): Record<string, unknown> {
+  const q = v.query?.trim()
+  return {
+    // A search runs across everything: the tab only shapes the unsearched lists.
+    intent: q ? 'all' : v.intent,
+    ...(q ? { query: q.slice(0, 200) } : {}),
+    ...(v.category ? { category: v.category } : {}),
+    ...(!q && v.cursor ? { cursor: v.cursor } : {}),
+    pageSize: v.pageSize ?? 24,
+  }
+}
+
+export type PillTone = 'done' | 'needsYou' | 'failed' | 'neutral'
+
+export interface CardAction {
+  /** The one button a card shows, or none. */
+  kind: 'install' | 'askAdmin' | 'manage' | 'configure' | 'none'
+  label?: string
+  /** The state pill, when the plugin is on this gateway. */
+  pill?: { tone: PillTone; text: string }
+}
+
+/**
+ * The card's state pill and its one button, from the entry's state on this gateway.
+ * Installed states win over the install action: a plugin that's present is managed,
+ * whatever else the catalog says about it.
+ */
+export function cardAction(entry: DiscoveryEntry, opts: { admin: boolean }): CardAction {
+  const l = entry.local
+  if (l.installed && l.state !== 'not-installed') {
+    switch (l.state) {
+      case 'needs-setup': return { kind: 'configure', label: 'Configure', pill: { tone: 'needsYou', text: 'Needs setup' } }
+      case 'disabled': return { kind: 'manage', label: 'Manage', pill: { tone: 'neutral', text: 'Off' } }
+      case 'error': return { kind: 'manage', label: 'Manage', pill: { tone: 'failed', text: 'Error' } }
+      default: return { kind: 'manage', label: 'Manage', pill: { tone: 'done', text: 'Installed' } }
+    }
+  }
+  if (l.action === 'install') return opts.admin ? { kind: 'install', label: 'Install' } : { kind: 'askAdmin', label: 'Ask an admin' }
+  if (l.action === 'manage') return { kind: 'manage', label: 'Manage' }
+  return { kind: 'none' }
+}
+
+/**
+ * Why an entry can't be installed from here. The gateway sends no reason with
+ * `action: "unavailable"`, so it's inferred: a read-only config, or a local-only row with
+ * nothing to install from.
+ */
+export function unavailableReason(entry: DiscoveryEntry, opts: { mutationAllowed: boolean | null }): string {
+  if (opts.mutationAllowed === false) return "This gateway doesn't allow plugin changes from apps. Run this on the gateway host:"
+  if (!entry.local.install) return 'Not available from the catalog.'
+  return "Can't be installed from here."
+}
+
+/** The install target for a catalog entry, at the chosen version (ClawHub only). */
+export function installTargetForEntry(entry: DiscoveryEntry, opts: { version?: string; origin?: string } = {}):
+  { params: InstallParams; displayName: string; pluginId?: string; origin?: string } | null {
+  const install = entry.local.install
+  if (!install) return null
+  const base = { displayName: entry.catalog.name, ...(entry.local.pluginId ? { pluginId: entry.local.pluginId } : {}), ...(opts.origin ? { origin: opts.origin } : {}) }
+  // The official shape is closed and has no `version`: sending one fails the whole call.
+  if (install.source === 'official') return { params: { source: 'official', pluginId: install.pluginId }, ...base }
+  return { params: { source: 'clawhub', packageName: install.packageName, ...(opts.version ? { version: opts.version } : {}) }, ...base }
+}
+
+/** The command to install an entry on the gateway host, for connections that can't. */
+export function hostInstallCommand(entry: DiscoveryEntry): string {
+  const install = entry.local.install
+  if (install?.source === 'clawhub') return `openclaw plugins install clawhub:${install.packageName}`
+  const spec = entry.catalog.packageName ?? (install?.source === 'official' ? install.pluginId : undefined) ?? entry.local.pluginId ?? entry.catalog.name
+  return `openclaw plugins install ${spec}`
+}
+
+/** "Needs" lines for the detail pane, from the plugin's declared configuration. */
+export function needsSummary(detail: Pick<DiscoveryDetail, 'configuration' | 'skills' | 'mcpServers'>): string[] {
+  const required = detail.configuration.filter(f => f.required)
+  const keys = required.filter(f => f.sensitive)
+  const settings = required.filter(f => !f.sensitive)
+  const out: string[] = []
+  if (keys.length) out.push(`${keys.length} API key${keys.length === 1 ? '' : 's'} (${keys.map(f => f.name).join(', ')})`)
+  if (settings.length) out.push(`${settings.length} required setting${settings.length === 1 ? '' : 's'}`)
+  if (!out.length) out.push('Nothing to configure')
+  if (detail.skills.length) out.push(`Adds skills: ${detail.skills.map(s => s.name).join(', ')}`)
+  if (detail.mcpServers.length) out.push(`Starts MCP servers: ${detail.mcpServers.join(', ')}`)
+  return out
+}
+
+/** The amber line for a partial outage. The gateway's own text is long and technical. */
+export function summariseRemoteError(msg: string | undefined): string | null {
+  if (!msg?.trim()) return null
+  if (/^ClawHub is unavailable/i.test(msg.trim()) || /\bClawHub is unavailable\b/i.test(msg)) {
+    return "ClawHub isn't reachable right now. Showing bundled and installed plugins."
+  }
+  return msg.trim()
+}
+
+/**
+ * The plugin's ClawHub page. Built the way the Control UI's "View on ClawHub" link is:
+ * `/{scope or author}/plugins/{name}`, or `/plugins/{package}` when neither is known.
+ */
+export function clawhubUrl(packageName: string | undefined, authorHandle?: string): string | null {
+  if (!packageName) return null
+  const scope = /^@([^/]+)\//.exec(packageName)?.[1]
+  const owner = authorHandle?.replace(/^@+/, '') || scope
+  const name = packageName.split('/').at(-1)
+  return owner && name
+    ? `https://clawhub.ai/${encodeURIComponent(owner)}/plugins/${encodeURIComponent(name)}`
+    : `https://clawhub.ai/plugins/${encodeURIComponent(packageName)}`
+}
+
+/** ClawHub's security verdict as a pane line. */
+export function securityLabel(security: DiscoveryDetail['security']): { tone: PillTone; text: string } | null {
+  if (!security?.status) return null
+  const s = security.status.toLowerCase()
+  if (s === 'clean') {
+    const date = security.checkedAt ? ` · ${new Date(security.checkedAt).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}` : ''
+    return { tone: 'done', text: `Verified clean${date}` }
+  }
+  if (s.includes('malicious') || s.includes('malware') || s.includes('blocked')) return { tone: 'failed', text: 'Blocked by ClawHub' }
+  return { tone: 'needsYou', text: 'Review recommended' }
+}
+
+/** Compact counts, as the Control UI shows them: 950, 3.1k, 12.4k, 1.2m. */
+export function formatCount(n: number): string {
+  if (n < 1000) return String(Math.round(n))
+  if (n < 1_000_000) { const k = n / 1000; return `${k >= 100 ? Math.round(k) : Number(k.toFixed(1))}k` }
+  const m = n / 1_000_000
+  return `${m >= 100 ? Math.round(m) : Number(m.toFixed(1))}m`
+}
+
+/**
+ * Whether the plugin needs a newer gateway than this one. Versions are the gateway's
+ * dated scheme ("2026.9.4"); a range prefix such as ">=" is ignored. Unknown → false.
+ */
+export function needsNewerGateway(minVersion: string | undefined, serverVersion: string | undefined): boolean {
+  const a = versionParts(minVersion), b = versionParts(serverVersion)
+  if (!a || !b) return false
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const x = a[i] ?? 0, y = b[i] ?? 0
+    if (x !== y) return x > y
+  }
+  return false
+}
+function versionParts(v: string | undefined): number[] | null {
+  const m = /(\d+(?:\.\d+)*)/.exec(v ?? '')
+  return m ? m[1].split('.').map(Number) : null
+}
+
+/** The README, cut to a size that renders quickly. The full text is on ClawHub. */
+export const README_RENDER_LIMIT = 64 * 1024
+export function readmeForDisplay(readme: string | undefined): { text: string; truncated: boolean } | null {
+  if (!readme?.trim()) return null
+  return readme.length > README_RENDER_LIMIT
+    ? { text: readme.slice(0, README_RENDER_LIMIT), truncated: true }
+    : { text: readme, truncated: false }
+}
+
+/** "today", "yesterday", "3 days ago", "5 weeks ago", "2 years ago". */
+export function updatedAgo(ms: number, now = Date.now()): string {
+  const days = Math.floor(Math.max(0, now - ms) / 86_400_000)
+  if (days < 1) return 'today'
+  if (days === 1) return 'yesterday'
+  if (days < 14) return `${days} days ago`
+  if (days < 60) return `${Math.floor(days / 7)} weeks ago`
+  if (days < 730) return `${Math.floor(days / 30)} months ago`
+  return `${Math.floor(days / 365)} years ago`
+}
+
 function asRecord(v: unknown): Record<string, unknown> | null {
   return isRecord(v) ? v : null
 }
