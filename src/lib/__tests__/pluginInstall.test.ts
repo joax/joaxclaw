@@ -4,6 +4,12 @@ import {
   officialTarget, readInstallPolicyWarning, readTrustRefusal, restartCompleted, runStatusLine, withAcks,
   type InstallRun,
 } from '../pluginInstall'
+import {
+  INSTALL_ERR_CONSENT, INSTALL_ERR_POLICY, INSTALL_ERR_POLICY_BAD_FINDING, INSTALL_ERR_POLICY_CRITICAL,
+  INSTALL_ERR_POLICY_NO_FINDINGS, INSTALL_ERR_TRUST_BLOCKED, INSTALL_ERR_TRUST_UNAVAILABLE, INSTALL_ERR_PLAIN,
+  INSTALL_ERR_RATE_LIMITED, LIST_AFTER_INSTALL_ERROR, LIST_AFTER_INSTALL_MISSING, LIST_AFTER_INSTALL_NEEDS_SETUP,
+  HELLO_AFTER_RESTART, HELLO_BEFORE_RESTART, HELLO_SAME_BOOT, HELLO_2026_6_5,
+} from './fixtures/sprint/pluginCatalog'
 
 // Error payloads below are shaped as plugins-mutations.ts builds them in OpenClaw 2026.9.4:
 // `errorShape(code, message, { details })`, with details filled in precedence order.
@@ -100,7 +106,7 @@ describe('classifyInstallError', () => {
     expect(classifyInstallError({ details: { clawhubTrustCode: 'clawhub_download_blocked', warning: 'Blocked by scan' } }, 'raw'))
       .toEqual({ kind: 'trust', message: 'Blocked by scan' })
     expect(classifyInstallError({ details: { clawhubTrustCode: 'clawhub_security_unavailable' } }, 'raw'))
-      .toEqual({ kind: 'trust', message: 'raw' })
+      .toEqual({ kind: 'trustUnavailable', message: 'raw' })
   })
   it('tells a dropped connection from a failure', () => {
     expect(classifyInstallError(new Error('Connection closed'), 'Connection closed').kind).toBe('dropped')
@@ -169,5 +175,40 @@ describe('runStatusLine', () => {
     expect(runStatusLine(run({ phase: 'failed', failure: 'restart', message: 'nope' }))?.text)
       .toBe("Installed Slack plugin, but the gateway couldn't restart: nope. Restart it from the Gateway tab.")
     expect(runStatusLine(run({ phase: 'failed', failure: 'trust', message: 'flagged' }))).toEqual({ tone: 'failed', text: 'ClawHub blocked this download: flagged' })
+  })
+})
+
+// The same functions against the real 2026.9.4 payloads captured by QA.
+describe('against gateway fixtures', () => {
+  it('classifies every install refusal by its details', () => {
+    expect(classifyInstallError(INSTALL_ERR_CONSENT, INSTALL_ERR_CONSENT.message).kind).toBe('consent')
+    expect(classifyInstallError(INSTALL_ERR_POLICY, INSTALL_ERR_POLICY.message).kind).toBe('policy')
+    expect(classifyInstallError(INSTALL_ERR_TRUST_BLOCKED, INSTALL_ERR_TRUST_BLOCKED.message))
+      .toEqual({ kind: 'trust', message: (INSTALL_ERR_TRUST_BLOCKED.details as { warning: string }).warning })
+    expect(classifyInstallError(INSTALL_ERR_TRUST_UNAVAILABLE, INSTALL_ERR_TRUST_UNAVAILABLE.message).kind).toBe('trustUnavailable')
+    expect(classifyInstallError(INSTALL_ERR_PLAIN, INSTALL_ERR_PLAIN.message)).toEqual({ kind: 'error', message: INSTALL_ERR_PLAIN.message })
+    expect(classifyInstallError(INSTALL_ERR_RATE_LIMITED, INSTALL_ERR_RATE_LIMITED.message).kind).toBe('error')
+  })
+  it('reads the policy variants', () => {
+    expect(readInstallPolicyWarning(INSTALL_ERR_POLICY)?.findings).toHaveLength(2)
+    expect(hasCriticalFinding(readInstallPolicyWarning(INSTALL_ERR_POLICY_CRITICAL))).toBe(true)
+    expect(readInstallPolicyWarning(INSTALL_ERR_POLICY_NO_FINDINGS)?.findings).toEqual([])
+    expect(readInstallPolicyWarning(INSTALL_ERR_POLICY_BAD_FINDING)?.findings.map(f => f.ruleId)).toEqual(['scripts.postinstall'])
+  })
+  it('resolves the outcome from the list after the restart', () => {
+    expect(installedOutcome(LIST_AFTER_INSTALL_NEEDS_SETUP, 'issue-tracker')).toEqual({ outcome: 'needs-setup' })
+    expect(installedOutcome(LIST_AFTER_INSTALL_ERROR, 'issue-tracker').outcome).toBe('error')
+    expect(installedOutcome(LIST_AFTER_INSTALL_MISSING, 'issue-tracker')).toEqual({ outcome: 'missing' })
+  })
+  it('detects the restart from the hello bootIds', () => {
+    const before = HELLO_BEFORE_RESTART.server.bootId
+    expect(restartCompleted({ bootIdBefore: before, bootIdNow: HELLO_AFTER_RESTART.server.bootId, seqBefore: 1, seqNow: 2 })).toBe(true)
+    expect(restartCompleted({ bootIdBefore: before, bootIdNow: HELLO_SAME_BOOT.server.bootId, seqBefore: 1, seqNow: 2 })).toBe(false)
+    // 2026.6.5 sends no bootId: the next connection counts.
+    expect(restartCompleted({ bootIdBefore: undefined, bootIdNow: HELLO_2026_6_5.server.bootId, seqBefore: 1, seqNow: 2 })).toBe(true)
+  })
+  it('has copy for a security check that could not be reached', () => {
+    const line = runStatusLine({ target: officialTarget('x', 'Tracker'), phase: 'failed', acks: {}, failure: 'trustUnavailable' })
+    expect(line).toEqual({ tone: 'failed', retry: true, text: "ClawHub's security check couldn't be reached, so Tracker wasn't installed. Try again in a moment." })
   })
 })

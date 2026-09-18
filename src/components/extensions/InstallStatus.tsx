@@ -25,7 +25,12 @@ export function InstallStatus({ origin, action }: { origin: string; action?: Rea
       style={{ background: toneTint(line.tone, 8), border: `1px solid ${toneTint(line.tone, 30)}`, color: 'var(--text-primary)', lineHeight: 1.5 }}
     >
       <Icon size={13} className={line.tone === 'working' ? 'animate-spin' : undefined} style={{ color, flexShrink: 0, marginTop: 1 }} />
-      <span style={{ flex: 1, minWidth: 0 }}>{line.text}</span>
+      <span style={{ flex: 1, minWidth: 0 }}>
+        {line.text}
+        {run.phase === 'done' && run.warnings?.map(w => (
+          <span key={w} className="block mt-1" style={{ color: 'var(--text-secondary)' }}>{w}</span>
+        ))}
+      </span>
       {line.retry && <Btn size="sm" variant="outline" onClick={() => void retryRun()}>Try again</Btn>}
       {run.phase === 'done' && action}
     </div>

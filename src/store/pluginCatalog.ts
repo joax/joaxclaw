@@ -103,6 +103,23 @@ function stopRestartWait() {
   if (timeoutTimer) { clearTimeout(timeoutTimer); timeoutTimer = null }
 }
 
+/**
+ * plugins.list, retried while the gateway is still draining for the restart ("unavailable
+ * during gateway restart", retryable with a retryAfterMs).
+ */
+async function listAfterRestart(): Promise<unknown> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await gatewayClient.request<unknown>('plugins.list', {})
+    } catch (e) {
+      const g = structured(e) as { retryable?: unknown; retryAfterMs?: unknown; details?: { reason?: unknown } } | null
+      if (attempt >= 5 || g?.details?.reason !== 'gateway-restarting') throw e
+      const wait = typeof g.retryAfterMs === 'number' ? Math.min(g.retryAfterMs, 5000) : 1000
+      await new Promise(r => setTimeout(r, wait))
+    }
+  }
+}
+
 /** A run that's between Install and its outcome: another Install must wait. */
 export function runActive(run: InstallRun | null): boolean {
   return !!run && run.phase !== 'done' && run.phase !== 'failed'
@@ -121,13 +138,15 @@ export const usePluginCatalogStore = create<PluginCatalogState>((set, get) => {
     set({ busy: run.target.displayName, error: null })
     patchRun({ phase: 'installing', failure: undefined, message: undefined })
     try {
-      const res = await gatewayClient.request<{ plugin?: { id?: string } }>(
+      // The result's `plugin` is a plugins.list row: its id is the one to verify against.
+      const res = await gatewayClient.request<{ plugin?: { id?: string }; warnings?: unknown }>(
         'plugins.install', withAcks(run.target.params, run.acks), INSTALL_TIMEOUT_MS,
       )
       if (token !== runToken) return
       const pluginId = res?.plugin?.id ?? run.target.pluginId
       if (pluginId) set(s => ({ justInstalled: s.justInstalled.includes(pluginId) ? s.justInstalled : [...s.justInstalled, pluginId] }))
-      patchRun({ pluginId })
+      const warnings = Array.isArray(res?.warnings) ? res.warnings.filter((w): w is string => typeof w === 'string' && !!w.trim()) : []
+      patchRun({ pluginId, ...(warnings.length ? { warnings } : {}) })
       await restart(token)
     } catch (e) {
       if (token !== runToken) return
@@ -152,6 +171,7 @@ export const usePluginCatalogStore = create<PluginCatalogState>((set, get) => {
           set({ busy: null, policy: { warning: refusal.warning, name: run.target.displayName } })
           return
         case 'trust': fail('trust', refusal.message); return
+        case 'trustUnavailable': fail('trustUnavailable', refusal.message); return
         case 'dropped': fail('dropped'); return
         case 'error': fail('install', refusal.message); return
       }
@@ -169,8 +189,10 @@ export const usePluginCatalogStore = create<PluginCatalogState>((set, get) => {
     // Watch before asking: the socket can drop before the request's answer arrives.
     watchForRestart(token, RESTART_TIMEOUT_MS)
     try {
-      const { status } = await requestGatewayRestart(RESTART_REASON)
+      const { status, delayMs } = await requestGatewayRestart(RESTART_REASON)
       if (token !== runToken) return
+      // Coalesced into a restart already pending (the 30 s cooldown): it may start late.
+      if (delayMs > 0 && status !== 'deferred') watchForRestart(token, RESTART_TIMEOUT_MS + delayMs)
       if (status === 'deferred') {
         // The gateway waits for running work before restarting. Keep the overlay's
         // explanation armed for that long, and don't call it a timeout at 90 s.
@@ -214,7 +236,7 @@ export const usePluginCatalogStore = create<PluginCatalogState>((set, get) => {
     if (!run) return
     patchRun({ phase: 'verifying' })
     try {
-      const list = await gatewayClient.request<unknown>('plugins.list', {})
+      const list = await listAfterRestart()
       if (token !== runToken) return
       const id = run.pluginId ?? run.target.pluginId
       const { outcome, error } = id ? installedOutcome(list, id) : { outcome: 'enabled' as const, error: undefined }

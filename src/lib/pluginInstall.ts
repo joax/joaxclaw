@@ -148,6 +148,7 @@ export type InstallRefusal =
   | { kind: 'consent'; challenge: ConsentRequired }
   | { kind: 'policy'; warning: InstallPolicyWarning }
   | { kind: 'trust'; message: string }
+  | { kind: 'trustUnavailable'; message: string }
   | { kind: 'dropped' }
   | { kind: 'error'; message: string }
 
@@ -163,7 +164,10 @@ export function classifyInstallError(error: unknown, message: string): InstallRe
   if (challenge) return { kind: 'consent', challenge }
   const warning = readInstallPolicyWarning(error)
   if (warning) return { kind: 'policy', warning }
+  // Branch on details, never the error code: a block is INVALID_REQUEST, while consent,
+  // policy and "security check unavailable" all arrive as UNAVAILABLE.
   const trust = readTrustRefusal(error)
+  if (trust?.code === 'clawhub_security_unavailable') return { kind: 'trustUnavailable', message }
   if (trust) return { kind: 'trust', message: trust.warning ?? message }
   // The socket dropped with the request in flight. The install may or may not have
   // happened, so this can't be reported as a failure of the install.
@@ -177,9 +181,10 @@ export function classifyInstallError(error: unknown, message: string): InstallRe
 export const RESTART_TIMEOUT_MS = 90_000
 /**
  * A "deferred" restart waits for the gateway's running work (chat runs, cron jobs,
- * background tasks) to finish first, which can take much longer than a restart does.
+ * background tasks) to finish first. The gateway gives that work up to 300 s before
+ * restarting anyway, so wait a little longer than that.
  */
-export const DEFERRED_RESTART_TIMEOUT_MS = 10 * 60_000
+export const DEFERRED_RESTART_TIMEOUT_MS = 6 * 60_000
 
 /**
  * Whether the connection that just came up is the restarted gateway.
@@ -212,7 +217,7 @@ export function installedOutcome(listResult: unknown, pluginId: string): { outco
 export type InstallPhase = 'installing' | 'consent' | 'review' | 'restarting' | 'verifying' | 'done' | 'failed'
 
 /** Why a run failed, which decides the copy and whether Try again restarts or reinstalls. */
-export type InstallFailure = 'install' | 'trust' | 'dropped' | 'restart' | 'timeout' | 'missing'
+export type InstallFailure = 'install' | 'trust' | 'trustUnavailable' | 'dropped' | 'restart' | 'timeout' | 'missing'
 
 export interface InstallRun {
   target: InstallTarget
@@ -226,6 +231,11 @@ export interface InstallRun {
   failure?: InstallFailure
   /** The restart was accepted but waits for running work to finish. */
   deferred?: boolean
+  /**
+   * The install's own warnings, such as "installed without enabling it because it
+   * requires configuration first". Shown with the outcome rather than dropped.
+   */
+  warnings?: string[]
 }
 
 export type Tone = 'working' | 'needsYou' | 'failed' | 'done'
@@ -255,6 +265,7 @@ export function runStatusLine(run: InstallRun): { tone: Tone; text: string; retr
     case 'failed':
       switch (run.failure) {
         case 'trust': return { tone: 'failed', text: `ClawHub blocked this download: ${run.message ?? 'no reason given'}` }
+        case 'trustUnavailable': return { tone: 'failed', text: `ClawHub's security check couldn't be reached, so ${name} wasn't installed. Try again in a moment.`, retry: true }
         case 'dropped': return { tone: 'failed', text: `The connection dropped while installing ${name}. Check the plugin list, then try again.`, retry: true }
         case 'restart': return { tone: 'failed', text: `Installed ${name}, but the gateway couldn't restart: ${run.message ?? 'unknown error'}. Restart it from the Gateway tab.`, retry: true }
         case 'timeout': return { tone: 'failed', text: `The gateway didn't come back after installing ${name}. Check it on the Gateway tab, then try again.`, retry: true }

@@ -207,6 +207,7 @@ export class GatewayClient {
     // from this socket's hello-ok.
     this.features = undefined
     this.policy = undefined
+    this.bootId = undefined
     this.unsupportedMethods.clear()
 
     const ws = wsApi()

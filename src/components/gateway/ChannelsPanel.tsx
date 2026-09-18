@@ -735,7 +735,8 @@ function ChannelPluginSetup({ def }: { def: ChannelDef }) {
   }
 
   const command = pluginInstallCommand(plugin)
-  const canInstall = plugin.official && gatewayClient.grantedScopes.includes('operator.admin')
+  // Gateways before plugins.install (2026.6.x) get the host command only.
+  const canInstall = plugin.official && gatewayClient.grantedScopes.includes('operator.admin') && gatewayClient.hasMethod('plugins.install')
 
   return (
     <div className="flex flex-col gap-2 px-2.5 py-2 rounded text-xs" style={tone('warning')}>
