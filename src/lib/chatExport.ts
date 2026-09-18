@@ -166,27 +166,75 @@ export function escapeHtml(text: string): string {
  * the rest of the file (or the </details> this module writes after it).
  */
 export function neutraliseHtml(markdown: string): string {
-  const escapeProse = (s: string) => s
-    .split(/(`+[^`]*?`+)/g)   // inline code spans stay as they are
-    .map((part, i) => (i % 2 === 1 ? part : part
-      .replace(/<(?=[A-Za-z/!?])/g, '&lt;')
-      .replace(/\]\(\s*(?:javascript|vbscript|data):/gi, '](#')))
+  const escapeProse = (s: string) => codeSpans(s)
+    .map(part => (part.code ? part.text : part.text
+      .replace(/\]\(\s*(<[^>\n]*>|[^\s)]*)/g, (m, dest: string) => (isUnsafeUrl(dest.replace(/^<|>$/g, ''))
+        ? `](#${dest.includes(':') ? dest.slice(dest.indexOf(':') + 1).replace(/>$/, '') : ''}`
+        : m))
+      .replace(/<(?=[A-Za-z/!?])/g, '&lt;')))
     .join('')
   const lines = markdown.split('\n')
   const out: string[] = []
   let fence: string | null = null
   for (const line of lines) {
-    const open = line.match(/^\s{0,3}(`{3,}|~{3,})/)
+    const open = line.match(/^\s{0,3}(`{3,}|~{3,})(.*)$/)
+    // A backtick fence's info string can't contain a backtick; such a line is prose, not a fence.
+    const opens = open && !(open[1][0] === '`' && open[2].includes('`'))
     if (fence) {
       out.push(line)
       if (open && open[1][0] === fence[0] && open[1].length >= fence.length && line.trim() === open[1]) fence = null
       continue
     }
-    if (open) { fence = open[1]; out.push(line); continue }
+    if (opens) { fence = open[1]; out.push(line); continue }
+    // A link reference definition ("[ref]: javascript:…") makes every [ref] a script link.
+    const def = line.match(/^(\s{0,3}\[[^\]\n]+\]:\s*)(<[^>\n]*>|\S+)(.*)$/)
+    if (def && isUnsafeUrl(def[2].replace(/^<|>$/g, ''))) { out.push(escapeProse(`${def[1]}#${def[3]}`)); continue }
     out.push(escapeProse(line))
   }
   if (fence) out.push(fence)
   return out.join('\n')
+}
+
+/**
+ * A line split into code spans and prose, the way CommonMark reads it: a run of N
+ * backticks opens a span only if a later run of exactly N closes it. An unmatched run is
+ * literal text, so what follows it is prose (a renderer would read HTML there).
+ */
+function codeSpans(line: string): { code: boolean; text: string }[] {
+  const out: { code: boolean; text: string }[] = []
+  let last = 0
+  let i = 0
+  while (i < line.length) {
+    if (line[i] !== '`') { i++; continue }
+    let j = i
+    while (line[j] === '`') j++
+    const n = j - i
+    let close = -1
+    for (let k = j; k < line.length;) {
+      if (line[k] !== '`') { k++; continue }
+      let m = k
+      while (line[m] === '`') m++
+      if (m - k === n) { close = k; break }
+      k = m
+    }
+    if (close < 0) { i = j; continue }
+    if (i > last) out.push({ code: false, text: line.slice(last, i) })
+    out.push({ code: true, text: line.slice(i, close + n) })
+    i = last = close + n
+  }
+  if (last < line.length) out.push({ code: false, text: line.slice(last) })
+  return out
+}
+
+/** A link target that would run script: javascript:, vbscript: or data:, even entity-encoded or split by whitespace. */
+function isUnsafeUrl(url: string): boolean {
+  const decoded = url
+    .replace(/&#x([0-9a-f]+);?/gi, (_, h: string) => String.fromCodePoint(parseInt(h, 16)))
+    .replace(/&#(\d+);?/g, (_, d: string) => String.fromCodePoint(Number(d)))
+    .replace(/&colon;/gi, ':')
+    .replace(/&(?:tab|newline);/gi, '')
+  // eslint-disable-next-line no-control-regex
+  return /^(?:javascript|vbscript|data):/i.test(decoded.replace(/[\s -]+/g, ''))
 }
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
