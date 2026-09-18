@@ -221,7 +221,7 @@ function QuickStats({ onNavigate }: { onNavigate: (s: NavSection) => void }) {
 
 // ── Agent picker ──────────────────────────────────────────────────────────────
 
-export function AgentPicker({ value, onChange }: { value: string; onChange: (id: string) => void }) {
+function AgentPicker({ value, onChange }: { value: string; onChange: (id: string) => void }) {
   const { agents } = useAgentsStore()
   const [open, setOpen] = useState(false)
   const [dropPos, setDropPos] = useState({ top: 0, left: 0 })
