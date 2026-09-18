@@ -54,8 +54,8 @@ function commandOf(call: ToolCall): string | undefined {
 }
 
 // Every script job started somewhere in a conversation (including inside sub-agent
-// threads), oldest first and deduped. The chat's sticky ScriptJobDock uses this to
-// follow the conversation's own jobs rather than every job on the host. Pure + tested.
+// threads), oldest first and deduped. The chat's Background strip uses this to follow
+// the conversation's own jobs rather than every job on the host. Pure + tested.
 export function collectJobRefs(messages: ChatMessage[]): JobRef[] {
   const found = new Map<string, JobRef>()
   for (const msg of messages) {
@@ -72,14 +72,13 @@ export function collectJobRefs(messages: ChatMessage[]): JobRef[] {
   return [...found.values()]
 }
 
-// Running jobs the host attributes to one session. This is how a chat finds its scripts
-// again after an app reload: the transcript comes back without tool calls, but the job
-// is still alive on the host and remembers who launched it. Jobs from a gateway plugin
-// older than 0.11.5 carry no sessionKey and are left to the Dashboard's global list.
-export function jobRefsForSession(jobs: ScriptJob[], sessionKey: string): JobRef[] {
-  return jobs
-    .filter(j => j.running && !!j.sessionKey && j.sessionKey === sessionKey)
-    .map(j => ({ jobId: j.id, command: j.command }))
+// The host's jobs that belong to one chat: the ones it attributes to the session, plus any
+// the transcript names (a plugin older than 0.11.5 records no session). This is how a
+// chat finds its scripts again after an app reload, when the transcript may come back
+// without the script_start call. Finished jobs are included; the Background strip's time
+// rules decide how long they stay. Pure + tested.
+export function jobsForSession(jobs: ScriptJob[], sessionKey: string | undefined, refIds: ReadonlySet<string>): ScriptJob[] {
+  return jobs.filter(j => refIds.has(j.id) || (!!sessionKey && !!j.sessionKey && j.sessionKey === sessionKey))
 }
 
 // ── Shared job watcher ────────────────────────────────────────────────────────

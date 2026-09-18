@@ -38,6 +38,7 @@ import { useQuestionsStore } from './store/questions'
 import { useGatewayModelsStore } from './store/gatewayModels'
 import { useToolSearchStore } from './store/toolSearch'
 import { useProgressCardsStore } from './store/progressCards'
+import { useTasksStore } from './store/tasks'
 import { useMetricsStore } from './store/metrics'
 import { useSettingsStore, ZOOM_STEP, restoreProfileFromBackup } from './store/settings'
 import { useExtensionsStore } from './store/extensions'
@@ -136,6 +137,8 @@ export default function App() {
       // Gateway updates: the hello-ok notice (every connection), the update.* broadcasts,
       // and the result of an update this app started before the restart.
       useGatewayUpdateStore.getState().start()
+      // Background tasks: every agent's active and recent work, then the `task` event.
+      useTasksStore.getState().start()
     }
   }, [status])
 
