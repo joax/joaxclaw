@@ -8,9 +8,9 @@ import { sendViaAgent } from '../lib/agentPrompt'
 //
 // Detection reaches every connection: the hello-ok snapshot carries `updateAvailable`
 // (and `updateSchedule` for read-capable clients), and the `update.available` broadcast
-// keeps it current. Before 2026.9 that snapshot was thrown away and only admin
-// connections learned anything, through `update.status`, which is still called for admin
-// because it's the only source on older gateways.
+// keeps it current (both since at least 2026.6.5). JoaxClaw used to throw the snapshot away
+// and ask `update.status`, which is admin-only and on 2026.6.5 doesn't report an
+// update at all. It's still read for admin, for the run and campaign detail.
 //
 // Updating: an admin connection confirms, then calls `update.run` directly. Without
 // admin, the old path stays: an agent on the gateway host runs `openclaw update`.
@@ -129,8 +129,8 @@ export const useGatewayUpdateStore = create<GatewayUpdateState>((set, get) => ({
     set({ available: parseUpdateAvailable(p.updateAvailable), ...('schedule' in p ? { schedule: parseSchedule(p.schedule) } : {}) })
   },
 
-  // update.status (operator.admin): the only source on gateways older than 2026.9, and on
-  // newer ones the fresher word, since it may have re-checked since the handshake.
+  // update.status (operator.admin): on 2026.9 the fresher word, since the gateway may have
+  // re-checked since the handshake, plus the run and campaign detail.
   async check(force = false) {
     const st = get()
     if (st.checking) return
@@ -141,7 +141,9 @@ export const useGatewayUpdateStore = create<GatewayUpdateState>((set, get) => ({
     try {
       const res = await gatewayClient.request<{ updateAvailable?: unknown; schedule?: unknown }>('update.status', {})
       set({
-        available: parseUpdateAvailable(res?.updateAvailable),
+        // Only 2026.9 sends updateAvailable here (2026.6.5 answers just {sentinel}): without
+        // the key, keep what the hello snapshot said.
+        ...(res && 'updateAvailable' in res ? { available: parseUpdateAvailable(res.updateAvailable) } : {}),
         ...(res && 'schedule' in res ? { schedule: parseSchedule(res.schedule) } : {}),
         checking: false,
         checkedAtMs: Date.now(),
@@ -194,7 +196,7 @@ export const useGatewayUpdateStore = create<GatewayUpdateState>((set, get) => ({
       // chat happened to be open. The banner reports instead.
       const res = parseRunResponse(await gatewayClient.request('update.run', { note: 'Started from JoaxClaw' }, RUN_TIMEOUT_MS))
       if (res.kind === 'started') {
-        const next = { ...followed, runId: res.runId }
+        const next = { ...followed, ...(res.runId ? { runId: res.runId } : {}) }
         writeFollowed(next)
         set({ pending: false, followed: next })
       } else if (res.kind === 'already-current') {
