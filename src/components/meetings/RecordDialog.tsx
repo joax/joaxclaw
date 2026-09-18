@@ -127,7 +127,7 @@ function PlatformLine({ platformId, ready }: { platformId: PlatformId | null; re
       <span className="flex items-center gap-2" style={{ color: 'var(--text-secondary)' }}>
         {p.label} · plugin not installed
         {admin && gatewayClient.hasMethod('plugins.install') && (
-          <Btn size="sm" variant="outline" disabled={busy !== null} onClick={() => void installAndRestart(officialTarget(p.pluginId, p.pluginName, origin))}>Install</Btn>
+          <Btn size="sm" variant="outline" disabled={busy !== null} onClick={() => void installAndRestart({ ...officialTarget(p.installId, p.pluginName, origin), pluginId: p.pluginId })}>Install</Btn>
         )}
       </span>
       <InstallStatus origin={origin} />

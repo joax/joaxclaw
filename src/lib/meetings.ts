@@ -16,8 +16,14 @@ export type PlatformId = 'meet' | 'teams' | 'zoom'
 export interface Platform {
   id: PlatformId
   label: string
-  /** The plugin's runtime id, for plugins.list and plugins.install { source: "official" }. */
+  /** The plugin's runtime id: its plugins.list row once installed, and its config entry. */
   pluginId: string
+  /**
+   * The id plugins.install { source: "official" } takes. Google Meet's catalog entry is
+   * keyed by its package name ("@openclaw/google-meet"); asking for "google-meet" is
+   * refused as "unknown official plugin catalog entry" (seen on 2026.9.4).
+   */
+  installId: string
   /** The agent tool the plugin registers. */
   tool: string
   /** The transcript provider id its notes are filed under. */
@@ -32,15 +38,15 @@ export interface Platform {
 
 export const PLATFORMS: Record<PlatformId, Platform> = {
   meet: {
-    id: 'meet', label: 'Google Meet', pluginId: 'google-meet', tool: 'google_meet', providerId: 'google-meet',
+    id: 'meet', label: 'Google Meet', pluginId: 'google-meet', installId: '@openclaw/google-meet', tool: 'google_meet', providerId: 'google-meet',
     npm: '@openclaw/google-meet', setupCommand: 'openclaw googlemeet setup --json', pluginName: 'Google Meet',
   },
   teams: {
-    id: 'teams', label: 'Teams', pluginId: 'teams-meetings', tool: 'teams_meetings', providerId: 'teams',
+    id: 'teams', label: 'Teams', pluginId: 'teams-meetings', installId: 'teams-meetings', tool: 'teams_meetings', providerId: 'teams',
     npm: '@openclaw/teams-meetings', setupCommand: 'openclaw teamsmeetings setup', pluginName: 'Teams meetings',
   },
   zoom: {
-    id: 'zoom', label: 'Zoom', pluginId: 'zoom-meetings', tool: 'zoom_meetings', providerId: 'zoom',
+    id: 'zoom', label: 'Zoom', pluginId: 'zoom-meetings', installId: 'zoom-meetings', tool: 'zoom_meetings', providerId: 'zoom',
     npm: '@openclaw/zoom-meetings', setupCommand: 'openclaw zoommeetings setup', pluginName: 'Zoom meetings',
   },
 }
