@@ -21,6 +21,7 @@ import { isManagedJob } from '../../lib/managedJobs'
 import { loadedModels } from '../../lib/ollama'
 import { formatRelativeDate } from '../../lib/dateUtils'
 import type { NavSection } from '../../App'
+import { RecentMeetingsSection } from '../meetings/RecentMeetingsSection'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -89,7 +90,7 @@ function ResourceBar({ value, max, color }: { value: number; max?: number; color
 
 // Mobile card surface + section header. Desktop keeps its bare, dense sections; the
 // mobile feed wraps each one in a rounded card and uses a larger, tappable header.
-function MobileCard({ children, style }: { children: React.ReactNode; style?: React.CSSProperties }) {
+export function MobileCard({ children, style }: { children: React.ReactNode; style?: React.CSSProperties }) {
   return (
     <div style={{ border: '1px solid var(--border)', borderRadius: 14, background: 'var(--bg-surface)', padding: 14, ...style }}>
       {children}
@@ -97,7 +98,7 @@ function MobileCard({ children, style }: { children: React.ReactNode; style?: Re
   )
 }
 
-function SectionHead({ Icon, label, iconColor = 'var(--text-secondary)', narrow, action }: {
+export function SectionHead({ Icon, label, iconColor = 'var(--text-secondary)', narrow, action }: {
   Icon: typeof Activity; label: string; iconColor?: string; narrow?: boolean; action?: React.ReactNode
 }) {
   return (
@@ -111,7 +112,7 @@ function SectionHead({ Icon, label, iconColor = 'var(--text-secondary)', narrow,
   )
 }
 
-function SeeAll({ onClick, narrow }: { onClick: () => void; narrow?: boolean }) {
+export function SeeAll({ onClick, narrow }: { onClick: () => void; narrow?: boolean }) {
   return (
     <button onClick={onClick} style={{ fontSize: narrow ? 12 : 10, color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer', padding: narrow ? '4px 2px' : 0 }}>
       See all →
@@ -220,7 +221,7 @@ function QuickStats({ onNavigate }: { onNavigate: (s: NavSection) => void }) {
 
 // ── Agent picker ──────────────────────────────────────────────────────────────
 
-function AgentPicker({ value, onChange }: { value: string; onChange: (id: string) => void }) {
+export function AgentPicker({ value, onChange }: { value: string; onChange: (id: string) => void }) {
   const { agents } = useAgentsStore()
   const [open, setOpen] = useState(false)
   const [dropPos, setDropPos] = useState({ top: 0, left: 0 })
@@ -885,6 +886,7 @@ function RightPanel({ onNavigate }: { onNavigate: (s: NavSection) => void }) {
       padding: '20px 16px', background: 'var(--bg-surface)', display: 'flex', flexDirection: 'column', gap: 0,
     }}>
       <ActiveSection onNavigate={onNavigate} />
+      <RecentMeetingsSection onNavigate={onNavigate} />
       <ScriptsSection />
       <RemindersSection />
       <TeamsSection onNavigate={onNavigate} />
@@ -960,6 +962,7 @@ function MobileDashboard({ onSendMessage, onOpenConversation, onNavigate }: {
         <ChatInputCard onSend={onSendMessage} narrow />
         <QuickStats onNavigate={onNavigate} />
         <ActiveSection onNavigate={onNavigate} narrow />
+        <RecentMeetingsSection onNavigate={onNavigate} narrow />
         <RecentConversations onOpen={onOpenConversation} onNavigate={onNavigate} narrow />
         <TeamsSection onNavigate={onNavigate} narrow />
         <CronsSection onNavigate={onNavigate} narrow />

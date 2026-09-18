@@ -1,7 +1,8 @@
-import { MessageSquare, Bot, Settings, Server, HelpCircle, Timer, Brain, GitBranch, LayoutDashboard, UsersRound, Mic, Palette, Wallet, type LucideIcon } from 'lucide-react'
+import { MessageSquare, Bot, Settings, Server, HelpCircle, Timer, Brain, GitBranch, LayoutDashboard, UsersRound, Mic, Palette, Wallet, Video, type LucideIcon } from 'lucide-react'
 import type { NavSection } from '../../App'
 import { HelpModal } from '../help/HelpModal'
 import { useHelpStore } from '../../store/help'
+import { useHiddenNavSections } from '../meetings/navGate'
 
 interface NavItem { id: NavSection; Icon: LucideIcon; label: string }
 
@@ -9,6 +10,7 @@ const GROUP_1: NavItem[] = [
   { id: 'dashboard', Icon: LayoutDashboard, label: 'Dashboard' },
   { id: 'chat',      Icon: MessageSquare,   label: 'Chats' },
   { id: 'talk',      Icon: Mic,             label: 'Talk' },
+  { id: 'meetings',  Icon: Video,           label: 'Meetings' },
   { id: 'obsidian',  Icon: Brain,           label: 'Memory' },
 ]
 
@@ -35,8 +37,9 @@ interface Props { section: NavSection; onNavigate: (s: NavSection) => void; disa
 export function NavRail({ section, onNavigate, disabledSections = [], variant = 'rail' }: Props) {
   const { open: helpOpen, tab: helpTab, openHelp, closeHelp } = useHelpStore()
   const list = variant === 'list'
+  const hidden = useHiddenNavSections()
   const renderGroup = (group: NavItem[]) =>
-    group.map(item => (
+    group.filter(item => !hidden.has(item.id)).map(item => (
       <NavBtn key={item.id} Icon={item.Icon} label={item.label} variant={variant}
         active={section === item.id} disabled={disabledSections.includes(item.id)}
         onClick={() => onNavigate(item.id)} />
