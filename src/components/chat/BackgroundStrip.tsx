@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Strip } from '../ui/Strip'
+import { Strip, useCloseStrips } from '../ui/Strip'
 import { TaskRow } from '../tasks/TaskRow'
 import { toneColor } from '../../lib/stateTone'
 import { collectJobRefs, jobsForSession } from '../../lib/scriptJobs'
@@ -35,6 +35,14 @@ export function BackgroundStrip({ sessionKey, messages }: { sessionKey?: string;
   const hiddenList = useTasksStore(s => (sessionKey ? s.hidden[sessionKey] : undefined))
   const openDrawer = useTasksStore(s => s.openDrawer)
   const openJob = useTasksStore(s => s.openJob)
+  const closeStrips = useCloseStrips()
+  // On a phone the drawer opens full screen, so the sheet it was opened from closes rather
+  // than lingering underneath with its own Escape and focus trap.
+  const open = (item: BackgroundItem) => {
+    if (narrow) closeStrips()
+    if (item.source === 'task') openDrawer(item.id)
+    else openJob(item.id)
+  }
   const jobs = useScriptJobsStore(s => s.jobs)
   const expired = useScriptJobsStore(s => s.expired)
 
@@ -107,7 +115,7 @@ export function BackgroundStrip({ sessionKey, messages }: { sessionKey?: string;
               item={item}
               now={now}
               sessionKey={sessionKey}
-              onOpen={item.source === 'task' ? () => openDrawer(item.id) : () => openJob(item.id)}
+              onOpen={() => open(item)}
             />
           ))}
         </div>
