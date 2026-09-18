@@ -134,7 +134,7 @@ function PluginItem({ platform, state, error, onOpenChat }: { platform: Platform
         <span style={{ flex: 1 }}>{platform.pluginName} plugin · not installed</span>
         {canInstall && (!run || run.phase === 'failed') && (
           <Btn size="sm" variant="outline" disabled={busy !== null} title={busy !== null ? 'Another plugin is installing' : undefined}
-            onClick={() => void installAndRestart(officialTarget(platform.pluginId, platform.pluginName, origin))}>
+            onClick={() => void installAndRestart({ ...officialTarget(platform.installId, platform.pluginName, origin), pluginId: platform.pluginId })}>
             Install
           </Btn>
         )}
