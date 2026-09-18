@@ -141,8 +141,10 @@ export function Popover({ trigger, open, onOpenChange, align = 'right', width, t
   const narrow = useIsNarrow()
   const triggerRef = useRef<HTMLButtonElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
-  const wrapRef = useClickOutside(() => { if (open) onOpenChange(false) })
   const asSheet = open && sheetOnNarrow && narrow
+  // The sheet is portalled outside this wrapper, so a tap inside it would count as
+  // "outside". It has its own backdrop to close it.
+  const wrapRef = useClickOutside(() => { if (open && !asSheet) onOpenChange(false) })
 
   // Focus the menu when it opens, so the arrow keys work straight away.
   useEffect(() => { if (open && !asSheet) menuRef.current?.focus() }, [open, asSheet])
@@ -151,6 +153,8 @@ export function Popover({ trigger, open, onOpenChange, align = 'right', width, t
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Escape') { e.preventDefault(); close(); return }
     if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return
+    // A popover can hold a form (the goal control): arrows move the caret in a field.
+    if ((e.target as HTMLElement).closest('textarea, input')) return
     e.preventDefault()
     const items = Array.from(menuRef.current?.querySelectorAll<HTMLElement>('[role^="menuitem"]:not([disabled])') ?? [])
     if (!items.length) return

@@ -21,6 +21,7 @@ import { ThemeBackground } from '../theme/ThemeBackground'
 import { MessageInput } from './MessageInput'
 import { useLogoUrl } from '../../lib/logo'
 import { ModelSelect, ThinkingSelect, DisplayMenu } from './ChatHeaderControls'
+import { GoalControl } from './GoalControl'
 import { formatRelativeDate } from '../../lib/dateUtils'
 import type { Session } from '../../lib/types'
 import { isSessionRunning } from '../../lib/sessionRunning'
@@ -533,6 +534,7 @@ export function ChatView({ solo }: { solo?: string } = {}) {
                     modelOverride={activeConv.modelOverride || undefined}
                     agentDefault={agents.find(a => a.id === activeConv.agentId)?.model?.primary}
                   />
+                  <GoalControl convId={activeConv.id} />
                 </div>
               </div>
             ) : (
@@ -574,6 +576,8 @@ export function ChatView({ solo }: { solo?: string } = {}) {
                   modelOverride={activeConv.modelOverride || undefined}
                   agentDefault={agents.find(a => a.id === activeConv.agentId)?.model?.primary}
                 />
+                {/* The chat's goal sits with its settings (PRD 04). */}
+                <GoalControl convId={activeConv.id} />
               </div>
 
               <div className="ml-auto flex items-center gap-1.5 shrink-0">
