@@ -3,7 +3,7 @@ import { nanoid } from '../lib/nanoid'
 import type { Conversation, ChatMessage, ContextOverflowInfo, ToolCall, SubThread, MediaAttachment, ThinkingLevel } from '../lib/types'
 import { gatewayClient } from '../lib/gateway'
 import { decideIngest } from '../lib/sessionMessageIngest'
-import { extractToolCalls, toolResultUpdate, applyToolResults, mergeFinalToolCalls, historyMessageId, type ToolResultUpdate } from '../lib/historyMessages'
+import { extractToolCalls, toolResultUpdate, applyToolResults, mergeFinalToolCalls, historyMessageId, foldNestedToolRows, markRunningCalls, type ToolResultUpdate } from '../lib/historyMessages'
 import { describeRunFailure } from '../lib/gatewayPolicy'
 import { agentIdFromSessionKey as agentIdFromKey } from '../lib/sessionName'
 import { hasProduced } from '../lib/streamStatus'
@@ -583,7 +583,9 @@ const HISTORY_LIMIT = 500
 // app's messages. Tool results are attached to the calls they answer; system entries are
 // dropped, and so is an assistant
 // entry with nothing to show (a bare unclosed <think>).
-function toChatMessages(raw: unknown[], sessionKey: string): ChatMessage[] {
+function toChatMessages(rawRows: unknown[], sessionKey: string, activeRun = false): ChatMessage[] {
+  // A sub-agent's nested calls come as their own rows; fold them into the ordinary shape.
+  const raw = foldNestedToolRows(rawRows)
   // Results arrive as their own `toolResult` rows; they're attached to their calls below.
   const results = raw.map(toolResultUpdate).filter((u): u is ToolResultUpdate => u !== null)
   const messages = raw
@@ -622,7 +624,7 @@ function toChatMessages(raw: unknown[], sessionKey: string): ChatMessage[] {
         .trim()
       return bare !== ''
     })
-  return applyToolResults(messages, results)
+  return markRunningCalls(applyToolResults(messages, results), activeRun)
 }
 
 // On reload, the sub-agent "threads" (session yields) are NOT in the parent's
@@ -1200,14 +1202,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
 
     try {
-      const history = await gatewayClient.request<{ messages: unknown[] }>('chat.history', { sessionKey, limit: HISTORY_LIMIT })
-      const messages = toChatMessages(history.messages ?? [], sessionKey)
+      const history = await gatewayClient.request<{
+        messages: unknown[]; hasMore?: boolean; totalMessages?: number; sessionInfo?: { hasActiveRun?: boolean }
+      }>('chat.history', { sessionKey, limit: HISTORY_LIMIT })
+      const messages = toChatMessages(history.messages ?? [], sessionKey, history.sessionInfo?.hasActiveRun === true)
+      // Past HISTORY_LIMIT the start of a long chat isn't loaded; the thread says so.
+      const historyHasMore = history.hasMore === true
+      const historyTotal = typeof history.totalMessages === 'number' ? history.totalMessages : undefined
 
       // The conversation was already selected above; fill in its history and clear the
       // loading flag. Match by sessionKey so we hit it whether it was pre-existing or the
       // placeholder we just inserted.
       set(s => ({
-        conversations: s.conversations.map(c => c.sessionKey === sessionKey ? { ...c, messages, loadingHistory: false } : c),
+        conversations: s.conversations.map(c => c.sessionKey === sessionKey ? { ...c, messages, loadingHistory: false, historyHasMore, historyTotal } : c),
       }))
 
       // Sub-agent yields live in child sessions, not the parent history — reattach them
@@ -1385,4 +1392,24 @@ useConnectionStore.subscribe((s, prev) => {
 // each one goes.
 gatewayClient.on(frame => {
   if (frame.event === 'session.message') useChatStore.getState().ingestSessionMessage(frame.payload)
+  // A reopened chat shows the unanswered calls of a still-running turn as running. When
+  // that run ends they have finished, whether or not their results reached this pane.
+  if (frame.event === 'chat') {
+    const p = frame.payload as { sessionKey?: unknown; state?: unknown } | undefined
+    if (typeof p?.sessionKey === 'string' && (p.state === 'final' || p.state === 'aborted' || p.state === 'error')) settleRunningCalls(p.sessionKey)
+  }
 })
+
+function settleRunningCalls(sessionKey: string): void {
+  const { conversations } = useChatStore.getState()
+  const conv = conversations.find(c => c.sessionKey === sessionKey)
+  if (!conv?.messages.some(m => !m.streaming && m.toolCalls?.some(tc => tc.status === 'running'))) return
+  useChatStore.setState({
+    conversations: conversations.map(c => c.id !== conv.id ? c : {
+      ...c,
+      messages: c.messages.map(m => m.streaming || !m.toolCalls?.some(tc => tc.status === 'running') ? m : {
+        ...m, toolCalls: m.toolCalls.map(tc => (tc.status === 'running' ? { ...tc, status: 'done' as const } : tc)),
+      }),
+    }),
+  })
+}
