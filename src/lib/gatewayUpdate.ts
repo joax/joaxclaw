@@ -224,6 +224,10 @@ export function refusalCopy(refusal: Refusal): RefusalCopy {
     case 'invalid-update-target':
     case 'unsupported-update-target':
       return { text: "The gateway can't install the version it was asked for. Run this on the gateway host instead:", action: 'command', command: 'openclaw update' }
+    // A package install whose package manager the gateway couldn't detect (seen live on an
+    // isolated 2026.9.3 gateway; update-command-result's hint says to update it by hand).
+    case 'not-git-install':
+      return { text: "The gateway couldn't tell how OpenClaw was installed, so it can't update itself. Update it with your package manager on the gateway host, for example:", action: 'command', command: 'npm i -g openclaw@latest && openclaw gateway restart' }
     case 'update-target-upstream-mismatch':
       return { text: 'The version it was asked for comes from a different branch than the gateway follows.', action: 'viaAgent' }
     case 'rate-limited':
