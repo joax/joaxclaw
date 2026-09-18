@@ -1,3 +1,4 @@
+import { Target } from 'lucide-react'
 import type { ChatMessage } from '../../lib/types'
 import { formatTimestamp } from '../../lib/dateUtils'
 import { AudioPlayer } from './AudioPlayer'
@@ -11,7 +12,11 @@ function attachmentSrc(a: { url?: string; data?: string; mediaType?: string }): 
   return undefined
 }
 
-interface Props { message: ChatMessage }
+interface Props {
+  message: ChatMessage
+  /** Someone else's transcript (the task drawer's Output): no reactions. */
+  readOnly?: boolean
+}
 
 function renderInline(text: string): React.ReactNode {
   const parts = text.split(/(`[^`\n]+`)/)
@@ -35,7 +40,7 @@ function renderInline(text: string): React.ReactNode {
 
 const MEDIA_ONLY_PLACEHOLDER = '[User sent media without caption]'
 
-export function UserMessage({ message }: Props) {
+export function UserMessage({ message, readOnly = false }: Props) {
   const audioAttachments = message.attachments?.filter(a => a.type === 'audio') ?? []
   const imageAttachments = message.attachments?.filter(a => a.type === 'image') ?? []
   const videoAttachments = message.attachments?.filter(a => a.type === 'video') ?? []
@@ -50,6 +55,12 @@ export function UserMessage({ message }: Props) {
           <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>
             {formatTimestamp(message.createdAt)}
           </span>
+          {/* The objective that started this chat's goal (set locally; not in reloaded history). */}
+          {message.goal && (
+            <span className="inline-flex items-center gap-1 text-xs" style={{ color: 'var(--accent)' }}>
+              <Target size={10} /> Goal
+            </span>
+          )}
           <span className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>You</span>
         </div>
         {imageAttachments.length > 0 && (
@@ -106,7 +117,7 @@ export function UserMessage({ message }: Props) {
             ))}
           </div>
         )}
-        <MessageReactions message={message} align="right" />
+        {!readOnly && <MessageReactions message={message} align="right" />}
       </div>
     </div>
   )

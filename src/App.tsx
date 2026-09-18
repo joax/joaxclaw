@@ -29,6 +29,7 @@ import { ApprovalsBanner } from './components/layout/ApprovalsBanner'
 import { WelcomeModal } from './components/layout/WelcomeModal'
 import { BottomNav } from './components/layout/BottomNav'
 import { FileDrawer } from './components/files/FileDrawer'
+import { TaskDrawer } from './components/tasks/TaskDrawer'
 import { PanelErrorBoundary } from './components/common/PanelErrorBoundary'
 import { useIsNarrow } from './lib/useIsNarrow'
 import { useNotificationsWatcher } from './lib/useNotificationsWatcher'
@@ -40,6 +41,9 @@ import { useQuestionsStore } from './store/questions'
 import { useGatewayModelsStore } from './store/gatewayModels'
 import { useToolSearchStore } from './store/toolSearch'
 import { useProgressCardsStore } from './store/progressCards'
+import { useTasksStore } from './store/tasks'
+import { useScriptJobsStore } from './store/scriptJobs'
+import { trayCounts } from './lib/tasks'
 import { useMetricsStore } from './store/metrics'
 import { useSettingsStore, ZOOM_STEP, restoreProfileFromBackup } from './store/settings'
 import { useExtensionsStore } from './store/extensions'
@@ -56,6 +60,7 @@ export default function App() {
   const narrow = useIsNarrow()
   // An expanded file takes over the content area (the drawer is a sibling of <main>).
   const filesExpanded = useFilesStore(s => s.open && s.expanded)
+  const tasksExpanded = useTasksStore(s => s.drawer.open && !!s.drawer.expanded)
   useNotificationsWatcher()
   const { status, connection, reconnecting } = useConnectionStore()
   const { start: startMetrics, stop: stopMetrics } = useMetricsStore()
@@ -138,6 +143,8 @@ export default function App() {
       // Gateway updates: the hello-ok notice (every connection), the update.* broadcasts,
       // and the result of an update this app started before the restart.
       useGatewayUpdateStore.getState().start()
+      // Background tasks: every agent's active and recent work, then the `task` event.
+      useTasksStore.getState().start()
     }
   }, [status])
 
@@ -146,31 +153,42 @@ export default function App() {
   const trayRuns     = useProcessesStore(s => s.runs)
   const trayTeams    = useTeamsStore(s => s.blueprints)
   const traySessions = useSessionsStore(s => s.sessions)
+  const trayTasks    = useTasksStore(s => s.byId)
+  const trayJobs     = useScriptJobsStore(s => s.jobs)
   const lastTray     = useRef('')
   useEffect(() => {
     const teamIds = new Set(trayTeams.map(b => b.id))
     const teams   = Object.values(trayRuns).filter(r => r.status === 'running' && teamIds.has(r.processId)).length
     const agents  = traySessions.filter(s => s.hasActiveRun).length
-    const key = `${agents}:${teams}`
+    const { tasks, needsYou } = trayCounts(Object.values(trayTasks), Object.values(trayJobs))
+    const key = `${agents}:${teams}:${tasks}:${needsYou}`
     if (key === lastTray.current) return
     lastTray.current = key
-    window.api?.tray?.update?.({ agents, teams })
-  }, [trayRuns, trayTeams, traySessions])
+    window.api?.tray?.update?.({ agents, teams, tasks, needsYou })
+  }, [trayRuns, trayTeams, traySessions, trayTasks, trayJobs])
+  // Running scripts count in the tray too, so the desktop app keeps their poll going.
+  useEffect(() => (window.api?.tray ? useScriptJobsStore.getState().acquire() : undefined), [])
 
-  // Tray menu can jump the app to a section (e.g. clicking "Teams running").
+  // Tray menu can jump the app to a section (e.g. clicking "Teams running"). "Background
+  // tasks running" opens the Dashboard with the task list beside it.
   useEffect(() => {
-    const off = window.api?.app?.onNavigate?.(s => setSection(s as NavSection))
+    const off = window.api?.app?.onNavigate?.(s => {
+      if (s === 'tasks') { setSection('dashboard'); useTasksStore.getState().openList(); return }
+      setSection(s as NavSection)
+    })
     return () => off?.()
   }, [])
 
   // A tapped PWA notification routes here (via the service worker → main.tsx window event).
   useEffect(() => {
     const handler = (e: Event) => {
-      const nav = (e as CustomEvent).detail as { section?: NavSection; convId?: string; selector?: string } | undefined
+      const nav = (e as CustomEvent).detail as { section?: NavSection; convId?: string; selector?: string; sessionKey?: string; mainOf?: string; taskId?: string } | undefined
       if (!nav) return
       if (nav.convId) useChatStore.getState().selectConversation(nav.convId)
       if (nav.selector) openMeeting(nav.selector)
       if (nav.section) setSection(nav.section)
+      // A failed-task push: its chat, with the task drawer open on the task.
+      if (nav.sessionKey || nav.taskId) void useTasksStore.getState().navigate(nav)
     }
     window.addEventListener('joax:navigate', handler)
     return () => window.removeEventListener('joax:navigate', handler)
@@ -218,7 +236,7 @@ export default function App() {
             content area rather than covering the chat with an overlay. */}
         <main
           className="flex-1 min-w-0 flex flex-col relative"
-          style={{ background: 'var(--bg-primary)', ...(filesExpanded ? { display: 'none' } : {}) }}
+          style={{ background: 'var(--bg-primary)', ...(filesExpanded || (tasksExpanded && !narrow) ? { display: 'none' } : {}) }}
         >
           <ThemeBackground slot="app" />
           <div className="relative z-[1] flex-1 min-w-0 min-h-0 flex flex-col">
@@ -249,6 +267,11 @@ export default function App() {
         {!showConnect && !reconnecting && (
           <PanelErrorBoundary label="Files">
             <FileDrawer onOpenChat={() => setSection('chat')} />
+          </PanelErrorBoundary>
+        )}
+        {!showConnect && !reconnecting && (
+          <PanelErrorBoundary label="Background tasks">
+            <TaskDrawer onOpenChat={() => setSection('chat')} />
           </PanelErrorBoundary>
         )}
       </div>

@@ -234,9 +234,13 @@ function MessageFeedback({ message }: { message: ChatMessage }) {
   )
 }
 
-interface Props { message: ChatMessage; showTools?: boolean; showReasoning?: boolean; convId?: string; isLast?: boolean }
+interface Props {
+  message: ChatMessage; showTools?: boolean; showReasoning?: boolean; convId?: string; isLast?: boolean
+  /** Someone else's transcript (the task drawer's Output): no feedback or reactions. */
+  readOnly?: boolean
+}
 
-export function AssistantMessage({ message, showTools = true, showReasoning = true, convId, isLast = false }: Props) {
+export function AssistantMessage({ message, showTools = true, showReasoning = true, convId, isLast = false, readOnly = false }: Props) {
   const sessionKey = useChatStore(s => s.conversations.find(c => c.id === convId)?.sessionKey || undefined)
   // The session's provider, for a message whose model is a bare id (e.g. `qwen3.6:35b`).
   const session = useSessionsStore(s => (sessionKey ? s.sessions.find(x => x.key === sessionKey) : undefined))
@@ -407,8 +411,8 @@ export function AssistantMessage({ message, showTools = true, showReasoning = tr
             </div>
           )}
 
-          {!message.streaming && cleanContent && <MessageFeedback message={message} />}
-          {!message.streaming && <MessageReactions message={message} />}
+          {!message.streaming && !readOnly && cleanContent && <MessageFeedback message={message} />}
+          {!message.streaming && !readOnly && <MessageReactions message={message} />}
         </div>
       </div>
     )
@@ -521,12 +525,12 @@ export function AssistantMessage({ message, showTools = true, showReasoning = tr
         )}
 
         {/* Feedback row — hidden until parent is hovered */}
-        {!message.streaming && cleanContent && (
+        {!message.streaming && !readOnly && cleanContent && (
           <MessageFeedback message={message} />
         )}
 
         {/* Emoji reactions — same hover affordance, but stay once set */}
-        {!message.streaming && (
+        {!message.streaming && !readOnly && (
           <MessageReactions message={message} />
         )}
       </div>

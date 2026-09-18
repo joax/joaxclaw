@@ -1,3 +1,5 @@
+import type { SessionGoal } from './goals'
+
 // ── Openclaw Gateway Protocol ────────────────────────────────────────────────
 
 export interface GwReqFrame {
@@ -69,6 +71,9 @@ export interface Session {
   totalTokensFresh?: boolean  // false = snapshot is stale (e.g. after compaction), don't trust it
   estimatedCostUsd?: number  // gateway-computed cost estimate when available
   lastMessage?: string
+  // The chat's goal (2026.8+), passed through on list/subscribe rows and sessions.changed.
+  // Read it through lib/goals parseGoal: the gateway's row schema leaves it untyped.
+  goal?: SessionGoal | null
 }
 
 export type MessageRole = 'user' | 'assistant' | 'system'
@@ -139,6 +144,7 @@ export interface ChatMessage {
   contextOverflow?: ContextOverflowInfo
   model?: string               // actual model used for this assistant message (provider/model or bare model id)
   interrupted?: boolean        // turn cut off by a gateway drop/restart; shows a live reconnect notice
+  goal?: boolean               // the objective that started a goal (local only; not in history)
 }
 
 // Per-chat thinking level. 'adaptive' (the default) means "no override" — let the
@@ -182,6 +188,9 @@ export interface Conversation {
   // Per-chat overrides, independent of the agent's configured model.
   modelOverride?: string       // 'provider/model' — empty/undefined = agent default
   thinkingLevel?: ThinkingLevel // undefined / 'adaptive' = no override
+  // chat.history said older entries exist beyond what was loaded (PRD 05 FR-15).
+  historyHasMore?: boolean
+  historyTotal?: number
 }
 
 // ── Connection ────────────────────────────────────────────────────────────────
