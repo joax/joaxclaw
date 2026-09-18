@@ -291,3 +291,253 @@ export function buildDiscussMessage(s: TranscriptSession, markdown: string | und
     + `Its transcript selector is ${s.selector}; use the transcripts tool to read the full transcript if you need it.`
   return markdown?.trim() ? `${head}\n\n${markdown.trim()}` : head
 }
+
+// ── Recording: links ──────────────────────────────────────────────────────────
+
+function parseLink(raw: string): URL | null {
+  const t = raw.trim()
+  if (!t || /\s/.test(t)) return null
+  try {
+    return new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(t) ? t : `https://${t}`)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Which platform a pasted link is for, or null. Hosts are matched exactly (or as a
+ * `*.zoom.us` subdomain), so look-alikes such as `evilzoom.us` or `zoom.us.evil.com`
+ * don't pass, and only the join paths the plugins accept count: a Zoom personal link
+ * (`zoom.us/my/…`) can't be joined.
+ */
+export function detectPlatform(raw: string): PlatformId | null {
+  const u = parseLink(raw)
+  if (!u || (u.protocol !== 'https:' && u.protocol !== 'http:')) return null
+  const host = u.hostname.toLowerCase()
+  const path = u.pathname
+  if (host === 'meet.google.com' && /^\/[a-z]{3,}-[a-z]{3,}-[a-z]{3,}\/?$/i.test(path)) return 'meet'
+  if (host === 'teams.microsoft.com' && path.startsWith('/l/meetup-join/')) return 'teams'
+  if (host === 'teams.live.com' && path.startsWith('/meet/')) return 'teams'
+  if ((host === 'zoom.us' || host.endsWith('.zoom.us')) && /^\/j\/\d+/.test(path)) return 'zoom'
+  return null
+}
+
+/**
+ * A link as the gateway files it: origin + path, with the query (Zoom's `pwd` included)
+ * and fragment dropped, and the host lower-cased. `source.meetingUrl` on a live session
+ * is exactly that, so this is what to compare. The join itself is sent the full link.
+ */
+export function normaliseMeetingUrl(raw: string): string | null {
+  const u = parseLink(raw)
+  return u ? `${u.protocol}//${u.host.toLowerCase()}${u.pathname}` : null
+}
+
+/** Two links for the same meeting, ignoring scheme case, host case and a trailing slash. */
+function sameMeeting(a: string, b: string): boolean {
+  const key = (s: string) => (normaliseMeetingUrl(s) ?? s).replace(/\/+$/, '').replace(/^http:/, 'https:')
+  return key(a) === key(b)
+}
+
+/** The live session a join produced, matched on the link; the newest when several match. */
+export function matchActiveSession(url: string, active: TranscriptSession[]): TranscriptSession | null {
+  const hits = active.filter(s => s.active && s.source.meetingUrl && sameMeeting(s.source.meetingUrl, url))
+  hits.sort((a, b) => b.startedAt.localeCompare(a.startedAt))
+  return hits[0] ?? null
+}
+
+// ── Recording: prompts ───────────────────────────────────────────────────────
+
+export type JoinMode = 'transcribe' | 'agent'
+
+/** The sentinel the join prompt asks for when the agent has no meeting tool. */
+export const TOOL_MISSING = 'MEETING_TOOL_MISSING'
+
+/**
+ * The instruction that sends an agent into a call. The mode is always explicit: the
+ * plugins default to `agent` (speaking), and "Take notes only" must not depend on that.
+ */
+export function buildJoinPrompt(platform: PlatformId, url: string, mode: JoinMode): string {
+  return `Use the \`${PLATFORMS[platform].tool}\` tool with action "join", url "${url.trim()}", mode "${mode}". Do only this. `
+    + `Then reply with the tool's result exactly, including any status or manualAction, and nothing else. `
+    + `If the tool isn't available, say "${TOOL_MISSING}".`
+}
+
+/** Leave, in the chat that joined: that agent knows which session it started. */
+export function buildLeavePrompt(platform: PlatformId): string {
+  return `Use the \`${PLATFORMS[platform].tool}\` tool with action "leave" for this meeting. Reply with the result only.`
+}
+
+/**
+ * Stop a live session JoaxClaw didn't start. A meeting-plugin session leaves through its
+ * tool, by link; a Discord capture stops through the transcripts tool (which only its
+ * owning agent may use).
+ */
+export function buildStopPrompt(s: Pick<TranscriptSession, 'providerId' | 'selector' | 'source'>): string {
+  const platform = platformForProvider(s.providerId)
+  if (platform && s.source.meetingUrl) {
+    return `Use the \`${PLATFORMS[platform].tool}\` tool with action "leave" for the meeting at "${s.source.meetingUrl}". Reply with the result only.`
+  }
+  return `Use the transcripts tool with action "stop" and selector "${s.selector}". Reply with the result only.`
+}
+
+/** The meeting platform whose plugin files notes under this transcript provider. */
+export function platformForProvider(providerId: string): PlatformId | null {
+  const id = canonicalProvider(providerId)
+  return PLATFORM_LIST.find(p => p.providerId === id)?.id ?? null
+}
+
+// ── Recording: the join's tool result ──────────────────────────────────────────
+
+/** What a meeting tool call in the joining chat says. */
+export interface JoinOutcome {
+  kind: 'running' | 'ok' | 'manual' | 'error'
+  text: string
+}
+
+interface ToolCallLike { name: string; args?: string; result?: string; status: string; error?: string }
+
+/**
+ * Read the plugin's tool result. Its shape is plugin-defined; the documented part is a
+ * `manualAction: { reason, message }` when a person has to do something in Chrome (sign
+ * in, admit from the lobby, allow a permission). Anything unrecognised is shown as text.
+ */
+export function parseMeetingToolResult(call: ToolCallLike): JoinOutcome {
+  if (call.status === 'pending' || call.status === 'running') return { kind: 'running', text: '' }
+  if (call.status === 'error') return { kind: 'error', text: (call.error ?? call.result ?? 'The tool failed.').trim() }
+  const raw = (call.result ?? '').trim()
+  let obj: Record<string, unknown> | null = null
+  try { const v = JSON.parse(raw); if (v && typeof v === 'object' && !Array.isArray(v)) obj = v as Record<string, unknown> } catch { /* plain text */ }
+  if (obj) {
+    const manual = obj.manualAction as { message?: unknown; reason?: unknown } | undefined
+    if (manual && typeof manual === 'object') {
+      const msg = typeof manual.message === 'string' && manual.message.trim() ? manual.message.trim()
+        : typeof manual.reason === 'string' ? manual.reason : 'Something needs doing in Chrome.'
+      return { kind: 'manual', text: msg }
+    }
+    if (obj.ok === false || typeof obj.error === 'string') {
+      return { kind: 'error', text: typeof obj.error === 'string' ? obj.error : raw }
+    }
+    return { kind: 'ok', text: raw }
+  }
+  if (raw.includes(TOOL_MISSING)) return { kind: 'error', text: "The agent doesn't have the meeting tool." }
+  return { kind: 'ok', text: raw }
+}
+
+/** The action a meeting tool call was asked to take ("join", "leave"…), from its args. */
+export function toolAction(call: Pick<ToolCallLike, 'args'>): string | null {
+  try { const a = JSON.parse(call.args ?? '') as { action?: unknown }; return typeof a.action === 'string' ? a.action : null } catch { return null }
+}
+
+// ── Recording: pending joins ───────────────────────────────────────────────────
+
+/** A join started from here, until it becomes a live session (or fails). */
+export interface PendingJoin {
+  id: string
+  convId: string
+  url: string
+  platform: PlatformId
+  agentId: string
+  startedAt: number
+  /** When the tool said OK; three minutes later with no live session it warns. */
+  okAt?: number
+  /** The live session it became. */
+  selector?: string
+  /** Stop was pressed. */
+  stoppingAt?: number
+}
+
+export type PendingPhase = 'joining' | 'manual' | 'recording' | 'noNotes' | 'failed' | 'stopping' | 'unknown' | 'done'
+
+export const NO_NOTES_AFTER_MS = 3 * 60_000
+
+/**
+ * Where a pending join is, from its chat and the gateway's live sessions.
+ * - `join` is the latest join tool call's outcome, or null when the chat has none yet;
+ *   `replyText` is the agent's finished reply when it answered without calling the tool.
+ * - `hasStatus` is false on 2026.8 (no `transcripts.status`): an OK result is then
+ *   taken at its word, with no live-session check.
+ */
+export function pendingPhase(p: PendingJoin, a: {
+  join: JoinOutcome | null
+  replyText?: string | null
+  chatKnown: boolean
+  active: TranscriptSession[]
+  hasStatus: boolean
+  leaveDone?: boolean
+  now: number
+}): { phase: PendingPhase; text?: string; selector?: string } {
+  const match = matchActiveSession(p.url, a.active)
+  if (p.stoppingAt) {
+    const stillLive = p.selector ? a.active.some(s => s.selector === p.selector && s.active) : !!match
+    if (!stillLive && (a.hasStatus || a.leaveDone)) return { phase: 'done' }
+    return { phase: 'stopping', ...(p.selector ? { selector: p.selector } : {}) }
+  }
+  if (match) return { phase: 'recording', selector: match.selector }
+  if (!a.join) {
+    if (a.replyText?.trim()) {
+      const t = a.replyText.trim()
+      return { phase: 'failed', text: t.includes(TOOL_MISSING) ? "The agent doesn't have the meeting tool." : t }
+    }
+    // A chat that isn't here (after a reload, before its history loads) is unknown,
+    // except right after the join was sent, while the chat is still being created.
+    return a.chatKnown || a.now - p.startedAt < 60_000 ? { phase: 'joining' } : { phase: 'unknown' }
+  }
+  switch (a.join.kind) {
+    case 'running': return { phase: 'joining' }
+    case 'manual': return { phase: 'manual', text: a.join.text }
+    case 'error': return { phase: 'failed', text: a.join.text }
+    case 'ok':
+      if (!a.hasStatus) return { phase: 'recording' }
+      if (p.okAt !== undefined && a.now - p.okAt >= NO_NOTES_AFTER_MS) return { phase: 'noNotes' }
+      return { phase: 'recording' }
+  }
+}
+
+// ── Setup checklist ──────────────────────────────────────────────────────────
+
+export type PluginReadiness = 'ready' | 'off' | 'error' | 'missing'
+
+/**
+ * A meeting plugin's state from plugins.list, cross-checked with the transcript
+ * provider's availability. An uninstalled meeting plugin usually isn't in the list at
+ * all (it has no catalog metadata), so absent means not installed.
+ */
+export function pluginReadiness(listResult: unknown, providers: TranscriptStatus['providers'] | undefined, platform: Platform): { state: PluginReadiness; error?: string } {
+  const rows = (listResult as { plugins?: unknown } | null)?.plugins
+  const row = (Array.isArray(rows) ? rows : []).find(r => (r as { id?: unknown })?.id === platform.pluginId) as
+    { installed?: boolean; enabled?: boolean; state?: string; error?: string } | undefined
+  if (!row || row.installed === false || row.state === 'not-installed') return { state: 'missing' }
+  if (row.state === 'error') return { state: 'error', ...(row.error ? { error: row.error } : {}) }
+  if (row.state === 'disabled' || row.enabled === false) return { state: 'off' }
+  const provider = providers?.find(p => canonicalProvider(p.providerId) === platform.providerId)
+  if (provider?.availability === 'unavailable') return { state: 'error' }
+  if (provider?.availability === 'disabled') return { state: 'off' }
+  return { state: 'ready' }
+}
+
+export interface ChromeCheck { checkedAt: number; convId?: string; ok?: boolean }
+
+/**
+ * The checklist is complete when notes are on and at least one meeting plugin is ready.
+ * Chrome and Discord are informative only: neither can be verified over RPC.
+ */
+export function checklistState(capture: boolean | null, plugins: Record<PlatformId, PluginReadiness>): { captureOn: boolean; ready: PlatformId[]; complete: boolean } {
+  const ready = (Object.keys(plugins) as PlatformId[]).filter(id => plugins[id] === 'ready')
+  const captureOn = capture === true
+  return { captureOn, ready, complete: captureOn && ready.length > 0 }
+}
+
+/** `transcripts.enabled` from a config snapshot. Absent means on (the default). */
+export function captureFromConfig(config: unknown): boolean {
+  const t = (config as { transcripts?: { enabled?: unknown } } | null)?.transcripts
+  return t?.enabled !== false
+}
+
+/** The guest name a Teams/Zoom/Meet join types in, from the plugin's config. */
+export const DEFAULT_GUEST_NAME = 'OpenClaw Agent'
+export function guestNameFromConfig(config: unknown, platform: Platform): string {
+  const entry = (config as { plugins?: { entries?: Record<string, { config?: { chrome?: { guestName?: unknown } } }> } } | null)
+    ?.plugins?.entries?.[platform.pluginId]
+  const name = entry?.config?.chrome?.guestName
+  return typeof name === 'string' && name.trim() ? name.trim() : DEFAULT_GUEST_NAME
+}
