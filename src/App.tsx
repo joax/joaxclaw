@@ -21,6 +21,7 @@ import { ReconnectOverlay } from './components/layout/ReconnectOverlay'
 import { UpdateBanner } from './components/layout/UpdateBanner'
 import { PluginUpdateBanner } from './components/layout/PluginUpdateBanner'
 import { GatewayUpdateBanner } from './components/layout/GatewayUpdateBanner'
+import { useGatewayUpdateStore } from './store/gatewayUpdate'
 import { ScopeWarningBanner } from './components/layout/ScopeWarningBanner'
 import { ApprovalsBanner } from './components/layout/ApprovalsBanner'
 import { WelcomeModal } from './components/layout/WelcomeModal'
@@ -132,6 +133,9 @@ export default function App() {
       // Progress cards: re-read the ones on screen, since they may have moved while this
       // client was away, and keep the progressCard.changed broadcast subscribed.
       useProgressCardsStore.getState().start()
+      // Gateway updates: the hello-ok notice (every connection), the update.* broadcasts,
+      // and the result of an update this app started before the restart.
+      useGatewayUpdateStore.getState().start()
     }
   }, [status])
 
