@@ -19,6 +19,7 @@ import type { PluginSearchPackage } from '../../lib/pluginCatalog'
 import { ConsentDialog } from '../extensions/PluginBrowser'
 import { channelPolicySpec } from '../../lib/channelPolicy'
 import { ChannelPolicyEditor } from './ChannelPolicyEditor'
+import { Overlay } from '../ui/Overlay'
 
 const DOCS_BASE = 'https://docs.openclaw.com/channels'
 
@@ -900,36 +901,3 @@ function QrLoginModal({ channelId, account, onClose }: { channelId: string; acco
   )
 }
 
-// ── Shared overlay shell ─────────────────────────────────────────────────────
-
-function Overlay({ title, width, headerColor, onClose, children }: {
-  title: string; width: number; headerColor?: string; onClose: () => void; children: React.ReactNode
-}) {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
-
-  return (
-    <>
-      <div className="fixed inset-0 z-40" style={{ background: 'rgba(0,0,0,0.5)' }} onClick={onClose} />
-      <div className="fixed left-1/2 top-1/2 z-50 flex flex-col" style={{
-        transform: 'translate(-50%, -50%)', width, maxHeight: '84vh',
-        background: 'var(--bg-surface)', border: '1px solid var(--border)',
-        borderRadius: 'var(--radius)', boxShadow: '0 12px 40px rgba(0,0,0,0.4)', overflow: 'hidden',
-      }}>
-        <div className="flex items-center justify-between px-5 py-3.5 shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
-          <div className="flex items-center gap-2">
-            {headerColor && <span className="w-2.5 h-2.5 rounded-full" style={{ background: headerColor }} />}
-            <h2 className="font-semibold text-base" style={{ color: 'var(--text-primary)' }}>{title}</h2>
-          </div>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)', padding: 4 }}>
-            <X size={18} />
-          </button>
-        </div>
-        {children}
-      </div>
-    </>
-  )
-}

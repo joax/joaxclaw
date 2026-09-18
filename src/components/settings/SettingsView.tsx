@@ -2,12 +2,13 @@ import { useEffect, useState } from 'react'
 import { RefreshCw, Download, ExternalLink, RotateCw, Sparkles, CheckCircle2 } from 'lucide-react'
 import { useSettingsStore, ZOOM_MIN, ZOOM_MAX, ZOOM_STEP, type SettingsState } from '../../store/settings'
 import { useUpdaterStore } from '../../store/updater'
-import { useIsNarrow } from '../../lib/useIsNarrow'
 import { notificationsSupported, notificationPermission, requestNotificationPermission } from '../../lib/notifications'
 import { Btn } from '../ui/Btn'
 import { usePushStore } from '../../store/push'
 import { useConnectionStore } from '../../store/connection'
 import { PUSH_CATEGORIES } from '../../lib/webPush'
+import { Section } from '../ui/Card'
+import { Toggle } from '../ui/Toggle'
 
 // Theme editing lives in its own screen now (components/theme/ThemesView). This keeps the
 // non-appearance app settings: status-bar meters, zoom, stall timeout, and updates.
@@ -299,17 +300,6 @@ export function TextAreaField({ label, value, placeholder, onChange, rows = 4 }:
   )
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius)' }}>
-      <div className="px-4 py-2.5 text-xs font-semibold" style={{ borderBottom: '1px solid var(--border)', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-        {title}
-      </div>
-      <div className="p-4">{children}</div>
-    </div>
-  )
-}
-
 function SliderField({ label, value, min, max, unit, description, onChange }: {
   label: string; value: number; min: number; max: number; unit: string; description?: string; onChange: (v: number) => void
 }) {
@@ -333,34 +323,3 @@ function SliderField({ label, value, min, max, unit, description, onChange }: {
   )
 }
 
-function Toggle({ label, value, onChange }: { label: string; value: boolean; onChange: (v: boolean) => void }) {
-  const narrow = useIsNarrow()
-  // A larger pill on mobile for a comfortable tap target. `minHeight` is set explicitly
-  // so the global `button { min-height: 40px }` mobile rule doesn't stretch the switch
-  // into a square (it only grows buttons that DON'T set their own min-height).
-  const W = narrow ? 46 : 36
-  const H = narrow ? 26 : 20
-  const K = narrow ? 20 : 14   // knob diameter
-  const pad = 3
-  return (
-    <div className="flex items-center justify-between gap-3">
-      <span className="text-sm" style={{ color: 'var(--text-primary)' }}>{label}</span>
-      <button
-        role="switch"
-        aria-checked={value}
-        aria-label={label}
-        onClick={() => onChange(!value)}
-        style={{
-          width: W, height: H, minHeight: H, flexShrink: 0, borderRadius: H / 2,
-          cursor: 'pointer', border: 'none', position: 'relative',
-          background: value ? 'var(--accent)' : 'var(--border)', transition: 'background 0.2s'
-        }}
-      >
-        <div style={{
-          width: K, height: K, borderRadius: '50%', background: '#fff',
-          position: 'absolute', top: pad, left: value ? W - K - pad : pad, transition: 'left 0.2s'
-        }} />
-      </button>
-    </div>
-  )
-}
