@@ -6,14 +6,31 @@ import { findingLocation, hasCriticalFinding } from '../../lib/pluginInstall'
 import { Btn } from '../ui/Btn'
 import { Pill } from '../ui/Pill'
 import { InstallStatus } from './InstallStatus'
+import { PluginCatalogBrowser } from './PluginCatalogBrowser'
+import { useGatewaySupport } from '../../lib/useGatewaySupport'
 
 // Find and install plugins from ClawHub.
 //
 // "Add plugin" beside this registers a config entry for a plugin already on disk — it
 // installs nothing. Until now that was the only route, so getting a plugin onto the
 // gateway meant leaving the app for a shell.
+//
+// A 2026.9 gateway has a real catalog (plugins.catalog.*), browsed in
+// PluginCatalogBrowser. Older gateways keep the search box below, unchanged apart from
+// the automatic restart after an install.
+export function PluginBrowser({ onClose, installedIds, onManage, onOpenChat }: {
+  onClose: () => void
+  installedIds: Set<string>
+  onManage: (pluginId: string) => void
+  onOpenChat?: () => void
+}) {
+  const { supported } = useGatewaySupport({ methods: ['plugins.catalog.browse'] })
+  return supported
+    ? <PluginCatalogBrowser onClose={onClose} onManage={onManage} onOpenChat={onOpenChat} />
+    : <PluginSearchBrowser onClose={onClose} installedIds={installedIds} />
+}
 
-export function PluginBrowser({ onClose, installedIds }: { onClose: () => void; installedIds: Set<string> }) {
+export function PluginSearchBrowser({ onClose, installedIds }: { onClose: () => void; installedIds: Set<string> }) {
   const {
     query, results, searching, searched, busy, error, consent, policy, justInstalled,
     search, install, clearError,

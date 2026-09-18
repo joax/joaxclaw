@@ -2,8 +2,9 @@ import { create } from 'zustand'
 import { gatewayClient } from '../lib/gateway'
 import { useConnectionStore } from './connection'
 import {
-  installParamsFor,
-  type ConsentRequired, type DeclaredSurface, type PluginInspect, type PluginSearchHit, type PluginSearchPackage,
+  browseParams, installParamsFor,
+  type BrowseResult, type CatalogCategory, type CatalogIntent, type ConsentRequired, type DeclaredSurface,
+  type DiscoveryDetail, type DiscoveryEntry, type PluginInspect, type PluginSearchHit, type PluginSearchPackage,
 } from '../lib/pluginCatalog'
 import {
   classifyInstallError, installedOutcome, restartCompleted, restartOverlayCopy, withAcks,
@@ -39,6 +40,14 @@ export interface PendingPolicy {
   name: string
 }
 
+/** One entry's detail record, loaded when its card is opened. */
+export interface DetailSlot {
+  loading: boolean
+  plugin?: DiscoveryEntry
+  detail?: DiscoveryDetail
+  error?: string
+}
+
 interface PluginCatalogState {
   query: string
   results: PluginSearchHit[]
@@ -59,6 +68,26 @@ interface PluginCatalogState {
   /** The Browse modal is open. Kept here so it reopens after an install's restart. */
   browserOpen: boolean
 
+  // ── The catalog browser (plugins.catalog.*, 2026.9) ──
+  intent: CatalogIntent
+  category: string | null
+  /** The catalog search, separate from the old search browser's `query`. */
+  catalogQuery: string
+  items: DiscoveryEntry[]
+  nextCursor: string | null
+  remoteError: string | null
+  listState: 'idle' | 'loading' | 'ready' | 'error'
+  listError: string | null
+  loadingMore: boolean
+  /** Null until loaded; an empty list when the call failed (the chips row hides). */
+  categories: CatalogCategory[] | null
+  details: Record<string, DetailSlot>
+  selectedId: string | null
+  /** From the last plugins.list: false when the gateway's config is read-only. */
+  mutationAllowed: boolean | null
+  /** A plugin to select once the list that contains it has loaded (openPluginBrowser). */
+  pendingPluginId: string | null
+
   search: (query: string) => Promise<void>
   /** The search browser's Install: the same flow as everything else. */
   install: (pkg: PluginSearchPackage) => Promise<void>
@@ -77,6 +106,15 @@ interface PluginCatalogState {
   clearError: () => void
   reset: () => void
   setBrowserOpen: (open: boolean) => void
+  setView: (patch: { intent?: CatalogIntent; category?: string | null; catalogQuery?: string }) => void
+  loadView: () => Promise<void>
+  loadMore: () => Promise<void>
+  loadCategories: () => Promise<void>
+  loadDetail: (id: string, force?: boolean) => Promise<void>
+  select: (id: string | null) => void
+  loadMutationAllowed: () => Promise<void>
+  /** Forget everything learned from the previous connection. */
+  resetCatalog: () => void
 }
 
 const errText = (e: unknown): string => {
@@ -96,6 +134,8 @@ let runToken = 0
 let stopWatching: (() => void) | null = null
 let timeoutTimer: ReturnType<typeof setTimeout> | null = null
 let restartFrom: { bootId?: string; seq: number } | null = null
+// Bumped by every list request, so a slow answer for a view the user has left is dropped.
+let viewSeq = 0
 
 function stopRestartWait() {
   stopWatching?.()
@@ -243,6 +283,14 @@ export const usePluginCatalogStore = create<PluginCatalogState>((set, get) => {
       if (outcome === 'missing') { fail('missing'); return }
       patchRun({ phase: 'done', outcome, ...(error ? { message: error } : {}) })
       set({ busy: null })
+      // The card and pane read `local` from the catalog, which the install just changed.
+      if (get().browserOpen) {
+        set({ details: {} })
+        void get().loadView()
+        void get().loadMutationAllowed()
+        const sel = get().selectedId
+        if (sel) void get().loadDetail(sel, true)
+      }
     } catch (e) {
       if (token !== runToken) return
       fail('missing', errText(e))
@@ -262,6 +310,20 @@ export const usePluginCatalogStore = create<PluginCatalogState>((set, get) => {
     justInstalled: [],
     restartRequired: false,
     browserOpen: false,
+    intent: 'featured',
+    category: null,
+    catalogQuery: '',
+    items: [],
+    nextCursor: null,
+    remoteError: null,
+    listState: 'idle',
+    listError: null,
+    loadingMore: false,
+    categories: null,
+    details: {},
+    selectedId: null,
+    mutationAllowed: null,
+    pendingPluginId: null,
 
     async search(query) {
       const q = query.trim()
@@ -376,5 +438,103 @@ export const usePluginCatalogStore = create<PluginCatalogState>((set, get) => {
     clearError() { set({ error: null }) },
     reset() { set({ query: '', results: [], searched: false, error: null }) },
     setBrowserOpen(open) { set({ browserOpen: open }) },
+
+    setView(patch) {
+      set(patch)
+      void get().loadView()
+    },
+
+    async loadView() {
+      const seq = ++viewSeq
+      const { intent, category, catalogQuery } = get()
+      set({ listState: 'loading', listError: null, nextCursor: null, loadingMore: false })
+      try {
+        const res = await gatewayClient.request<BrowseResult>('plugins.catalog.browse', browseParams({ intent, category, query: catalogQuery }))
+        if (seq !== viewSeq) return
+        const items = Array.isArray(res?.items) ? res.items : []
+        set({ items, nextCursor: res?.nextCursor ?? null, remoteError: res?.remoteError ?? null, listState: 'ready' })
+        // openPluginBrowser({ pluginId }): select it once a list that contains it arrives.
+        const want = get().pendingPluginId
+        const hit = want ? items.find(e => e.local.pluginId === want || e.id === want) : undefined
+        if (hit) { set({ pendingPluginId: null }); get().select(hit.id) }
+      } catch (e) {
+        if (seq !== viewSeq) return
+        set({ items: [], listState: 'error', listError: errText(e), remoteError: null })
+      }
+    },
+
+    async loadMore() {
+      const { nextCursor, intent, category, catalogQuery, loadingMore } = get()
+      // Search results don't page: the gateway refuses a cursor with a query.
+      if (!nextCursor || loadingMore || catalogQuery.trim()) return
+      const seq = viewSeq
+      set({ loadingMore: true })
+      try {
+        const res = await gatewayClient.request<BrowseResult>('plugins.catalog.browse', browseParams({ intent, category, cursor: nextCursor }))
+        if (seq !== viewSeq) return
+        const seen = new Set(get().items.map(e => e.id))
+        const more = (Array.isArray(res?.items) ? res.items : []).filter(e => !seen.has(e.id))
+        set(s => ({ items: [...s.items, ...more], nextCursor: res?.nextCursor ?? null, loadingMore: false }))
+      } catch (e) {
+        if (seq !== viewSeq) return
+        set({ loadingMore: false, listError: errText(e) })
+      }
+    },
+
+    async loadCategories() {
+      if (get().categories) return
+      try {
+        const res = await gatewayClient.request<{ categories?: CatalogCategory[] }>('plugins.catalog.categories', {})
+        const list = Array.isArray(res?.categories) ? [...res.categories] : []
+        set({ categories: list.sort((a, b) => a.order - b.order) })
+      } catch {
+        set({ categories: [] })
+      }
+    },
+
+    async loadDetail(id, force) {
+      const slot = get().details[id]
+      if (slot && !force && (slot.loading || slot.detail)) return
+      set(s => ({ details: { ...s.details, [id]: { ...s.details[id], loading: true, error: undefined } } }))
+      try {
+        const res = await gatewayClient.request<{ plugin?: DiscoveryEntry; detail?: DiscoveryDetail }>('plugins.catalog.get', { id })
+        set(s => ({ details: { ...s.details, [id]: { loading: false, plugin: res?.plugin, detail: res?.detail } } }))
+      } catch (e) {
+        set(s => ({ details: { ...s.details, [id]: { loading: false, error: errText(e) } } }))
+      }
+    },
+
+    select(id) {
+      set({ selectedId: id })
+      if (id) void get().loadDetail(id)
+    },
+
+    async loadMutationAllowed() {
+      try {
+        const res = await gatewayClient.request<{ mutationAllowed?: unknown }>('plugins.list', {})
+        set({ mutationAllowed: typeof res?.mutationAllowed === 'boolean' ? res.mutationAllowed : null })
+      } catch {
+        set({ mutationAllowed: null })
+      }
+    },
+
+    resetCatalog() {
+      ++viewSeq
+      set({ items: [], nextCursor: null, remoteError: null, listState: 'idle', listError: null, loadingMore: false, categories: null, details: {}, mutationAllowed: null })
+    },
   }
 })
+
+/**
+ * Open Browse on the Plugins tab, optionally searching for something or selecting one
+ * plugin once it's listed. A one-shot intent: the caller also moves to Gateway →
+ * Extensions (`focusGatewayTab('extensions')`) and navigates there.
+ */
+export function openPluginBrowser(opts: { query?: string; pluginId?: string } = {}): void {
+  usePluginCatalogStore.setState({
+    browserOpen: true,
+    selectedId: null,
+    pendingPluginId: opts.pluginId ?? null,
+    ...(opts.query !== undefined ? { catalogQuery: opts.query } : {}),
+  })
+}
