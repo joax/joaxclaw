@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Search, Plus, MoreVertical, Pencil, Trash2, Check, X } from 'lucide-react'
 import type { ChatItem } from './ChatView'
 import { toneColor } from '../../lib/stateTone'
+import { GoalMarker } from './GoalBadges'
 
 // Purpose-built mobile chat list (replaces the stretched desktop sidebar on phones).
 // Full-width tappable rows with an avatar, name, last-message preview and time; a
@@ -130,6 +131,7 @@ function Row({ item, menuOpen, renaming, onMenu, onStartRename, onEndRename, onC
         <span className="min-w-0 flex-1">
           <span className="flex items-center gap-2">
             <span className="truncate" style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-primary)', flex: 1, minWidth: 0 }}>{item.name}</span>
+            <GoalMarker sessionKey={item.sessionKey} size={12} />
             {item.time && <span style={{ fontSize: 12, color: 'var(--text-secondary)', flexShrink: 0 }}>{item.time}</span>}
           </span>
           {item.subtitle && (
