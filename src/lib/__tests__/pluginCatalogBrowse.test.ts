@@ -4,6 +4,7 @@ import {
   needsSummary, readmeForDisplay, securityLabel, summariseRemoteError, unavailableReason, updatedAgo,
   README_RENDER_LIMIT, type DiscoveryEntry, type LocalState,
 } from '../pluginCatalog'
+import * as F from './fixtures/sprint/pluginCatalog'
 
 // Entries shaped as PluginDiscoveryEntrySchema (OpenClaw 2026.9.4).
 const entry = (local: Partial<DiscoveryEntry['local']> = {}, catalog: Partial<DiscoveryEntry['catalog']> = {}): DiscoveryEntry => ({
@@ -64,7 +65,7 @@ describe('unavailableReason', () => {
     expect(unavailableReason(entry({ action: 'unavailable' }), { mutationAllowed: false })).toMatch(/doesn't allow plugin changes from apps/)
   })
   it('names a local-only row with nothing to install', () => {
-    expect(unavailableReason(entry({ action: 'unavailable', install: undefined }), { mutationAllowed: true })).toBe('Not available from the catalog.')
+    expect(unavailableReason({ ...entry({ action: 'unavailable', install: undefined }, { packageName: undefined }), id: 'local_eA' }, { mutationAllowed: true })).toBe('Not available from the catalog.')
   })
   it('falls back to a generic line', () => {
     expect(unavailableReason(entry({ action: 'unavailable' }), { mutationAllowed: null })).toBe("Can't be installed from here.")
@@ -82,8 +83,9 @@ describe('installTargetForEntry', () => {
     const e = entry({ install: { source: 'official', pluginId: 'zoom-meetings' }, pluginId: 'zoom-meetings' })
     expect(installTargetForEntry(e, { version: '9.9.9' })?.params).toEqual({ source: 'official', pluginId: 'zoom-meetings' })
   })
-  it('null with nothing to install from', () => {
-    expect(installTargetForEntry(entry({ install: undefined }))).toBeNull()
+  it('null with nothing to install from, or when the gateway says it cannot be installed', () => {
+    expect(installTargetForEntry({ ...entry({ install: undefined }, { packageName: undefined }), id: 'local_eA' })).toBeNull()
+    expect(installTargetForEntry(entry({ action: 'unavailable' }))).toBeNull()
   })
 })
 
@@ -91,9 +93,9 @@ describe('hostInstallCommand', () => {
   it('uses the clawhub: spec for ClawHub entries', () => {
     expect(hostInstallCommand(entry())).toBe('openclaw plugins install clawhub:@acme/issue-tracker')
   })
-  it('uses the npm package for official entries', () => {
+  it('uses the bare id for official entries (there is no npm spec on an entry)', () => {
     expect(hostInstallCommand(entry({ install: { source: 'official', pluginId: 'google-meet' } }, { packageName: '@openclaw/google-meet' })))
-      .toBe('openclaw plugins install @openclaw/google-meet')
+      .toBe('openclaw plugins install google-meet')
   })
   it('falls back to the plugin id', () => {
     expect(hostInstallCommand(entry({ install: { source: 'official', pluginId: 'google-meet' } }, { packageName: undefined })))
@@ -120,13 +122,17 @@ describe('needsSummary', () => {
 })
 
 describe('summariseRemoteError', () => {
-  it('shortens the ClawHub outage text', () => {
-    expect(summariseRemoteError('ClawHub is unavailable: fetch failed. Bundled plugins remain available.'))
-      .toBe("ClawHub isn't reachable right now. Showing bundled and installed plugins.")
+  it('says what is on screen for each real outage variant', () => {
+    const cases = [F.BROWSE_ALL_CLAWHUB_DOWN, F.BROWSE_FEATURED_CLAWHUB_DOWN, F.BROWSE_BUNDLED_CLAWHUB_DOWN, F.BROWSE_SEARCH_BOTH_DOWN, F.BROWSE_SEARCH_PARTIAL]
+    for (const r of cases) {
+      expect(summariseRemoteError(r.remoteError, r.items.length)).toBe(r.items.length
+        ? "ClawHub isn't reachable right now. Showing only what's already on this gateway."
+        : "ClawHub isn't reachable right now, so this list is empty. Try again in a moment.")
+    }
   })
   it('passes other text through', () => {
-    expect(summariseRemoteError('Something else')).toBe('Something else')
-    expect(summariseRemoteError(undefined)).toBeNull()
+    expect(summariseRemoteError('Something else', 0)).toBe('Something else')
+    expect(summariseRemoteError(undefined, 0)).toBeNull()
   })
 })
 
@@ -140,7 +146,11 @@ describe('clawhubUrl', () => {
 })
 
 describe('securityLabel', () => {
-  it('maps the ClawHub verdicts', () => {
+  it('maps the ClawHub verdicts, with no date (the gateway sends none)', () => {
+    expect(securityLabel(F.DETAIL_CLAWHUB_FULL.detail.security)).toEqual({ tone: 'done', text: 'Verified clean' })
+    expect(securityLabel({ status: 'pass' })?.tone).toBe('done')
+    expect(securityLabel(F.DETAIL_CLAWHUB_BLOCKED.detail.security)).toEqual({ tone: 'failed', text: 'Blocked by ClawHub' })
+    expect(securityLabel({ status: 'pending' })?.text).toBe('Review recommended')
     expect(securityLabel({ status: 'clean' })).toEqual({ tone: 'done', text: 'Verified clean' })
     expect(securityLabel({ status: 'suspicious' })).toEqual({ tone: 'needsYou', text: 'Review recommended' })
     expect(securityLabel({ status: 'malicious' })).toEqual({ tone: 'failed', text: 'Blocked by ClawHub' })
@@ -171,5 +181,49 @@ describe('small formatters', () => {
     expect(readmeForDisplay('  ')).toBeNull()
     expect(readmeForDisplay('x'.repeat(README_RENDER_LIMIT + 5))?.truncated).toBe(true)
     expect(readmeForDisplay('# Hi')).toEqual({ text: '# Hi', truncated: false })
+  })
+})
+
+// Against QA's captured 2026.9.4 payloads.
+describe('catalog fixtures', () => {
+  it('installs a ClawHub-only entry by its package name (it never carries local.install)', () => {
+    expect(F.ENTRY_REMOTE_INSTALLABLE.local.install).toBeUndefined()
+    expect(installTargetForEntry(F.ENTRY_REMOTE_INSTALLABLE, { version: '1.4.2' })?.params)
+      .toEqual({ source: 'clawhub', packageName: '@example-publisher/issue-tracker', version: '1.4.2' })
+    expect(cardAction(F.ENTRY_REMOTE_INSTALLABLE, { admin: true }).kind).toBe('install')
+  })
+  it('respects the gate when the config is read-only', () => {
+    expect(installTargetForEntry(F.ENTRY_REMOTE_READ_ONLY)).toBeNull()
+    expect(cardAction(F.ENTRY_REMOTE_READ_ONLY, { admin: true }).kind).toBe('none')
+    expect(unavailableReason(F.ENTRY_REMOTE_READ_ONLY, { mutationAllowed: false })).toMatch(/^This gateway doesn't allow/)
+  })
+  it('installs a present local plugin through its official action, without a version', () => {
+    expect(installTargetForEntry(F.ENTRY_LOCAL_OFFICIAL_INSTALLABLE, { version: '9' })?.params).toEqual({ source: 'official', pluginId: 'memory-core' })
+    expect(hostInstallCommand(F.ENTRY_LOCAL_OFFICIAL_INSTALLABLE)).toBe('openclaw plugins install memory-core')
+  })
+  it('has nothing to install for a local-only row', () => {
+    expect(installTargetForEntry(F.ENTRY_LOCAL_UNAVAILABLE)).toBeNull()
+    expect(unavailableReason(F.ENTRY_LOCAL_UNAVAILABLE, { mutationAllowed: true })).toBe('Not available from the catalog.')
+    expect(hostInstallCommand(F.ENTRY_LOCAL_UNAVAILABLE)).toBe('openclaw plugins install browser')
+  })
+  it('uses the clawhub: spec for a ClawHub entry', () => {
+    expect(hostInstallCommand(F.ENTRY_REMOTE_INSTALLABLE)).toBe('openclaw plugins install clawhub:@example-publisher/issue-tracker')
+  })
+  it('maps every installed state', () => {
+    expect(cardAction(F.ENTRY_INSTALLED_ENABLED, { admin: false }).pill?.text).toBe('Installed')
+    expect(cardAction(F.ENTRY_INSTALLED_NEEDS_SETUP, { admin: true }).kind).toBe('configure')
+    expect(cardAction(F.ENTRY_INSTALLED_DISABLED, { admin: true }).pill?.text).toBe('Off')
+    expect(cardAction(F.ENTRY_INSTALLED_ERROR, { admin: true }).pill?.text).toBe('Error')
+  })
+  it("doesn't claim a local plugin needs nothing", () => {
+    expect(needsSummary(F.DETAIL_LOCAL.detail)).toEqual(['Adds skills: joaxclaw-files'])
+    expect(needsSummary(F.DETAIL_CLAWHUB_FULL.detail)).toEqual(['1 API key (ISSUE_TOKEN)', 'Adds skills: triage'])
+  })
+  it('warns about a newer minimum gateway', () => {
+    expect(needsNewerGateway(F.DETAIL_CLAWHUB_NEEDS_NEWER_GATEWAY.detail.compatibility?.minGatewayVersion, '2026.9.4')).toBe(true)
+    expect(needsNewerGateway(F.DETAIL_CLAWHUB_FULL.detail.compatibility?.minGatewayVersion, '2026.9.4')).toBe(false)
+  })
+  it('cuts the oversize README', () => {
+    expect(readmeForDisplay(F.DETAIL_OVERSIZE_README.detail.readme)?.truncated).toBe(true)
   })
 })

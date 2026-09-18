@@ -6,6 +6,7 @@ import { findingLocation, hasCriticalFinding } from '../../lib/pluginInstall'
 import { Btn } from '../ui/Btn'
 import { Pill } from '../ui/Pill'
 import { InstallStatus } from './InstallStatus'
+import { CommandHint } from '../ui/CommandHint'
 import { PluginCatalogBrowser } from './PluginCatalogBrowser'
 import { useGatewaySupport } from '../../lib/useGatewaySupport'
 
@@ -24,10 +25,37 @@ export function PluginBrowser({ onClose, installedIds, onManage, onOpenChat }: {
   onManage: (pluginId: string) => void
   onOpenChat?: () => void
 }) {
-  const { supported } = useGatewaySupport({ methods: ['plugins.catalog.browse'] })
-  return supported
-    ? <PluginCatalogBrowser onClose={onClose} onManage={onManage} onOpenChat={onOpenChat} />
-    : <PluginSearchBrowser onClose={onClose} installedIds={installedIds} />
+  const catalog = useGatewaySupport({ methods: ['plugins.catalog.browse'] }).supported
+  const search = useGatewaySupport({ methods: ['plugins.search'] }).supported
+  if (catalog) return <PluginCatalogBrowser onClose={onClose} onManage={onManage} onOpenChat={onOpenChat} />
+  if (search) return <PluginSearchBrowser onClose={onClose} installedIds={installedIds} />
+  return <PluginsFromHostOnly onClose={onClose} />
+}
+
+// Gateways before 2026.7 (2026.6.x) have no plugin search or install RPCs at all: plugins
+// go on from the host's CLI.
+function PluginsFromHostOnly({ onClose }: { onClose: () => void }) {
+  return (
+    <div className="fixed inset-x-0 bottom-0 z-[100] flex items-center justify-center"
+      style={{ top: 36, background: 'rgba(0,0,0,0.5)' }} onClick={onClose}>
+      <div role="dialog" aria-modal="true" aria-label="Browse plugins" className="flex flex-col p-5 gap-3" style={{
+        background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius)',
+        width: 520, maxWidth: '94vw', boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
+      }} onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between">
+          <h3 className="font-semibold text-base" style={{ color: 'var(--text-primary)' }}>Browse plugins</h3>
+          <button onClick={onClose} aria-label="Close" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)' }}>
+            <X size={16} />
+          </button>
+        </div>
+        <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
+          This gateway can&apos;t search for or install plugins from apps. Update OpenClaw, or install them on the gateway host:
+        </p>
+        <CommandHint command="openclaw plugins search <name>" lead="" />
+        <CommandHint command="openclaw plugins install <name>" lead="" />
+      </div>
+    </div>
+  )
 }
 
 export function PluginSearchBrowser({ onClose, installedIds }: { onClose: () => void; installedIds: Set<string> }) {
