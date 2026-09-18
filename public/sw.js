@@ -30,11 +30,12 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('notificationclick', (event) => {
   event.notification.close()
   const data = event.notification.data || {}
-  // `navigate` comes from a Tier 1 notification this app raised itself; `url` comes from
-  // a gateway push and is a Control UI path we translate app-side (lib/webPush.ts), so
-  // the mapping stays in one tested place rather than being duplicated here.
-  const msg = { type: 'joax-navigate', navigate: data.navigate, url: data.url }
-  const routable = data.navigate || data.url
+  // `navigate` comes from a Tier 1 notification this app raised itself; `url` and `tag`
+  // come from a gateway push (a Control UI path, and e.g. `openclaw-task-failed-<id>`)
+  // and are translated app-side (lib/webPush.ts pushToNavigate), so the mapping stays in
+  // one tested place rather than being duplicated here.
+  const msg = { type: 'joax-navigate', navigate: data.navigate, url: data.url, tag: data.tag }
+  const routable = data.navigate || data.url || data.tag
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
       for (const c of list) {
@@ -53,9 +54,9 @@ self.addEventListener('notificationclick', (event) => {
 
 // Tier 2: true background push from the gateway, which wakes this worker even with the
 // app fully closed. OpenClaw sends `{ title, body, tag, url?, renotify }` — `url` is its
-// own Control UI path and is absent for categories with nothing to select (a finished
-// agent run, a failed background task). `navigate` is accepted too so a payload this app
-// generates itself keeps working.
+// own Control UI path, and the tag names what it's about (a failed background task's
+// tag carries the task id). `navigate` is accepted too so a payload this app generates
+// itself keeps working.
 //
 // `userVisibleOnly: true` was promised at subscribe time, so every push MUST show a
 // notification; bailing out silently is what gets a subscription revoked by the browser.
@@ -69,7 +70,7 @@ self.addEventListener('push', (event) => {
       tag: payload.tag,
       icon: './icons/icon-192.png',
       badge: './icons/icon-192.png',
-      data: { navigate: payload.navigate, url: payload.url },
+      data: { navigate: payload.navigate, url: payload.url, tag: payload.tag },
       // The gateway sets renotify:false on a replacement (e.g. an approval going
       // terminal) so a re-tagged alert doesn't buzz the phone a second time.
       ...(payload.tag ? { renotify: payload.renotify !== false } : {}),

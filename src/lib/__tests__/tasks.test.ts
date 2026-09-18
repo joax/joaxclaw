@@ -3,7 +3,7 @@ import {
   parseTask, parseTaskList, taskState, isNeedsYou, kindInfo, orderItems, orderTasks, stripItems,
   dashboardItems, summaryLine, chipLabel, worstTone, taskMatchesSession, fromTask, fromScriptJob,
   scriptState, metaLine, readGatewayError, isStaleCursor, isTaskGone, addHidden, canManageTasks,
-  mergeTask, stitchPages, listItems, taskAgents, deliveryLabel, resultText, taskChatKey, STRIP_DONE_MS, STRIP_FAILED_MS, type TaskSummary,
+  mergeTask, stitchPages, listItems, taskAgents, trayCounts, deliveryLabel, resultText, taskChatKey, STRIP_DONE_MS, STRIP_FAILED_MS, type TaskSummary,
 } from '../tasks'
 import type { ScriptJob } from '../scriptJobs'
 
@@ -306,6 +306,18 @@ describe('stitchPages', () => {
   it('keeps the newest copy of a message seen twice, and messages without ids', () => {
     const out = stitchPages([[m('a', 'new'), { role: 'user', content: 'no id' }], [m('a', 'old')]])
     expect(out).toEqual([m('a', 'new'), { role: 'user', content: 'no id' }])
+  })
+})
+
+describe('trayCounts', () => {
+  it('counts running and queued tasks plus running scripts, and needs-you separately', () => {
+    const tasks = [
+      task({ id: 'a' }), task({ id: 'b', status: 'queued' }), task({ id: 'c', status: 'completed' }),
+      task({ id: 'n', status: 'completed', terminalOutcome: 'blocked', deliveryStatus: 'failed' }),
+    ]
+    const jobs = [job(), job({ id: 'j2', running: false, done: true, exitCode: 0 })]
+    expect(trayCounts(tasks, jobs)).toEqual({ tasks: 3, needsYou: 1 })
+    expect(trayCounts([], [])).toEqual({ tasks: 0, needsYou: 0 })
   })
 })
 

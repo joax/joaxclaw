@@ -3,6 +3,8 @@ import { gatewayClient } from '../lib/gateway'
 import { stopJob } from '../lib/scriptJobs'
 import { useConnectionStore } from './connection'
 import { useFilesStore } from './files'
+import { useChatStore } from './chat'
+import { agentIdFromSessionKey } from '../lib/sessionName'
 import {
   parseTask, parseTaskList, mergeTask, isActive, addHidden, readGatewayError, isTaskGone, isStaleCursor,
   ACTIVE_STATUSES, FINISHED_STATUSES, type TaskSummary, type BackgroundItem,
@@ -81,6 +83,8 @@ interface TasksState {
   hide: (sessionKey: string, itemKey: string) => void
   clearActionError: (itemKey: string) => void
 
+  /** A tapped push or the tray: open a chat, a task, or the list. */
+  navigate: (nav: { sessionKey?: string; mainOf?: string; taskId?: string; tasks?: 'list' }) => Promise<void>
   openDrawer: (taskId: string) => void
   openJob: (jobId: string) => void
   openList: () => void
@@ -139,6 +143,18 @@ const sessionSeq = new Map<string, number>()
 const watchers = new Map<string, number>()
 
 const canList = () => gatewayClient.connected && gatewayClient.hasMethod('tasks.list')
+
+/** Resolves true once connected (at once if already), false after `ms`. */
+function whenConnected(ms = 60_000): Promise<boolean> {
+  if (useConnectionStore.getState().status === 'connected') return Promise.resolve(true)
+  return new Promise(resolve => {
+    const timer = setTimeout(() => { off(); resolve(false) }, ms)
+    const off = useConnectionStore.subscribe(s => {
+      if (s.status !== 'connected') return
+      clearTimeout(timer); off(); resolve(true)
+    })
+  })
+}
 
 // The Files drawer and the task drawer share the right-hand slot: opening one closes the other.
 const closeFiles = () => {
@@ -389,10 +405,32 @@ export const useTasksStore = create<TasksState>((set, get) => {
       })
     },
 
+    async navigate(nav) {
+      // The drawer loads its task itself once connected, so it can open straight away,
+      // even on a cold start from a push.
+      if (nav.taskId) get().openDrawer(nav.taskId)
+      else if (nav.tasks === 'list') get().openList()
+      if (!nav.sessionKey) return
+      if (!(await whenConnected())) return
+      let key = nav.sessionKey
+      // `chat/<agent>` names the agent's main session, whose key depends on the gateway's
+      // configurable session.mainKey.
+      if (nav.mainOf) {
+        try {
+          const res = await gatewayClient.request<{ mainKey?: string }>('agents.list')
+          if (res?.mainKey) key = `agent:${nav.mainOf}:${res.mainKey}`
+        } catch { /* the gateway also accepts "main" as an alias for its main session */ }
+      }
+      const agent = agentIdFromSessionKey(key)
+      const chat = useChatStore.getState()
+      const convId = await chat.loadSessionMessages(key, agent, agent)
+      if (convId) chat.selectConversation(convId)
+    },
+
     openDrawer: taskId => {
       closeFiles()
+      // The drawer reads the task (tasks.get, for prompt and result) itself once connected.
       set(s => ({ drawer: { open: true, mode: 'detail', taskId, fromList: s.drawer.open && s.drawer.mode === 'list', expanded: s.drawer.open && s.drawer.expanded } }))
-      void refreshOne(taskId)
     },
     openJob: jobId => {
       closeFiles()

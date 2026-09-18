@@ -470,6 +470,20 @@ export function stitchPages(pages: unknown[][]): unknown[] {
   return out
 }
 
+// ── Tray ─────────────────────────────────────────────────────────────────────
+
+/** The tray's counts: work running or queued (tasks plus scripts), and results that need you. */
+export function trayCounts(tasks: TaskSummary[], jobs: ScriptJob[]): { tasks: number; needsYou: number } {
+  let running = 0
+  let needsYou = 0
+  for (const t of tasks) {
+    if (isActive(t)) running++
+    else if (isNeedsYou(t)) needsYou++
+  }
+  for (const j of jobs) if (j.running) running++
+  return { tasks: running, needsYou }
+}
+
 // ── Drawer list mode ─────────────────────────────────────────────────────────
 
 export type ListFilter = 'running' | 'needsYou' | 'failed' | 'all'
