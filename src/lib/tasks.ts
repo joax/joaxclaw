@@ -381,13 +381,16 @@ export function changesLine(d: { files: number; added: number; removed: number }
  * The row's second line: Kind · agent · elapsed · n tools · now: tool · changes. Parts the
  * item doesn't have are left out; a needs-you task explains itself instead.
  */
-export function metaLine(i: BackgroundItem, now: number): string {
+export function metaLine(i: BackgroundItem, now: number, opts: { compact?: boolean } = {}): string {
+  const elapsed = i.startedAt !== undefined ? fmtDuration((i.endedAt ?? now) - i.startedAt)
+    : i.job ? fmtDuration(i.job.elapsedMs) : undefined
+  // A phone row has room for the kind and the time only ("Subagent · 3m 12s").
+  if (opts.compact) return i.needsYou ? i.kind.label : [i.kind.label, elapsed].filter(Boolean).join(' · ')
   if (i.needsYou) return `${i.kind.label} · Completed, but the result couldn't be delivered back`
   const parts: string[] = [i.kind.label]
   const t = i.task
   if (t?.agentId) parts.push(t.agentId)
-  if (i.startedAt !== undefined) parts.push(fmtDuration((i.endedAt ?? now) - i.startedAt))
-  else if (i.job) parts.push(fmtDuration(i.job.elapsedMs))
+  if (elapsed) parts.push(elapsed)
   if (t?.toolUseCount) parts.push(`${t.toolUseCount} ${t.toolUseCount === 1 ? 'tool' : 'tools'}`)
   if (i.active && t?.lastToolName) parts.push(`now: ${t.lastToolName}`)
   if (t?.diffStat && (t.diffStat.added || t.diffStat.removed || t.diffStat.files)) parts.push(changesLine(t.diffStat))

@@ -273,6 +273,13 @@ describe('metaLine', () => {
     const d = fromTask(task({ status: 'completed', agentId: 'researcher', startedAt: NOW - 124_000, endedAt: NOW, lastToolName: 'x', diffStat: { files: 3, added: 120, removed: 8 } }))
     expect(metaLine(d, NOW)).toBe('Subagent · researcher · 2m 04s · +120 −8 in 3 files')
   })
+  it('keeps just the kind and the time on a phone', () => {
+    const i = fromTask(task({ agentId: 'researcher', startedAt: NOW - (3 * 60 + 12) * 1000, toolUseCount: 14, lastToolName: 'web_fetch' }))
+    expect(metaLine(i, NOW, { compact: true })).toBe('Subagent · 3m 12s')
+    const n = fromTask(task({ kind: 'automation_run', status: 'completed', terminalOutcome: 'blocked', deliveryStatus: 'failed' }))
+    expect(metaLine(n, NOW, { compact: true })).toBe('Automation')
+    expect(metaLine(fromScriptJob(job({ startedAt: NOW - 41_000 })), NOW, { compact: true })).toBe('Script · 41s')
+  })
   it('explains a needs-you task instead', () => {
     const n = fromTask(task({ kind: 'automation_run', status: 'completed', terminalOutcome: 'blocked', deliveryStatus: 'failed' }))
     expect(metaLine(n, NOW)).toBe("Automation · Completed, but the result couldn't be delivered back")

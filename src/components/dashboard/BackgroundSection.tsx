@@ -55,6 +55,7 @@ export function BackgroundSection({ narrow }: { narrow?: boolean }) {
       <div>
         {items.slice(0, MAX_ROWS).map(item => (
           <TaskRow
+            stacked
             key={item.key}
             item={item}
             now={now}
