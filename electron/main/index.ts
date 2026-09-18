@@ -42,7 +42,7 @@ function getTrayIcon(): Electron.NativeImage {
 
 // Live run counts surfaced in the tray. Pushed from the renderer (which sees the
 // gateway stream) via the tray:update IPC.
-let trayCounts = { agents: 0, teams: 0 }
+let trayCounts = { agents: 0, teams: 0, tasks: 0, needsYou: 0 }
 
 function plural(n: number, word: string): string {
   return `${n} ${word}${n === 1 ? '' : 's'}`
@@ -54,7 +54,12 @@ function showMainWindow(): void {
 }
 
 function buildTrayMenu(): Menu {
-  const { agents, teams } = trayCounts
+  const { agents, teams, tasks, needsYou } = trayCounts
+  // Background tasks: running or queued work (gateway tasks and scripts), plus results
+  // that couldn't be delivered back. Opens the Dashboard with the task list beside it.
+  const tasksLabel = tasks > 0
+    ? `⏳  ${plural(tasks, 'background task')} running`
+    : '⏳  No background tasks running'
   return Menu.buildFromTemplate([
     { label: 'JoaxClaw', enabled: false },
     { type: 'separator' },
@@ -68,6 +73,11 @@ function buildTrayMenu(): Menu {
       enabled: teams > 0,
       click: () => { showMainWindow(); mainWindow?.webContents.send('app:navigate', 'teams') },
     },
+    {
+      label: needsYou > 0 ? `${tasksLabel} · ${needsYou} need${needsYou === 1 ? 's' : ''} you` : tasksLabel,
+      enabled: tasks > 0 || needsYou > 0,
+      click: () => { showMainWindow(); mainWindow?.webContents.send('app:navigate', 'tasks') },
+    },
     { type: 'separator' },
     { label: 'Open JoaxClaw', click: () => showMainWindow() },
     { label: 'About JoaxClaw', click: () => createAboutWindow() },
@@ -79,10 +89,11 @@ function buildTrayMenu(): Menu {
 function refreshTray(): void {
   if (!tray) return
   tray.setImage(getTrayIcon())
-  const { agents, teams } = trayCounts
+  const { agents, teams, tasks } = trayCounts
   const parts: string[] = []
   if (agents > 0) parts.push(plural(agents, 'agent'))
   if (teams > 0) parts.push(plural(teams, 'team'))
+  if (tasks > 0) parts.push(plural(tasks, 'task'))
   tray.setToolTip(parts.length ? `JoaxClaw — ${parts.join(', ')} running` : 'JoaxClaw')
   tray.setContextMenu(buildTrayMenu())
 }
@@ -458,8 +469,9 @@ ipcMain.handle('chat:listPoppedOut', () => [...chatWindows.keys()])
 // ── IPC: Tray run counts ──────────────────────────────────────────────────────
 // The renderer pushes live counts (it sees the gateway stream); the tray reflects
 // them in its menu + tooltip.
-ipcMain.handle('tray:update', (_e, counts: { agents?: number; teams?: number }) => {
-  trayCounts = { agents: Math.max(0, counts?.agents ?? 0), teams: Math.max(0, counts?.teams ?? 0) }
+ipcMain.handle('tray:update', (_e, counts: { agents?: number; teams?: number; tasks?: number; needsYou?: number }) => {
+  const n = (v: number | undefined) => Math.max(0, v ?? 0)
+  trayCounts = { agents: n(counts?.agents), teams: n(counts?.teams), tasks: n(counts?.tasks), needsYou: n(counts?.needsYou) }
   refreshTray()
   return { ok: true }
 })

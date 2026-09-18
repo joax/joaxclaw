@@ -237,8 +237,13 @@ function TaskDetail({ taskId, onOpenChat }: { taskId: string; onOpenChat?: () =>
   const canRetry = useGatewaySupport({ methods: ['tasks.retry'] }).supported
   const canDismiss = useGatewaySupport({ methods: ['tasks.dismiss'] }).supported
   const openChat = useOpenChat(onOpenChat)
+  const connectionSeq = useConnectionStore(s => s.connectionSeq)
   const [tab, setTab] = useState<Tab>(history ? 'output' : 'result')
   useEffect(() => { setTab(history ? 'output' : 'result') }, [taskId, history])
+  // Opened from a push before the app had connected: read the task once it has.
+  useEffect(() => {
+    if (connected && !useTasksStore.getState().byId[taskId]?.prompt) void useTasksStore.getState().loadTask(taskId)
+  }, [taskId, connected, connectionSeq])
 
   const item = task ? fromTask(task) : undefined
   const now = useNow(!!item?.active)
