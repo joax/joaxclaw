@@ -37,6 +37,7 @@ import { useQuestionsStore } from './store/questions'
 import { useGatewayModelsStore } from './store/gatewayModels'
 import { useToolSearchStore } from './store/toolSearch'
 import { useProgressCardsStore } from './store/progressCards'
+import { useTasksStore } from './store/tasks'
 import { useMetricsStore } from './store/metrics'
 import { useSettingsStore, ZOOM_STEP, restoreProfileFromBackup } from './store/settings'
 import { useExtensionsStore } from './store/extensions'
@@ -132,6 +133,8 @@ export default function App() {
       // Progress cards: re-read the ones on screen, since they may have moved while this
       // client was away, and keep the progressCard.changed broadcast subscribed.
       useProgressCardsStore.getState().start()
+      // Background tasks: every agent's active and recent work, then the `task` event.
+      useTasksStore.getState().start()
     }
   }, [status])
 
