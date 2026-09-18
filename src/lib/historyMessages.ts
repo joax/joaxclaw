@@ -16,6 +16,19 @@ import { nanoid } from './nanoid'
 const rec = (v: unknown): Record<string, unknown> | null =>
   v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null
 
+// The gateway's own content helper accepts every spelling a provider or an older
+// transcript uses (chat-display-projection: isToolCallContentType, TOOL_USE_ID_FIELDS),
+// so the app does too.
+const TOOL_CALL_TYPES = new Set(['toolcall', 'tool_call', 'tooluse', 'tool_use'])
+const TOOL_RESULT_ROLES = new Set(['toolresult', 'tool_result', 'tool', 'function'])
+const ID_FIELDS = ['id', 'toolCallId', 'tool_call_id', 'toolUseId', 'tool_use_id'] as const
+const RESULT_ID_FIELDS = ['toolCallId', 'tool_call_id', 'toolUseId', 'tool_use_id'] as const
+
+const firstString = (r: Record<string, unknown>, keys: readonly string[]): string | undefined => {
+  for (const k of keys) { const v = r[k]; if (typeof v === 'string' && v) return v }
+  return undefined
+}
+
 /** The tool calls in one message's content blocks. Status is 'done' until a result says otherwise. */
 export function extractToolCalls(msg: unknown, pluginIdFor?: (toolName: string) => string | undefined): ToolCall[] {
   const content = rec(msg)?.content
@@ -23,12 +36,12 @@ export function extractToolCalls(msg: unknown, pluginIdFor?: (toolName: string) 
   const out: ToolCall[] = []
   for (const raw of content) {
     const b = rec(raw)
-    if (!b || (b.type !== 'toolCall' && b.type !== 'tool_use')) continue
-    const args = b.type === 'toolCall' ? b.arguments : b.input
+    if (!b || typeof b.type !== 'string' || !TOOL_CALL_TYPES.has(b.type.toLowerCase())) continue
+    const args = b.arguments !== undefined ? b.arguments : b.input
     const name = typeof b.name === 'string' && b.name ? b.name : 'unknown'
     const pluginId = pluginIdFor?.(name)
     out.push({
-      id: typeof b.id === 'string' && b.id ? b.id : nanoid(),
+      id: firstString(b, ID_FIELDS) ?? nanoid(),
       name,
       ...(args !== undefined ? { args: typeof args === 'string' ? args : JSON.stringify(args) } : {}),
       status: 'done',
@@ -58,12 +71,66 @@ function resultText(content: unknown): string {
  */
 export function toolResultUpdate(msg: unknown): ToolResultUpdate | null {
   const m = rec(msg)
-  if (!m || m.role !== 'toolResult' || typeof m.toolCallId !== 'string' || !m.toolCallId) return null
+  if (!m || typeof m.role !== 'string' || !TOOL_RESULT_ROLES.has(m.role.toLowerCase())) return null
+  const callId = firstString(m, RESULT_ID_FIELDS)
+  if (!callId) return null
   const text = resultText(m.content)
-  return m.isError === true
-    ? { callId: m.toolCallId, patch: { status: 'error', error: text || 'Tool returned an error' } }
-    : { callId: m.toolCallId, patch: { status: 'done', ...(text ? { result: text } : {}) } }
+  return m.isError === true || m.is_error === true
+    ? { callId, patch: { status: 'error', error: text || 'Tool returned an error' } }
+    : { callId, patch: { status: 'done', ...(text ? { result: text } : {}) } }
 }
+
+/**
+ * Whether a message is a tool result row, in any spelling, with or without a call id.
+ * The gateway's oversized placeholder keeps the role but loses the id, so it can't be paired.
+ */
+export function isToolResultRole(msg: unknown): boolean {
+  const role = rec(msg)?.role
+  return typeof role === 'string' && TOOL_RESULT_ROLES.has(role.toLowerCase())
+}
+
+export const NESTED_TOOL_ACTIVITY = 'openclaw.nested-tool.v1'
+
+/**
+ * Nested tool activity (a sub-agent's calls under the parent's yield) arrives as its own
+ * `role: "custom"` row holding a `toolCall` block and a `toolResult` block. Rewritten
+ * into the ordinary shape: the call joins the assistant message before it, and the
+ * result becomes a result row after, so the rest of the mapping treats it like any call.
+ * Everything else passes through untouched.
+ */
+export function foldNestedToolRows(raw: unknown[]): unknown[] {
+  const out: unknown[] = []
+  for (const item of raw) {
+    const m = rec(item)
+    if (!m || m.role !== 'custom' || m.customType !== NESTED_TOOL_ACTIVITY || !Array.isArray(m.content)) { out.push(item); continue }
+    const blocks = m.content.map(rec).filter((b): b is Record<string, unknown> => !!b)
+    const calls = blocks.filter(b => typeof b.type === 'string' && TOOL_CALL_TYPES.has(b.type.toLowerCase()))
+    const results = blocks.filter(b => typeof b.type === 'string' && b.type.toLowerCase() === 'toolresult')
+    let at = out.length - 1
+    while (at >= 0 && rec(out[at])?.role !== 'assistant') at--
+    const host = rec(out[at])
+    if (!host || !calls.length) continue
+    const hostContent = Array.isArray(host.content) ? host.content : typeof host.content === 'string' ? [{ type: 'text', text: host.content }] : []
+    out[at] = { ...host, content: [...hostContent, ...calls] }
+    for (const r of results) out.push({ ...r, role: 'toolResult' })
+  }
+  return out
+}
+
+/**
+ * While a run is still going, a call in the latest turn that has no result yet is still
+ * running, as the live view would show it. Anything older has simply finished.
+ */
+export function markRunningCalls(messages: ChatMessage[], activeRun: boolean): ChatMessage[] {
+  if (!activeRun) return messages
+  const lastUser = messages.map(m => m.role).lastIndexOf('user')
+  return messages.map((m, i) => i <= lastUser || m.role !== 'assistant' || !m.toolCalls?.some(unanswered) ? m : {
+    ...m,
+    toolCalls: m.toolCalls.map(tc => (unanswered(tc) ? { ...tc, status: 'running' as const } : tc)),
+  })
+}
+
+const unanswered = (tc: ToolCall) => tc.status === 'done' && tc.result === undefined && tc.error === undefined
 
 /** Attach results to the calls they answer, wherever those calls are. Results with no matching call are ignored. */
 export function applyToolResults(messages: ChatMessage[], updates: ToolResultUpdate[]): ChatMessage[] {
