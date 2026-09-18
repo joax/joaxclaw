@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { vapidKeyToBytes, pushUrlToNavigate, defaultPushPrefs, PUSH_CATEGORIES } from '../webPush'
+import { vapidKeyToBytes, pushUrlToNavigate, pushToNavigate, sessionKeyFromControlUiPath, defaultPushPrefs, PUSH_CATEGORIES } from '../webPush'
 
 // The VAPID key arrives base64url and `PushManager.subscribe` wants raw bytes. Getting
 // the alphabet or the padding wrong produces a subscription the push service rejects
@@ -53,6 +53,55 @@ describe('pushUrlToNavigate', () => {
     expect(pushUrlToNavigate('')).toBeUndefined()
     expect(pushUrlToNavigate('   ')).toBeUndefined()
     expect(pushUrlToNavigate(42)).toBeUndefined()
+  })
+})
+
+// A failed background task's push: tag `openclaw-task-failed-<taskId>`, url the Control UI
+// path of the chat that started it (OpenClaw 2026.9.4 server-start).
+describe('pushToNavigate', () => {
+  it('opens the chat and the task from the tag and the url', () => {
+    expect(pushToNavigate({ url: 'chat/main/dashboard/4f1c', tag: 'openclaw-task-failed-abc' }))
+      .toEqual({ section: 'chat', sessionKey: 'agent:main:dashboard:4f1c', taskId: 'abc' })
+  })
+
+  it('opens only the drawer when there is just the tag', () => {
+    expect(pushToNavigate({ tag: 'openclaw-task-failed-abc' })).toEqual({ taskId: 'abc' })
+    // The gateway falls back to `tasks` when the task has no requester session.
+    expect(pushToNavigate({ url: 'tasks', tag: 'openclaw-task-failed-abc' })).toEqual({ taskId: 'abc' })
+  })
+
+  it('opens the chat from a url alone', () => {
+    expect(pushToNavigate({ url: 'chat/main/dashboard/4f1c' })).toEqual({ section: 'chat', sessionKey: 'agent:main:dashboard:4f1c' })
+  })
+
+  it('maps the main session, the ~key form and encoded segments', () => {
+    expect(pushToNavigate({ url: 'chat/main' })).toEqual({ section: 'chat', sessionKey: 'agent:main:main', mainOf: 'main' })
+    expect(sessionKeyFromControlUiPath('chat/ops', 'home')).toBe('agent:ops:home')
+    expect(sessionKeyFromControlUiPath('chat/main/v1%2E2')).toBe('agent:main:v1.2')
+    expect(pushToNavigate({ url: 'chat/ops/~key/heartbeat' })?.sessionKey).toBe('agent:ops:heartbeat')
+    expect(sessionKeyFromControlUiPath('chat/main/a%20b/~dot/~~x')).toBe('agent:main:a b:.:~x')
+    expect(sessionKeyFromControlUiPath('sessions')).toBeUndefined()
+  })
+
+  it('reads the relative url the gateway sends, with the gateway in its hash', () => {
+    expect(pushToNavigate({ url: 'chat/main/dashboard/4f1c#gatewayUrl=wss%3A%2F%2Fgw.example.com', tag: 'openclaw-task-failed-t1' }))
+      .toEqual({ section: 'chat', sessionKey: 'agent:main:dashboard:4f1c', taskId: 't1' })
+  })
+
+  it('reads an absolute url with a base path too', () => {
+    expect(pushToNavigate({ url: 'https://gw.example.com/ui/chat/main/dashboard/4f1c#gatewayUrl=wss%3A%2F%2Fgw.example.com', tag: 'openclaw-task-failed-t1' }))
+      .toEqual({ section: 'chat', sessionKey: 'agent:main:dashboard:4f1c', taskId: 't1' })
+  })
+
+  it('ignores tags that are not a failed task', () => {
+    expect(pushToNavigate({ tag: 'openclaw-agent-finished-run1' })).toBeUndefined()
+    expect(pushToNavigate({ url: 'automations?job=x', tag: 'openclaw-cron-failed-x' })).toEqual({ section: 'crons' })
+  })
+
+  it('keeps the automations and ask routes', () => {
+    expect(pushToNavigate({ url: 'automations?job=abc&run=1' })).toEqual({ section: 'crons' })
+    expect(pushToNavigate({ url: 'ask/q1' })).toEqual({ section: 'chat' })
+    expect(pushToNavigate({ url: 'approve/abc123' })).toBeUndefined()
   })
 })
 

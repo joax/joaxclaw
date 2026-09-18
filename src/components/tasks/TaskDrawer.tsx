@@ -81,7 +81,14 @@ function Header({ title, subline, back }: { title: string; subline?: ReactNode; 
   useEffect(() => { headingRef.current?.focus() }, [title])
   const size = narrow ? 40 : 26
   return (
-    <div className="flex items-start gap-1 px-2 py-2 shrink-0" style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-surface)' }}>
+    <div
+      className="flex items-start gap-1 px-2 py-2 shrink-0"
+      style={{
+        borderBottom: '1px solid var(--border)', background: 'var(--bg-surface)',
+        // Full screen on a phone (viewport-fit=cover), so clear the notch / status bar.
+        ...(narrow ? { paddingTop: 'calc(env(safe-area-inset-top) + 8px)' } : {}),
+      }}
+    >
       {back && <IconBtn size={size} title="Back to all tasks" onClick={back}><ArrowLeft size={14} /></IconBtn>}
       <div className="flex flex-col" style={{ flex: 1, minWidth: 0, padding: back ? '3px 0 0' : '3px 0 0 6px' }}>
         <h2
@@ -148,8 +155,16 @@ function MetaRows({ rows }: { rows: [string, ReactNode][] }) {
 }
 
 function Footer({ children }: { children: ReactNode }) {
+  const narrow = useIsNarrow()
   return (
-    <div className="flex flex-wrap items-center gap-2 px-3 py-2 shrink-0" style={{ borderTop: '1px solid var(--border)', background: 'var(--bg-surface)' }}>
+    <div
+      className="flex flex-wrap items-center gap-2 px-3 py-2 shrink-0"
+      style={{
+        borderTop: '1px solid var(--border)', background: 'var(--bg-surface)',
+        // Full screen on a phone: keep the buttons above the home indicator.
+        ...(narrow ? { paddingBottom: 'calc(env(safe-area-inset-bottom) + 8px)' } : {}),
+      }}
+    >
       {children}
     </div>
   )
@@ -237,8 +252,13 @@ function TaskDetail({ taskId, onOpenChat }: { taskId: string; onOpenChat?: () =>
   const canRetry = useGatewaySupport({ methods: ['tasks.retry'] }).supported
   const canDismiss = useGatewaySupport({ methods: ['tasks.dismiss'] }).supported
   const openChat = useOpenChat(onOpenChat)
+  const connectionSeq = useConnectionStore(s => s.connectionSeq)
   const [tab, setTab] = useState<Tab>(history ? 'output' : 'result')
   useEffect(() => { setTab(history ? 'output' : 'result') }, [taskId, history])
+  // Opened from a push before the app had connected: read the task once it has.
+  useEffect(() => {
+    if (connected && !useTasksStore.getState().byId[taskId]?.prompt) void useTasksStore.getState().loadTask(taskId)
+  }, [taskId, connected, connectionSeq])
 
   const item = task ? fromTask(task) : undefined
   const now = useNow(!!item?.active)
@@ -422,8 +442,8 @@ function OutputTab({ task }: { task: TaskSummary }) {
       )}
       {error && <p className="text-xs" style={{ color: 'var(--danger)', margin: '4px 0' }}>{error}</p>}
       {messages.map(m => (m.role === 'user'
-        ? <UserMessage key={m.id} message={m} />
-        : <AssistantMessage key={m.id} message={m} showTools showReasoning={false} />))}
+        ? <UserMessage key={m.id} message={m} readOnly />
+        : <AssistantMessage key={m.id} message={m} showTools showReasoning={false} readOnly />))}
     </div>
   )
 }
@@ -513,6 +533,7 @@ const FILTERS: { id: ListFilter; label: string }[] = [
 ]
 
 function ListMode() {
+  const narrow = useIsNarrow()
   const byId = useTasksStore(s => s.byId)
   const loaded = useTasksStore(s => s.loaded)
   const error = useTasksStore(s => s.error)
@@ -589,7 +610,7 @@ function ListMode() {
         </div>
       )}
 
-      <div className="flex-1 min-h-0 overflow-y-auto px-4 pb-3">
+      <div className="flex-1 min-h-0 overflow-y-auto px-4 pb-3" style={narrow ? { paddingBottom: 'calc(env(safe-area-inset-bottom) + 12px)' } : undefined}>
         {supported && !loaded && !error && !scriptItems.length ? (
           <Centered><Loader2 size={16} className="animate-spin" />Loading…</Centered>
         ) : items.length === 0 ? (
@@ -597,6 +618,7 @@ function ListMode() {
         ) : (
           items.map(item => (
             <TaskRow
+              stacked
               key={item.key}
               item={item}
               now={now}

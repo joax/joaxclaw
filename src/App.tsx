@@ -40,6 +40,8 @@ import { useGatewayModelsStore } from './store/gatewayModels'
 import { useToolSearchStore } from './store/toolSearch'
 import { useProgressCardsStore } from './store/progressCards'
 import { useTasksStore } from './store/tasks'
+import { useScriptJobsStore } from './store/scriptJobs'
+import { trayCounts } from './lib/tasks'
 import { useMetricsStore } from './store/metrics'
 import { useSettingsStore, ZOOM_STEP, restoreProfileFromBackup } from './store/settings'
 import { useExtensionsStore } from './store/extensions'
@@ -149,30 +151,41 @@ export default function App() {
   const trayRuns     = useProcessesStore(s => s.runs)
   const trayTeams    = useTeamsStore(s => s.blueprints)
   const traySessions = useSessionsStore(s => s.sessions)
+  const trayTasks    = useTasksStore(s => s.byId)
+  const trayJobs     = useScriptJobsStore(s => s.jobs)
   const lastTray     = useRef('')
   useEffect(() => {
     const teamIds = new Set(trayTeams.map(b => b.id))
     const teams   = Object.values(trayRuns).filter(r => r.status === 'running' && teamIds.has(r.processId)).length
     const agents  = traySessions.filter(s => s.hasActiveRun).length
-    const key = `${agents}:${teams}`
+    const { tasks, needsYou } = trayCounts(Object.values(trayTasks), Object.values(trayJobs))
+    const key = `${agents}:${teams}:${tasks}:${needsYou}`
     if (key === lastTray.current) return
     lastTray.current = key
-    window.api?.tray?.update?.({ agents, teams })
-  }, [trayRuns, trayTeams, traySessions])
+    window.api?.tray?.update?.({ agents, teams, tasks, needsYou })
+  }, [trayRuns, trayTeams, traySessions, trayTasks, trayJobs])
+  // Running scripts count in the tray too, so the desktop app keeps their poll going.
+  useEffect(() => (window.api?.tray ? useScriptJobsStore.getState().acquire() : undefined), [])
 
-  // Tray menu can jump the app to a section (e.g. clicking "Teams running").
+  // Tray menu can jump the app to a section (e.g. clicking "Teams running"). "Background
+  // tasks running" opens the Dashboard with the task list beside it.
   useEffect(() => {
-    const off = window.api?.app?.onNavigate?.(s => setSection(s as NavSection))
+    const off = window.api?.app?.onNavigate?.(s => {
+      if (s === 'tasks') { setSection('dashboard'); useTasksStore.getState().openList(); return }
+      setSection(s as NavSection)
+    })
     return () => off?.()
   }, [])
 
   // A tapped PWA notification routes here (via the service worker → main.tsx window event).
   useEffect(() => {
     const handler = (e: Event) => {
-      const nav = (e as CustomEvent).detail as { section?: NavSection; convId?: string } | undefined
+      const nav = (e as CustomEvent).detail as { section?: NavSection; convId?: string; sessionKey?: string; mainOf?: string; taskId?: string } | undefined
       if (!nav) return
       if (nav.convId) useChatStore.getState().selectConversation(nav.convId)
       if (nav.section) setSection(nav.section)
+      // A failed-task push: its chat, with the task drawer open on the task.
+      if (nav.sessionKey || nav.taskId) void useTasksStore.getState().navigate(nav)
     }
     window.addEventListener('joax:navigate', handler)
     return () => window.removeEventListener('joax:navigate', handler)

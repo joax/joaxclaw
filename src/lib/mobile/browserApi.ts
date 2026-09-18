@@ -115,7 +115,7 @@ export function buildBrowserApi() {
       onNavigate: (_cb: (section: string) => void): Unsub => noop,
       openExternal: (url: string) => { try { window.open(url, '_blank', 'noopener,noreferrer') } catch { /* noop */ } return Promise.resolve({ ok: true }) },
     },
-    tray: { update: (_c: { agents: number; teams: number }) => Promise.resolve({ ok: true }) },
+    tray: { update: (_c: { agents: number; teams: number; tasks?: number; needsYou?: number }) => Promise.resolve({ ok: true }) },
     updater: {
       check: () => unavailable('Auto-update'),
       download: () => unavailable('Auto-update'),

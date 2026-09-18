@@ -10,7 +10,7 @@ import { applyTheme } from './lib/theme'
 import { useSettingsStore } from './store/settings'
 import { installBrowserApi } from './lib/mobile/browserApi'
 import { isElectron } from './lib/platform'
-import { pushUrlToNavigate } from './lib/webPush'
+import { pushToNavigate } from './lib/webPush'
 import { requestPersistentStorage } from './lib/idbStore'
 
 // In a plain browser (PWA / mobile companion) there's no Electron preload, so provide
@@ -37,9 +37,9 @@ if (!isElectron() && 'serviceWorker' in navigator) {
   navigator.serviceWorker.addEventListener('message', (e) => {
     if (e.data?.type !== 'joax-navigate') return
     // Tier 1 notifications carry `navigate` directly; a gateway push carries `url` (a
-    // Control UI path) which pushUrlToNavigate maps onto one of our sections, or
-    // declines — in which case the tap has already focused the app, which is enough.
-    const nav = e.data.navigate ?? pushUrlToNavigate(e.data.url)
+    // Control UI path) and `tag`, which pushToNavigate maps onto a section, a chat and a
+    // task, or declines — in which case the tap has already focused the app, which is enough.
+    const nav = e.data.navigate ?? pushToNavigate({ url: e.data.url, tag: e.data.tag })
     if (nav) window.dispatchEvent(new CustomEvent('joax:navigate', { detail: nav }))
   })
 }

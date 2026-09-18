@@ -3,7 +3,7 @@ import {
   parseTask, parseTaskList, taskState, isNeedsYou, kindInfo, orderItems, orderTasks, stripItems,
   dashboardItems, summaryLine, chipLabel, worstTone, taskMatchesSession, fromTask, fromScriptJob,
   scriptState, metaLine, readGatewayError, isStaleCursor, isTaskGone, addHidden, canManageTasks,
-  mergeTask, stitchPages, listItems, taskAgents, deliveryLabel, resultText, taskChatKey,
+  mergeTask, stitchPages, listItems, taskAgents, trayCounts, deliveryLabel, resultText, taskChatKey,
   canRecover, cancelMessage, recoveryMessage, STRIP_DONE_MS, STRIP_FAILED_MS, type TaskSummary,
 } from '../tasks'
 import type { ScriptJob } from '../scriptJobs'
@@ -273,6 +273,13 @@ describe('metaLine', () => {
     const d = fromTask(task({ status: 'completed', agentId: 'researcher', startedAt: NOW - 124_000, endedAt: NOW, lastToolName: 'x', diffStat: { files: 3, added: 120, removed: 8 } }))
     expect(metaLine(d, NOW)).toBe('Subagent · researcher · 2m 04s · +120 −8 in 3 files')
   })
+  it('keeps just the kind and the time on a phone', () => {
+    const i = fromTask(task({ agentId: 'researcher', startedAt: NOW - (3 * 60 + 12) * 1000, toolUseCount: 14, lastToolName: 'web_fetch' }))
+    expect(metaLine(i, NOW, { compact: true })).toBe('Subagent · 3m 12s')
+    const n = fromTask(task({ kind: 'automation_run', status: 'completed', terminalOutcome: 'blocked', deliveryStatus: 'failed' }))
+    expect(metaLine(n, NOW, { compact: true })).toBe('Automation')
+    expect(metaLine(fromScriptJob(job({ startedAt: NOW - 41_000 })), NOW, { compact: true })).toBe('Script · 41s')
+  })
   it('explains a needs-you task instead', () => {
     const n = fromTask(task({ kind: 'automation_run', status: 'completed', terminalOutcome: 'blocked', deliveryStatus: 'failed' }))
     expect(metaLine(n, NOW)).toBe("Automation · Completed, but the result couldn't be delivered back")
@@ -330,6 +337,18 @@ describe('stitchPages', () => {
   it('keeps the newest copy of a message seen twice, and messages without ids', () => {
     const out = stitchPages([[m('a', 'new'), { role: 'user', content: 'no id' }], [m('a', 'old')]])
     expect(out).toEqual([m('a', 'new'), { role: 'user', content: 'no id' }])
+  })
+})
+
+describe('trayCounts', () => {
+  it('counts running and queued tasks plus running scripts, and needs-you separately', () => {
+    const tasks = [
+      task({ id: 'a' }), task({ id: 'b', status: 'queued' }), task({ id: 'c', status: 'completed' }),
+      task({ id: 'n', status: 'completed', terminalOutcome: 'blocked', deliveryStatus: 'failed' }),
+    ]
+    const jobs = [job(), job({ id: 'j2', running: false, done: true, exitCode: 0 })]
+    expect(trayCounts(tasks, jobs)).toEqual({ tasks: 3, needsYou: 1 })
+    expect(trayCounts([], [])).toEqual({ tasks: 0, needsYou: 0 })
   })
 })
 
