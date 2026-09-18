@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { Target, PauseCircle, AlertTriangle, Gauge, CheckCircle2, Play, X, type LucideIcon } from 'lucide-react'
-import { Popover, MenuRow, MenuDivider, triggerStyle } from '../ui/Popover'
+import { Target, PauseCircle, AlertTriangle, Gauge, CheckCircle2, Play, X, Pencil, Check, Loader2, RotateCcw, type LucideIcon } from 'lucide-react'
+import { Popover, MenuRow, triggerStyle } from '../ui/Popover'
 import { Pill } from '../ui/Pill'
 import { Btn } from '../ui/Btn'
 import { Textarea } from '../ui/Input'
@@ -9,7 +9,7 @@ import { useIsNarrow } from '../../lib/useIsNarrow'
 import { useGatewaySupport } from '../../lib/useGatewaySupport'
 import {
   GOAL_START_CAPABILITY, OBJECTIVE_COUNTER_FROM, OBJECTIVE_MAX, availableActions, eligibleSessionKey,
-  formatElapsed, goalErrorCopy, goalView, noteIsOurs, parseGoal, resumeActionFor, type GoalIcon, type SessionGoal,
+  formatElapsed, goalErrorCopy, goalView, noteIsOurs, parseGoal, resumeActionFor, type GoalAction, type GoalIcon, type SessionGoal,
 } from '../../lib/goals'
 import { useChatStore } from '../../store/chat'
 import { useSessionsStore } from '../../store/sessions'
@@ -187,7 +187,7 @@ function StartForm({ convId, idle, online, canWrite, inflight, error, narrow, on
         The agent sees the goal on every turn and keeps going until it's done or blocked. /new clears it.
       </p>
       {blocker && <Hint>{blocker}</Hint>}
-      {error && <Hint tone="danger">{errorText(error)}</Hint>}
+      {error && <ErrorLine convId={convId} error={error} />}
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 10 }}>
         <Btn size="sm" onClick={submit} disabled={!canStart} loading={inflight === 'start'} style={narrow ? { minHeight: 40 } : undefined}>
           Start goal
@@ -204,6 +204,7 @@ function useDraft(convId: string): [string, (v: string) => void] {
   return [value, (v: string) => { drafts.set(convId, v); setValue(v) }]
 }
 
+
 function Stat({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div style={{ display: 'flex', gap: 12, fontSize: 12, padding: '2px 0' }}>
@@ -213,97 +214,216 @@ function Stat({ label, children }: { label: string; children: ReactNode }) {
   )
 }
 
+/** A failed action: what went wrong, and Retry when resending the same request makes sense. */
+function ErrorLine({ convId, error }: { convId: string; error: GoalError }) {
+  return (
+    <div role="alert" style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginTop: 6, fontSize: 12, color: error.cls === 'rebound' ? 'var(--text-secondary)' : 'var(--danger)' }}>
+      <span style={{ flex: 1, minWidth: 0, overflowWrap: 'anywhere' }}>{errorText(error)}</span>
+      {error.retryable && (
+        <button
+          onClick={() => void useGoalsStore.getState().retry(convId)}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--accent)', fontSize: 12, flexShrink: 0 }}
+        >
+          <RotateCcw size={11} /> Retry
+        </button>
+      )}
+    </div>
+  )
+}
+
+interface ActionItem { key: string; label: string; icon: ReactNode; danger?: boolean; disabled?: boolean; loading?: boolean; onClick: () => void }
+
+/**
+ * The secondary actions. Menu rows on desktop, like the other header menus; a compact
+ * inline row under a primary action (blocked, budget); 40px buttons in two columns on a
+ * phone, for tap targets.
+ */
+function Actions({ items, variant }: { items: ActionItem[]; variant: 'menu' | 'inline' | 'grid' }) {
+  if (items.length === 0) return null
+  if (variant === 'grid') {
+    return (
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 12 }}>
+        {items.map(a => (
+          <Btn key={a.key} variant={a.danger ? 'danger' : 'outline'} icon={a.icon} disabled={a.disabled} loading={a.loading} onClick={a.onClick} style={{ minHeight: 40 }}>
+            {a.label}
+          </Btn>
+        ))}
+      </div>
+    )
+  }
+  if (variant === 'inline') {
+    return (
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 2, marginTop: 8, marginLeft: -8 }}>
+        {items.map(a => (
+          <Btn key={a.key} size="sm" variant="ghost" icon={a.icon} disabled={a.disabled} loading={a.loading} onClick={a.onClick}
+            style={a.danger ? { color: 'var(--danger)' } : undefined}>
+            {a.label}
+          </Btn>
+        ))}
+      </div>
+    )
+  }
+  return (
+    <>
+      <div style={{ borderTop: '1px solid var(--border)', margin: '8px -12px 2px' }} />
+      <div style={{ margin: '0 -12px' }}>
+        {items.map(a => (
+          <MenuRow key={a.key} danger={a.danger} disabled={a.disabled} icon={a.loading ? <Loader2 size={13} className="animate-spin" /> : a.icon} onClick={a.onClick}>
+            {a.label}
+          </MenuRow>
+        ))}
+      </div>
+    </>
+  )
+}
+
 function GoalDetails({ convId, sessionKey, goal, now, idle, online, canWrite, inflight, error, narrow, onDone }: {
   convId: string; sessionKey: string; goal: SessionGoal; now: number; idle: boolean; online: boolean; canWrite: boolean
   inflight?: string; error?: GoalError; narrow: boolean; onDone: () => void
 }) {
   const view = goalView(goal, now)
-  const [mode, setMode] = useState<'view' | 'resume' | 'confirmClear'>('view')
+  const blocked = goal.status === 'blocked'
+  const limited = goal.status === 'budget_limited' || goal.status === 'usage_limited'
+  const done = goal.status === 'complete'
+  const [mode, setMode] = useState<'view' | 'resume' | 'edit' | 'confirmClear'>('view')
   const [note, setNote] = useState('')
-  const heading = useFocusWhen<HTMLParagraphElement>(mode === 'view')
-  const noteBox = useFocusWhen<HTMLDivElement>(mode === 'resume')
-
+  const [objective, setObjective] = useState(goal.objective)
   const actions = availableActions(goal, { idle, canWrite, online })
   const resumeAction = resumeActionFor(goal)
   const pending = !!inflight
   const act = useGoalsStore.getState().act
+  const writable = online && canWrite
+
+  // Blocked leads with Continue and its note field; paused shows the note after Resume.
+  const noteOpen = writable && (mode === 'resume' || (mode === 'view' && blocked))
+  const heading = useFocusWhen<HTMLParagraphElement>(mode === 'view' && !noteOpen && !narrow)
+  const noteBox = useFocusWhen<HTMLDivElement>(noteOpen)
+  const editBox = useFocusWhen<HTMLDivElement>(mode === 'edit')
   // The gateway keeps the operator's Resume note in the same field as the agent's reasons.
   const ownNote = noteIsOurs(goal, useGoalsStore(s => s.sentNotes[sessionKey]))
 
-  const pause = () => act(convId, sessionKey, goal, 'pause')
   const resume = async () => {
-    if (!resumeAction) return
+    if (!resumeAction || pending || !idle) return
     if (await act(convId, sessionKey, goal, resumeAction, { note })) { setNote(''); setMode('view'); onDone() }
   }
-  const clear = async () => {
-    if (await act(convId, sessionKey, goal, 'clear')) onDone()
+  const saveEdit = async () => {
+    if (pending) return
+    if (await act(convId, sessionKey, goal, 'edit', { objective })) setMode('view')
   }
+  const clear = async (startNew?: boolean) => {
+    // Start a new goal clears first (a goal can't be started over an existing one); the
+    // popover then shows the start form, since the row no longer has a goal.
+    if (await act(convId, sessionKey, goal, 'clear') && !startNew) onDone()
+  }
+
+  const item = (key: GoalAction, label: string, icon: ReactNode, onClick: () => void, danger?: boolean): ActionItem =>
+    ({ key, label, icon, onClick, danger, disabled: pending, loading: inflight === key })
+  const secondary: ActionItem[] = []
+  if (mode === 'view') {
+    // Resume is shown but disabled while a reply runs: it would start a second turn.
+    if (resumeAction === 'resume' && writable) secondary.push({ ...item('resume', 'Resume', <Play size={13} />, () => setMode('resume')), disabled: pending || !actions.includes('resume') })
+    if (actions.includes('pause')) secondary.push(item('pause', 'Pause', <PauseCircle size={13} />, () => void act(convId, sessionKey, goal, 'pause')))
+    if (actions.includes('startNew')) secondary.push(item('startNew', 'Start a new goal', <Target size={13} />, () => void clear(true)))
+    if (actions.includes('edit')) secondary.push(item('edit', 'Edit', <Pencil size={13} />, () => { setObjective(goal.objective); setMode('edit') }))
+    if (actions.includes('complete')) secondary.push(item('complete', 'Mark done', <Check size={13} />, () => void act(convId, sessionKey, goal, 'complete')))
+    if (actions.includes('clear')) secondary.push(item('clear', 'Clear goal', <X size={13} />, () => setMode('confirmClear'), true))
+  }
+  const variant = narrow ? 'grid' : (blocked || limited) ? 'inline' : 'menu'
+  const primaryLabel = resumeAction === 'continue' ? 'Continue' : resumeAction === 'keepGoing' ? 'Keep going' : 'Resume'
+  const showPrimary = writable && !!resumeAction && (noteOpen || (mode === 'view' && limited))
+  const tokens = goal.tokenBudget !== undefined
+    ? `${goal.tokensUsed.toLocaleString()} of ${goal.tokenBudget.toLocaleString()}`
+    : goal.tokensUsed.toLocaleString()
 
   return (
     <div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-        <p ref={heading} tabIndex={-1} style={{ fontWeight: 600, color: 'var(--text-primary)', outline: 'none', flex: 1 }}>Goal</p>
-        <Pill tone={view.tone}>{view.statusLabel}</Pill>
+        {/* On a phone the sheet's own title already says "Goal". */}
+        {!narrow && <p ref={heading} tabIndex={-1} style={{ fontWeight: 600, color: 'var(--text-primary)', outline: 'none', flex: 1 }}>Goal</p>}
+        <Pill tone={view.tone} icon={done ? <Check size={10} /> : undefined}>{view.statusLabel}</Pill>
       </div>
-      <p style={{ color: 'var(--text-primary)', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxHeight: 160, overflowY: 'auto', lineHeight: 1.45 }}>
-        {goal.objective}
-      </p>
 
-      <div style={{ borderTop: '1px solid var(--border)', margin: '8px 0 6px' }} />
-      <Stat label="Time">{formatElapsed(now - goal.createdAt)}</Stat>
-      <Stat label="Tokens used">
-        {goal.tokenBudget !== undefined
-          ? `${goal.tokensUsed.toLocaleString()} of ${goal.tokenBudget.toLocaleString()}`
-          : goal.tokensUsed.toLocaleString()}
-      </Stat>
-      {goal.lastStatusNote && <Stat label={ownNote ? 'Your note' : "Agent's note"}>{goal.lastStatusNote}</Stat>}
-
-      {mode === 'resume' && (
-        <div style={{ marginTop: 8 }} onKeyDown={submitOnModEnter(resume)}>
-          <div ref={noteBox}>
-            <Textarea value={note} onChange={setNote} rows={2} placeholder="Add a note for the agent (optional)" style={{ fontSize: narrow ? 16 : 13 }} />
-          </div>
+      {mode === 'edit' ? (
+        <div ref={editBox} onKeyDown={submitOnModEnter(saveEdit)}>
+          <Textarea value={objective} onChange={setObjective} rows={4} style={{ fontSize: narrow ? 16 : 13 }} />
+          {objective.length > OBJECTIVE_MAX && <Hint tone="danger">Keep the goal under 16,000 characters.</Hint>}
+          <Hint>Saves without starting a run.</Hint>
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, marginTop: 8 }}>
             <Btn size="sm" variant="ghost" onClick={() => setMode('view')}>Cancel</Btn>
-            <Btn size="sm" onClick={resume} disabled={pending || !idle} loading={inflight === resumeAction}>Resume</Btn>
+            <Btn size="sm" onClick={saveEdit} loading={inflight === 'edit'}
+              disabled={pending || !objective.trim() || objective.length > OBJECTIVE_MAX || objective.trim() === goal.objective.trim()}>
+              Save
+            </Btn>
           </div>
+        </div>
+      ) : (
+        <p style={{ color: 'var(--text-primary)', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxHeight: 160, overflowY: 'auto', lineHeight: 1.45 }}>
+          {goal.objective}
+        </p>
+      )}
+
+      {blocked && (
+        // The warning-tinted notice style (TextToolNotice in AssistantMessage).
+        <div style={{ marginTop: 8, padding: '6px 10px', borderRadius: 'var(--radius)', border: '1px solid var(--warning)', background: 'color-mix(in srgb, var(--warning) 10%, var(--bg-surface))', fontSize: 12 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--warning)', fontWeight: 600 }}>
+            <AlertTriangle size={12} /> The agent is blocked:
+          </div>
+          {/* Only the agent's reason: a note of ours left over from an earlier Continue isn't one. */}
+          {goal.lastStatusNote && !ownNote && (
+            <p style={{ color: 'var(--text-primary)', marginTop: 2, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{goal.lastStatusNote}</p>
+          )}
+        </div>
+      )}
+
+      {goal.status === 'budget_limited' && goal.tokenBudget !== undefined && (
+        <p style={{ marginTop: 8, fontSize: 12, color: 'var(--warning)' }}>
+          The goal used its token budget ({goal.tokensUsed.toLocaleString()} of {goal.tokenBudget.toLocaleString()}).
+        </p>
+      )}
+
+      <div style={{ borderTop: '1px solid var(--border)', margin: '8px 0 6px' }} />
+      {done ? (
+        <p style={{ fontSize: 12, color: 'var(--text-secondary)', padding: '2px 0' }}>
+          Done after {formatElapsed((goal.completedAt ?? goal.updatedAt) - goal.createdAt)} · {goal.tokensUsed.toLocaleString()} tokens
+        </p>
+      ) : (
+        <>
+          <Stat label="Time">{formatElapsed(now - goal.createdAt)}</Stat>
+          <Stat label="Tokens used">{tokens}</Stat>
+        </>
+      )}
+      {goal.lastStatusNote && (!blocked || ownNote) && <Stat label={ownNote ? 'Your note' : "Agent's note"}>{goal.lastStatusNote}</Stat>}
+
+      {noteOpen && (
+        <div ref={noteBox} style={{ marginTop: 8 }} onKeyDown={submitOnModEnter(resume)}>
+          <Textarea value={note} onChange={setNote} rows={2} placeholder="Add a note for the agent (optional)" style={{ fontSize: narrow ? 16 : 13 }} />
+        </div>
+      )}
+      {showPrimary && (
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, marginTop: 8 }}>
+          {mode === 'resume' && <Btn size="sm" variant="ghost" onClick={() => setMode('view')}>Cancel</Btn>}
+          <Btn size={narrow ? 'md' : 'sm'} onClick={resume} disabled={pending || !idle} loading={inflight === resumeAction}
+            style={narrow ? { minHeight: 40, flex: 1 } : undefined}>
+            {primaryLabel}
+          </Btn>
         </div>
       )}
 
       {mode === 'confirmClear' && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 8 }}>
           <span style={{ flex: 1, fontSize: 12, color: 'var(--text-primary)' }}>Clear this goal?</span>
-          <Btn size="sm" variant="danger" onClick={clear} loading={inflight === 'clear'} disabled={pending}>Clear</Btn>
-          <Btn size="sm" variant="ghost" onClick={() => setMode('view')}>Cancel</Btn>
+          <Btn size={narrow ? 'md' : 'sm'} variant="danger" onClick={() => void clear()} loading={inflight === 'clear'} disabled={pending}>Clear</Btn>
+          <Btn size={narrow ? 'md' : 'sm'} variant="ghost" onClick={() => setMode('view')}>Cancel</Btn>
         </div>
       )}
 
-      {mode === 'view' && actions.length > 0 && (
-        <>
-          <div style={{ borderTop: '1px solid var(--border)', margin: '8px -12px 2px' }} />
-          <div style={{ margin: '0 -12px' }} title={pending ? HINT.pending : undefined}>
-            {resumeAction === 'resume' && (
-              // Shown but disabled while a reply runs: it would start a second turn.
-              <MenuRow icon={<Play size={13} />} disabled={pending || !actions.includes('resume')} onClick={() => setMode('resume')}>Resume</MenuRow>
-            )}
-            {actions.includes('pause') && (
-              <MenuRow icon={<PauseCircle size={13} />} disabled={pending} onClick={pause}>Pause</MenuRow>
-            )}
-            {actions.includes('clear') && (
-              <>
-                <MenuDivider />
-                <MenuRow danger icon={<X size={13} />} disabled={pending} onClick={() => setMode('confirmClear')}>Clear goal</MenuRow>
-              </>
-            )}
-          </div>
-        </>
-      )}
+      <Actions items={secondary} variant={variant} />
 
       {!online && <Hint>{HINT.offline}</Hint>}
       {online && !canWrite && <Hint>{HINT.readOnly}</Hint>}
-      {online && canWrite && pending && <Hint>{HINT.pending}</Hint>}
-      {online && canWrite && !pending && !idle && resumeAction && <Hint>{HINT.busyReply}</Hint>}
-      {error && <Hint tone="danger">{errorText(error)}</Hint>}
+      {writable && pending && <Hint>{HINT.pending}</Hint>}
+      {writable && !pending && !idle && resumeAction && <Hint>{HINT.busyReply}</Hint>}
+      {error && <ErrorLine convId={convId} error={error} />}
     </div>
   )
 }

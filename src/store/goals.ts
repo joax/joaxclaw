@@ -3,7 +3,7 @@ import { nanoid } from '../lib/nanoid'
 import { gatewayClient } from '../lib/gateway'
 import type { Session } from '../lib/types'
 import {
-  actionRunsTurn, buildClearParams, buildUpdateParams, goalErrorMessage, goalErrorPolicy, parseGoal,
+  actionRunsTurn, buildClearParams, buildUpdateParams, eligibleSessionKey, goalErrorMessage, goalErrorPolicy, goalRefreshNeeded, parseGoal,
   shouldApplyGoal, validateObjective, type GoalAction, type GoalErrorClass, type SessionGoal,
 } from '../lib/goals'
 import { useSessionsStore } from './sessions'
@@ -213,4 +213,29 @@ export const useGoalsStore = create<GoalsState>((set, get) => {
       })
     },
   }
+})
+
+// The run-end fallback (FR-10). The agent's update_goal and create_goal send no
+// sessions.changed of their own: the new goal rides on the run-end sessions.changed
+// snapshot, which the sessions store merges. If that snapshot hasn't come 2 s after the
+// final frame and the row's goal hasn't moved, the recent rows are re-read once, so an
+// agent marking a goal done or blocked (or creating one) still reaches the chip.
+const GOAL_SETTLE_MS = 2_000
+const settling = new Set<string>()
+const lastChangedAt = new Map<string, number>()
+gatewayClient.on(frame => {
+  const p = frame.payload as { sessionKey?: unknown; state?: unknown } | undefined
+  const key = typeof p?.sessionKey === 'string' ? p.sessionKey : ''
+  if (!key) return
+  if (frame.event === 'sessions.changed') { lastChangedAt.set(key, Date.now()); return }
+  if (frame.event !== 'chat' || p?.state !== 'final' || settling.has(key)) return
+  if (!eligibleSessionKey(key) || !gatewayClient.hasMethod('sessions.goal.update')) return
+  const goalOf = () => parseGoal(useSessionsStore.getState().sessions.find(s => s.key === key)?.goal)
+  const atFinal = goalOf()
+  const finalAt = Date.now()
+  settling.add(key)
+  setTimeout(() => {
+    settling.delete(key)
+    if (goalRefreshNeeded(atFinal, goalOf(), (lastChangedAt.get(key) ?? 0) >= finalAt)) void refreshGoalRows()
+  }, GOAL_SETTLE_MS)
 })
