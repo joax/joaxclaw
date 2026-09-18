@@ -3,6 +3,7 @@ import {
   buildGatewayUpdatePrompt, parseUpdateAvailable, parseSchedule, parseRunResponse, rpcErrorRefusal, refusalCopy,
   inferOutcome, bannerState, bannerTone, showChannel, runningChatsLine, type BannerInputs,
 } from '../gatewayUpdate'
+import { REFUSAL_REASONS, runResponse2026_6_5, errRestartDraining } from './fixtures/sprint/gatewayUpdates'
 
 describe('buildGatewayUpdatePrompt', () => {
   it('emits the hardened update script', async () => {
@@ -91,6 +92,10 @@ describe('parseRunResponse', () => {
       .toEqual({ kind: 'refused', runId: 'r3', refusal: { reason: 'owner_required', message: 'Only the owner' } })
   })
 
+  it('2026.6.5 starts a handoff without a runId', () => {
+    expect(parseRunResponse(runResponse2026_6_5)).toEqual({ kind: 'started' })
+  })
+
   it('an unreadable reply is an unknown refusal', () => {
     expect(parseRunResponse(null)).toEqual({ kind: 'refused', refusal: { reason: 'unknown' } })
   })
@@ -107,6 +112,11 @@ describe('rpcErrorRefusal', () => {
     expect(rpcErrorRefusal(Object.assign(new Error('{}'), { gatewayError: { code: 'INVALID_REQUEST', message: 'bad params' } }))).toEqual({ reason: 'rpc-error', message: 'bad params' })
     expect(rpcErrorRefusal(new Error('Request update.run timed out'))).toEqual({ reason: 'rpc-error', message: 'Request update.run timed out' })
   })
+
+  it("doesn't call the restart drain a rate limit", () => {
+    const err = Object.assign(new Error('x'), { gatewayError: errRestartDraining.error })
+    expect(rpcErrorRefusal(err)).toEqual({ reason: 'rpc-error', message: 'The gateway is restarting. Try again in a moment.' })
+  })
 })
 
 describe('refusalCopy', () => {
@@ -120,6 +130,22 @@ describe('refusalCopy', () => {
     expect(refusalCopy({ reason: 'update-campaign-applying' }).text).toBe('An automatic update is already being applied.')
     for (const reason of ['not-openclaw-root', 'unsupported_git_channel', 'update-target-campaign-mismatch', 'unexpected-error']) {
       expect(refusalCopy({ reason })).toEqual({ action: 'viaAgent', text: `The gateway refused the update (${reason}).` })
+    }
+  })
+
+  it('gives the reasons the PRD missed their own copy', () => {
+    expect(refusalCopy({ reason: 'managed-service-handoff-failed' })).toMatchObject({ action: 'command', command: 'openclaw update' })
+    expect(refusalCopy({ reason: 'owner_required' })).toEqual({ action: 'none', text: "Only the gateway's owner can start an update." })
+    expect(refusalCopy({ reason: 'invalid-update-target' }).action).toBe('command')
+    expect(refusalCopy({ reason: 'unsupported-update-target' }).action).toBe('command')
+    expect(refusalCopy({ reason: 'update-target-upstream-mismatch' }).text).toMatch(/different branch/)
+  })
+
+  it('has words for every reason the 2026.9.4 handler can return', () => {
+    for (const reason of REFUSAL_REASONS) {
+      const copy = refusalCopy({ reason })
+      expect(copy.text.length).toBeGreaterThan(10)
+      expect(copy.text).toMatch(/[.:]$/)
     }
   })
 

@@ -146,7 +146,8 @@ export interface Refusal {
 }
 
 export type RunResponse =
-  | { kind: 'started'; runId: string }
+  /** No runId before 2026.9: the run can't be followed, only judged after the restart. */
+  | { kind: 'started'; runId?: string }
   | { kind: 'already-current'; runId?: string }
   | { kind: 'refused'; runId?: string; refusal: Refusal }
 
@@ -154,7 +155,9 @@ export type RunResponse =
  * Read an `update.run` reply. It is a *successful* RPC either way: `ok:false` with
  * `result.reason` is a refusal (restarts off, an outside supervisor, another update
  * running…), and `already-current` is a no-op, not a failure. For a managed service,
- * `ok:true` means the detached updater took over and the run carries on without us.
+ * `ok:true` means the detached updater took over and the run carries on without us,
+ * even though `result.status` says "skipped". Every call, refusals included, creates a
+ * run in the gateway's ledger and returns its runId (2026.9; 2026.6.5 sends none).
  */
 export function parseRunResponse(raw: unknown): RunResponse {
   const r = obj(raw) ?? {}
@@ -163,7 +166,7 @@ export function parseRunResponse(raw: unknown): RunResponse {
   const handoff = obj(r.handoff)
   const reason = str(result?.reason) ?? str(r.code)
   if (reason === 'already-current') return { kind: 'already-current', ...(runId ? { runId } : {}) }
-  if (r.ok === true && runId) return { kind: 'started', runId }
+  if (r.ok === true) return { kind: 'started', ...(runId ? { runId } : {}) }
   const message = str(r.message) ?? str(handoff?.message)
   const command = str(handoff?.command)
   return {
@@ -181,6 +184,10 @@ export function parseRunResponse(raw: unknown): RunResponse {
 export function rpcErrorRefusal(err: unknown): Refusal {
   const ge = obj((err as { gatewayError?: unknown } | null)?.gatewayError)
   const retryAfterMs = num(ge?.retryAfterMs)
+  // The drain before a restart also answers UNAVAILABLE + retryAfterMs; that isn't "busy".
+  if (obj(ge?.details)?.reason === 'gateway-restarting') {
+    return { reason: 'rpc-error', message: 'The gateway is restarting. Try again in a moment.' }
+  }
   if (ge?.code === 'UNAVAILABLE' && retryAfterMs !== undefined) {
     return { reason: 'rate-limited', message: String(Math.max(1, Math.ceil(retryAfterMs / 1000))) }
   }
@@ -209,6 +216,16 @@ export function refusalCopy(refusal: Refusal): RefusalCopy {
       return { text: 'Another update is already running. Wait for it to finish.', action: 'none' }
     case 'update-campaign-applying':
       return { text: 'An automatic update is already being applied.', action: 'none' }
+    // Reasons the 2026.9.4 source can return that the PRD's list doesn't name.
+    case 'managed-service-handoff-failed':
+      return { text: "The gateway couldn't start its service's updater. Run this on the gateway host instead:", action: 'command', command: refusal.command ?? 'openclaw update' }
+    case 'owner_required':
+      return { text: "Only the gateway's owner can start an update.", action: 'none' }
+    case 'invalid-update-target':
+    case 'unsupported-update-target':
+      return { text: "The gateway can't install the version it was asked for. Run this on the gateway host instead:", action: 'command', command: 'openclaw update' }
+    case 'update-target-upstream-mismatch':
+      return { text: 'The version it was asked for comes from a different branch than the gateway follows.', action: 'viaAgent' }
     case 'rate-limited':
       return { text: `The gateway is busy. Try again in ${refusal.message ?? '60'}s.`, action: 'none' }
     case 'rpc-error':
@@ -398,7 +415,9 @@ export function phaseProgress(run: Pick<UpdateRun, 'phase' | 'status'> & { steps
   if (!run) {
     return { phases: VISIBLE_PHASES.map(id => ({ id, label: phaseLabel(id), mark: 'pending' as const })), completed: 0, total: VISIBLE_PHASES.length, pct: null, currentLabel: phaseLabel('requested') }
   }
-  const steps = run.steps ?? []
+  // A phase can be recorded more than once (verifying, then repairing, then verifying
+  // again), so its latest step is the one that counts.
+  const steps = [...(run.steps ?? [])].reverse()
   const stepOf = (id: string) => steps.find(s => s.step === id)
   const ids = [...VISIBLE_PHASES]
   if (run.phase === 'repairing' || stepOf('repairing')) {
@@ -421,6 +440,13 @@ export function phaseProgress(run: Pick<UpdateRun, 'phase' | 'status'> & { steps
     else mark = 'pending'
     return { id, label: phaseLabel(id), mark }
   })
+  // A rollback marks the phase it was in "completed" (finishUpdateRunRecord), so a run that
+  // didn't succeed may show no failed phase at all. The last phase it reached is where it
+  // stopped.
+  if (terminal && !succeeded && !phases.some(p => p.mark === 'failed')) {
+    const last = phases.map((p, i) => (p.mark === 'done' && stepOf(p.id) ? i : -1)).filter(i => i >= 0).pop()
+    if (last !== undefined) phases[last] = { ...phases[last], mark: 'failed' }
+  }
   const completed = phases.filter(p => p.mark === 'done').length
   return { phases, completed, total: ids.length, pct: Math.round((completed / ids.length) * 100), currentLabel: phaseLabel(run.phase) }
 }
@@ -445,6 +471,21 @@ export function runTarget(run: Pick<UpdateRun, 'target' | 'after'>): string | un
 // plus the ledger's own non-failures).
 const NOOP_SKIPS = new Set(['managed-service-handoff-already-running', 'managed-service-handoff-cancelled', 'cancelled', 'dry-run', 'interrupted'])
 
+/**
+ * A finished run the gateway refused: every update.run call makes a ledger run, and a
+ * refusal ends as `skipped` with its reason. One seen only through its record (started by
+ * the CLI, or our reply lost in a drop) is shown with the same copy as a direct refusal.
+ */
+export function refusalFromRun(run: Pick<UpdateRun, 'status' | 'reason'>): Refusal | null {
+  if (run.status !== 'skipped' || !run.reason || run.reason === 'already-current' || NOOP_SKIPS.has(run.reason)) return null
+  return { reason: run.reason }
+}
+
+/** runs.get rejects a runId that isn't a UUID (UpdateRunRecordSchema's runId pattern). */
+export function isRunId(v: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v)
+}
+
 /** How a finished run should be reported, or null when there's nothing to report (running, or a no-op). */
 export function outcomeFromRun(run: UpdateRun, fallback: { target?: string; version?: string } = {}): Outcome | null {
   const target = runTarget(run) ?? fallback.target ?? 'the new version'
@@ -456,9 +497,9 @@ export function outcomeFromRun(run: UpdateRun, fallback: { target?: string; vers
     case 'rolled-back':
       return { kind: 'rolled-back', target, ...(run.before.version ? { before: run.before.version } : {}), runId: run.runId }
     case 'skipped':
+      // A refused run is reported as its refusal (refusalFromRun); a no-op as nothing.
       if (run.reason === 'already-current') return { kind: 'already-current', version: run.before.version ?? fallback.version ?? target, runId: run.runId }
-      if (run.reason && NOOP_SKIPS.has(run.reason)) return null
-      return { kind: 'failed', target, ...(run.before.version ? { before: run.before.version } : {}), runId: run.runId }
+      return null
     default:
       return { kind: 'failed', target, ...(run.before.version ? { before: run.before.version } : {}), runId: run.runId }
   }

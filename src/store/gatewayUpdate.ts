@@ -3,7 +3,7 @@ import { gatewayClient } from '../lib/gateway'
 import { useConnectionStore } from './connection'
 import {
   availableKey, buildGatewayUpdatePrompt, inferOutcome, isTerminal, mergeRunChanged, outcomeFromRun, outcomeText,
-  parseRun, parseRunChanged, parseRunResponse, parseSchedule, parseUpdateAvailable, phaseLabel, rememberSeen, rpcErrorRefusal, runTarget,
+  isRunId, parseRun, parseRunChanged, parseRunResponse, parseSchedule, parseUpdateAvailable, phaseLabel, refusalFromRun, rememberSeen, rpcErrorRefusal, runTarget,
   type Outcome, type Refusal, type UpdateAvailable, type UpdateRun, type UpdateSchedule,
 } from '../lib/gatewayUpdate'
 import { sendViaAgent } from '../lib/agentPrompt'
@@ -13,9 +13,9 @@ import { notify } from '../lib/notifications'
 //
 // Detection reaches every connection: the hello-ok snapshot carries `updateAvailable`
 // (and `updateSchedule` for read-capable clients), and the `update.available` broadcast
-// keeps it current. Before 2026.9 that snapshot was thrown away and only admin
-// connections learned anything, through `update.status`, which is still called for admin
-// because it's the only source on older gateways.
+// keeps it current (both since at least 2026.6.5). JoaxClaw used to throw the snapshot away
+// and ask `update.status`, which is admin-only and on 2026.6.5 doesn't report an
+// update at all. It's still read for admin, for the run and campaign detail.
 //
 // Updating: an admin connection confirms, then calls `update.run` directly. Without
 // admin, the old path stays: an agent on the gateway host runs `openclaw update`.
@@ -155,6 +155,9 @@ export const useGatewayUpdateStore = create<GatewayUpdateState>((set, get) => {
     set({ run: null })
     if (get().seen.includes(run.runId)) return
     markSeen(run.runId)
+    // A run the gateway refused (recorded as skipped) reads as the refusal it was.
+    const refusal = refusalFromRun(run)
+    if (refusal) { set({ refusal, outcome: null, dismissedKey: null }); return }
     const outcome = outcomeFromRun(run, { target: f?.target, version: gatewayClient.serverVersion })
     if (outcome) set({ outcome, refusal: null, dismissedKey: null })
     if (outcome && outcome.kind !== 'already-current') {
@@ -183,12 +186,18 @@ export const useGatewayUpdateStore = create<GatewayUpdateState>((set, get) => {
   }
 
   // Read the followed run again: update.runs.get on 2026.9+, else update.status's
-  // activeRun / lastRun. Admin only; nothing to poll without it.
-  const refresh = async (): Promise<'ok' | 'gone' | 'unavailable'> => {
+  // activeRun / lastRun. 'gone': the gateway has no such run. 'cannot': nothing to read it
+  // with (no admin). 'error': a transient failure, such as the drain before a restart
+  // (UNAVAILABLE, reason gateway-restarting), which means "still running", not "failed".
+  const refresh = async (): Promise<'ok' | 'gone' | 'cannot' | 'error'> => {
     const f = get().followed
-    if (!f || !gatewayClient.connected || !hasAdmin()) return 'unavailable'
+    if (!f) return 'gone'
+    if (!hasAdmin()) return 'cannot'
+    if (!gatewayClient.connected) return 'error'
     try {
       if (f.runId && gatewayClient.hasMethod('update.runs.get')) {
+        // runs.get rejects a runId that isn't a UUID outright; a corrupt stored one is just gone.
+        if (!isRunId(f.runId)) return 'gone'
         const res = await gatewayClient.request<{ run?: unknown }>('update.runs.get', { runId: f.runId })
         const run = parseRun(res?.run)
         if (!run) return 'gone'
@@ -197,8 +206,8 @@ export const useGatewayUpdateStore = create<GatewayUpdateState>((set, get) => {
       }
       const res = await gatewayClient.request<{ activeRun?: unknown; lastRun?: unknown }>('update.status', {})
       return ingestStatusRuns(res) ? 'ok' : 'gone'
-    } catch {
-      return 'unavailable'
+    } catch (e) {
+      return (e as { gatewayError?: { code?: string } }).gatewayError?.code === 'INVALID_REQUEST' ? 'gone' : 'error'
     }
   }
 
@@ -270,6 +279,9 @@ export const useGatewayUpdateStore = create<GatewayUpdateState>((set, get) => {
       }
       get().ingestHello()
       armedPhase = null
+      // A new connection starts the poll afresh (its 20 min budget too), if a run needs it.
+      stopPolling()
+      pollStartedAtMs = 0
 
       // Back after an update sent to an agent: no record, so the version tells.
       const va = get().viaAgent
@@ -292,8 +304,10 @@ export const useGatewayUpdateStore = create<GatewayUpdateState>((set, get) => {
       // update.status already had its record (older gateways): just keep following.
       if (get().run?.runId && get().run?.runId === f.runId) { ensurePolling(); return }
       const r = await refresh()
-      // No record: runs.get says it's gone, or there's nothing to read it with.
-      if (r !== 'ok' && get().followed) finishWithoutRecord(f.target)
+      // No record: the gateway says it's gone, or there's nothing to read it with. A
+      // transient error just means reading again on the next poll.
+      if (r === 'error') ensurePolling()
+      else if (r !== 'ok' && get().followed) finishWithoutRecord(f.target)
     },
 
     ingestHello() {
@@ -332,8 +346,8 @@ export const useGatewayUpdateStore = create<GatewayUpdateState>((set, get) => {
       applyRun(run)
     },
 
-    // update.status (operator.admin): the only source on gateways older than 2026.9, and on
-    // newer ones the fresher word, since it may have re-checked since the handshake.
+    // update.status (operator.admin): on 2026.9 the fresher word, since the gateway may have
+    // re-checked since the handshake, plus the run and campaign detail.
     async check(force = false) {
       const st = get()
       if (st.checking) return
@@ -344,7 +358,9 @@ export const useGatewayUpdateStore = create<GatewayUpdateState>((set, get) => {
       try {
         const res = await gatewayClient.request<{ updateAvailable?: unknown; schedule?: unknown; activeRun?: unknown; lastRun?: unknown }>('update.status', {})
         set({
-          available: parseUpdateAvailable(res?.updateAvailable),
+          // Only 2026.9 sends updateAvailable here (2026.6.5 answers just {sentinel}): without
+          // the key, keep what the hello snapshot said.
+          ...(res && 'updateAvailable' in res ? { available: parseUpdateAvailable(res.updateAvailable) } : {}),
           ...(res && 'schedule' in res ? { schedule: parseSchedule(res.schedule) } : {}),
           checking: false,
           checkedAtMs: Date.now(),
@@ -402,11 +418,14 @@ export const useGatewayUpdateStore = create<GatewayUpdateState>((set, get) => {
         const res = parseRunResponse(await gatewayClient.request('update.run', { note: 'Started from JoaxClaw' }, RUN_TIMEOUT_MS))
         if (res.kind === 'started') {
           const f = get().followed
-          if (f) setFollowed({ ...f, runId: res.runId })
           set({ pending: false })
-          // Its first record, then the 2 s poll until it ends.
-          void refresh()
-          ensurePolling()
+          // Its first record, then the 2 s poll until it ends. 2026.6.5 sends no runId:
+          // there's nothing to follow, so the banner stays on "running" until the restart.
+          if (f && res.runId) {
+            setFollowed({ ...f, runId: res.runId })
+            void refresh()
+            ensurePolling()
+          }
         } else if (res.kind === 'already-current') {
           const version = get().available?.currentVersion ?? gatewayClient.serverVersion ?? ''
           if (res.runId) markSeen(res.runId)
