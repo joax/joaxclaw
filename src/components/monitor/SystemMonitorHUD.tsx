@@ -7,6 +7,7 @@ import { useSettingsStore } from '../../store/settings'
 import { formatBytes } from '../../lib/ollama'
 import { gatewayHost } from '../../lib/ollamaHealth'
 import { useIsNarrow } from '../../lib/useIsNarrow'
+import { BottomSheet } from '../ui/BottomSheet'
 
 export function SystemMonitorHUD() {
   const { status, heartbeats, lastHeartbeat, uptimeStart } = useConnectionStore()
@@ -203,24 +204,9 @@ export function SystemMonitorHUD() {
   // bottom-right card. Both self-position (fixed), so App.tsx just renders <HUD/>.
   if (narrow) {
     return (
-      <>
-        <div className="animate-fade-in" style={{ position: 'fixed', inset: 0, zIndex: 60, background: 'rgba(0,0,0,0.55)' }} onClick={toggleMonitor} />
-        <div
-          className="animate-slide-up"
-          style={{
-            position: 'fixed', left: 0, right: 0, bottom: 0, zIndex: 61,
-            background: 'var(--bg-surface)', borderTop: '1px solid var(--border)',
-            borderTopLeftRadius: 16, borderTopRightRadius: 16,
-            maxHeight: '80vh', overflowY: 'auto',
-            boxShadow: '0 -8px 32px rgba(0,0,0,0.45)', paddingBottom: 'env(safe-area-inset-bottom)',
-          }}
-        >
-          <div style={{ display: 'flex', justifyContent: 'center', paddingTop: 8, paddingBottom: 2 }}>
-            <div style={{ width: 40, height: 4, borderRadius: 2, background: 'var(--border)' }} />
-          </div>
-          {inner}
-        </div>
-      </>
+      <BottomSheet onClose={toggleMonitor} handleGap={2} bottomPad="env(safe-area-inset-bottom)">
+        {inner}
+      </BottomSheet>
     )
   }
 

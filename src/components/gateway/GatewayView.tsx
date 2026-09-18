@@ -19,6 +19,7 @@ import { ModelsView } from '../models/ModelsView'
 import { buildGatewayUpdatePrompt } from '../../lib/gatewayUpdate'
 import { useGatewayUpdateStore } from '../../store/gatewayUpdate'
 import { sendViaAgent } from '../../lib/agentPrompt'
+import { Card } from '../ui/Card'
 
 interface ConfigSnapshot { hash?: string; config?: Record<string, unknown>; parsed?: Record<string, unknown> }
 
@@ -505,13 +506,3 @@ function SettingsScroll({ title, maxWidth = 560, children }: { title: string; ma
 }
 
 
-function Card({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', overflow: 'hidden' }}>
-      <div className="px-3 py-2.5 text-xs font-semibold" style={{ borderBottom: '1px solid var(--border)', color: 'var(--text-secondary)', background: 'var(--bg-elevated)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-        {title}
-      </div>
-      <div className="p-3">{children}</div>
-    </div>
-  )
-}

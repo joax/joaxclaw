@@ -6,6 +6,7 @@ import { useFilesStore, newSince, breadcrumbFor, type FileEntry } from '../../st
 import { useConnectionStore } from '../../store/connection'
 import { fmtBytes } from '../../lib/artifacts'
 import { useIsNarrow } from '../../lib/useIsNarrow'
+import { SidePanel } from '../ui/SidePanel'
 
 // The Files panel: what the gateway's agents wrote, listed independently of the
 // conversation that produced it, with the same viewer the artifact cards open.
@@ -13,8 +14,6 @@ import { useIsNarrow } from '../../lib/useIsNarrow'
 // Listing needs joaxclaw-fs `host.files.*` on the gateway host — the plugin is what
 // knows which directories count as roots. Without it the panel offers the install flow,
 // while artifact cards keep working (they read a known path). See docs/files-drawer.md.
-
-const WIDTH = 380
 
 export function FileDrawer({ onOpenChat }: { onOpenChat?: () => void }) {
   const {
@@ -35,36 +34,8 @@ export function FileDrawer({ onOpenChat }: { onOpenChat?: () => void }) {
   const fresh = newSince(entries, seenAtMs)
   const freshPaths = new Set(fresh.map(f => f.path))
 
-  // Three sizings, and the difference matters: the drawer is a flex sibling of the nav
-  // rail, so an EXPANDED panel must *flex* into the space left over. Asking for
-  // `width: 100%` with `flexShrink: 0` made it demand the whole row next to a ~60px
-  // rail, pushing its right edge off the window.
-  //
-  // <main>'s inner wrapper carries z-[1], so a static sibling paints under it — anything
-  // overflowing the chat column would bleed over this panel. Hence the stacking context.
-  const sizing: React.CSSProperties = narrow
-    ? { position: 'fixed', inset: 0, width: '100%', zIndex: 40 }
-    : expanded
-      ? { flex: 1, minWidth: 0, position: 'relative', zIndex: 2 }
-      : { width: WIDTH, flexShrink: 0, position: 'relative', zIndex: 2 }
-
   const shell = (children: React.ReactNode) => (
-    <aside
-      className="flex flex-col min-h-0"
-      style={{
-        borderLeft: narrow || expanded ? 'none' : '1px solid var(--border)',
-        background: 'var(--bg-primary)',
-        // Lift the panel off the chat column — left edge only. The negative spread is
-        // what keeps it there: it shrinks the shadow shape by 12px on every side, and
-        // the 24px blur reaches ~12px back out, so the top and bottom cancel to zero
-        // while the -20px offset still leaves ~20px of shadow to the left. Pointless as
-        // a full-screen overlay, where there's nothing beside it to separate from.
-        ...(narrow ? {} : { boxShadow: '-20px 0 24px -12px rgba(0,0,0,0.45)' }),
-        ...sizing,
-      }}
-    >
-      {children}
-    </aside>
+    <SidePanel expanded={expanded} label="Files">{children}</SidePanel>
   )
 
   // A file is selected → the viewer owns the panel (it draws its own header).
