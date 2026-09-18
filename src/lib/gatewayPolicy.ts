@@ -75,6 +75,23 @@ export function clientSideGate(
   return null
 }
 
+/**
+ * Whether to SHOW a feature that needs `method`. Stricter than `clientSideGate`, which
+ * lets an unlisted method be tried: a feature only appears when the gateway says it has
+ * the method, and not after this connection got "unknown method" for it. No list at all
+ * (a pre-2026.7 gateway) counts as "no". Only use it for advertised methods; the few
+ * `advertise:false` ones (`sessions.get`, `push.web.*`) keep try-and-cache.
+ */
+export function supportsMethod(features: GatewayFeatures | undefined, unsupported: ReadonlySet<string>, method: string): boolean {
+  if (unsupported.has(method)) return false
+  return advertisesMethod(features, method) === true
+}
+
+/** Whether this gateway advertises an event in hello-ok. No list counts as "no". */
+export function supportsEvent(features: GatewayFeatures | undefined, event: string): boolean {
+  return Array.isArray(features?.events) && features.events.includes(event)
+}
+
 /** Additive wire contracts this gateway supports, e.g. `session-scoped-chat-metadata`. */
 export function hasCapability(features: GatewayFeatures | undefined, capability: string): boolean {
   return Array.isArray(features?.capabilities) && features.capabilities.includes(capability)

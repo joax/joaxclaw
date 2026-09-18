@@ -9,7 +9,10 @@ import { Btn } from '../ui/Btn'
 // than bounce the user to the manual connect screen, we explain what's happening
 // and silently retry.
 export function ReconnectOverlay() {
-  const { reconnectAttempt, statusDetail, connection, cancelReconnect } = useConnectionStore()
+  const { reconnectAttempt, statusDetail, connection, cancelReconnect, restartExpectation } = useConnectionStore()
+  // A flow that restarted the gateway on purpose (an update, a plugin install) supplies
+  // its own heading and detail, and the loop keeps trying until `untilMs`.
+  const expected = restartExpectation
   const logoUrl = useLogoUrl()
 
   return (
@@ -31,13 +34,15 @@ export function ReconnectOverlay() {
         </div>
 
         <h2 className="text-lg font-semibold mb-1.5" style={{ color: 'var(--text-primary)' }}>
-          Reconnecting to gateway…
+          {expected ? expected.reason : 'Reconnecting to gateway…'}
         </h2>
 
         <p className="text-sm mb-4" style={{ color: 'var(--text-secondary)', lineHeight: 1.55 }}>
-          The gateway is reloading to apply your change — this happens after adding or
-          enabling a channel. It usually comes back in a few seconds. Hang tight; we'll
-          reconnect automatically.
+          {expected ? (expected.detail ?? "We'll reconnect automatically as soon as it's back.") : <>
+            The gateway is reloading to apply your change — this happens after adding or
+            enabling a channel. It usually comes back in a few seconds. Hang tight; we'll
+            reconnect automatically.
+          </>}
         </p>
 
         <div
@@ -49,7 +54,9 @@ export function ReconnectOverlay() {
             {connection?.url ?? 'gateway'}
           </span>
           <span className="text-xs" style={{ color: 'var(--accent)' }}>
-            · attempt {Math.max(1, reconnectAttempt)}/{RECONNECT_MAX_ATTEMPTS}
+            · attempt {Math.max(1, reconnectAttempt)}{expected
+              ? ` · until ${new Date(expected.untilMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+              : `/${RECONNECT_MAX_ATTEMPTS}`}
           </span>
         </div>
 

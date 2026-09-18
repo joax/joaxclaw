@@ -1,5 +1,5 @@
 import type { GwResFrame } from './types'
-import { clientSideGate, isHandshakeMethod, connectRetryDelayMs, hasCapability, readMissingScope, type AttachmentPolicy, type GatewayFeatures, type GatewayPolicy } from './gatewayPolicy'
+import { clientSideGate, isHandshakeMethod, connectRetryDelayMs, hasCapability, supportsMethod, supportsEvent, readMissingScope, type AttachmentPolicy, type GatewayFeatures, type GatewayPolicy } from './gatewayPolicy'
 import { useSettingsStore } from '../store/settings'
 import { chatIdentityName } from './userProfile'
 
@@ -529,6 +529,20 @@ export class GatewayClient {
   /** An additive wire contract this gateway supports. */
   supports(capability: string): boolean {
     return hasCapability(this.features, capability)
+  }
+
+  /**
+   * Whether to show a feature that needs `method`: advertised in this connection's
+   * hello-ok and not since rejected as unknown. Reset on every new socket. Components
+   * read it through `useGatewaySupport`, which re-renders on reconnect.
+   */
+  hasMethod(method: string): boolean {
+    return supportsMethod(this.features, this.unsupportedMethods, method)
+  }
+
+  /** Whether this connection's hello-ok advertised `event`. */
+  hasEvent(event: string): boolean {
+    return supportsEvent(this.features, event)
   }
 
   get connected(): boolean {

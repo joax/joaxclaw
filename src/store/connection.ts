@@ -5,6 +5,7 @@ import { gatewayClient } from '../lib/gateway'
 import { gatewayHost, isLocalGateway } from '../lib/ollamaHealth'
 import { readLocalStore, patchLocalStore } from '../lib/localStore'
 import { connectionSignal, type ConnectionSignal, type PingSample } from '../lib/connectionSignal'
+import { activeExpectation, makeRestartExpectation, shouldKeepReconnecting, type RestartExpectation, type RestartExpectationInput } from '../lib/restartExpectation'
 
 interface HeartbeatEntry { time: number; ok: boolean }
 
@@ -40,6 +41,12 @@ interface ConnectionState {
   // Set while this (new) device is awaiting one-time approval on the gateway host. The
   // store retries the handshake on an interval; the connect screen shows a pairing card.
   pairingPending: { deviceId: string } | null
+  // Bumped on every new connection (mirrors gatewayClient.connectionSeq). Anything that
+  // reads what hello-ok said (useGatewaySupport) subscribes to it to re-evaluate.
+  connectionSeq: number
+  // Set by a flow that's about to restart the gateway (an update, a plugin install), so
+  // the reconnect overlay explains the drop and keeps retrying for longer.
+  restartExpectation: RestartExpectation | null
 
   connect: (conn: GatewayConnection) => void
   disconnect: () => void
@@ -47,6 +54,8 @@ interface ConnectionState {
   saveConnection: (conn: GatewayConnection) => void
   removeConnection: (url: string) => void
   setEngineUrl: (gatewayUrl: string, key: string, url: string) => void
+  expectRestart: (input: RestartExpectationInput) => void
+  clearRestartExpectation: () => void
 }
 
 // True when connected to a gateway on another host. Client-side system metrics
@@ -83,6 +92,8 @@ export function useIsAdmin(): boolean {
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 let intentionalDisconnect = false
 let attempt = 0
+// When the current outage began; an expected restart only covers drops inside its window.
+let droppedAtMs: number | null = null
 
 function clearReconnect() {
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
@@ -140,6 +151,8 @@ export const useConnectionStore = create<ConnectionState>()(
       reconnectAttempt: 0,
       grantedScopes: [],
       pairingPending: null,
+      connectionSeq: 0,
+      restartExpectation: null,
 
       connect(conn) {
         intentionalDisconnect = false
@@ -167,7 +180,8 @@ export const useConnectionStore = create<ConnectionState>()(
             attempt = 0
             clearReconnect()
             clearPairing()
-            set({ status: 'connected', statusDetail: '', uptimeStart: Date.now(), reconnecting: false, reconnectAttempt: 0, grantedScopes: [...gatewayClient.grantedScopes], pairingPending: null })
+            droppedAtMs = null
+            set({ status: 'connected', statusDetail: '', uptimeStart: Date.now(), reconnecting: false, reconnectAttempt: 0, grantedScopes: [...gatewayClient.grantedScopes], pairingPending: null, connectionSeq: gatewayClient.connectionSeq, restartExpectation: null })
             startPingLoop()
           } else if (status === 'connecting') {
             // Don't clobber the "reconnecting" banner with a plain connecting state.
@@ -222,7 +236,16 @@ export const useConnectionStore = create<ConnectionState>()(
         clearPairing()
         stopPingLoop()
         gatewayClient.disconnect()
-        set({ status: 'disconnected', statusDetail: '', reconnecting: false, reconnectAttempt: 0, pairingPending: null })
+        droppedAtMs = null
+        set({ status: 'disconnected', statusDetail: '', reconnecting: false, reconnectAttempt: 0, pairingPending: null, restartExpectation: null })
+      },
+
+      expectRestart(input) {
+        set({ restartExpectation: makeRestartExpectation(input, Date.now()) })
+      },
+
+      clearRestartExpectation() {
+        set({ restartExpectation: null })
       },
 
       saveConnection(conn) {
@@ -305,9 +328,17 @@ function scheduleReconnect(get: GetFn, set: SetFn) {
   const conn = get().connection
   if (!conn) return
 
-  if (attempt >= RECONNECT_MAX_ATTEMPTS) {
+  const now = Date.now()
+  if (droppedAtMs === null) droppedAtMs = now
+  // An expectation that didn't cover this drop has lapsed; drop it so the overlay
+  // shows the ordinary text.
+  const expectation = activeExpectation(get().restartExpectation, droppedAtMs)
+  if (!expectation && get().restartExpectation) set({ restartExpectation: null })
+
+  if (!shouldKeepReconnecting({ attempt, max: RECONNECT_MAX_ATTEMPTS, expectation, droppedAtMs, now })) {
     clearReconnect()
-    set({ reconnecting: false, status: 'disconnected', statusDetail: 'Could not reconnect — the gateway may still be restarting. Try again.' })
+    droppedAtMs = null
+    set({ reconnecting: false, status: 'disconnected', restartExpectation: null, statusDetail: 'Could not reconnect — the gateway may still be restarting. Try again.' })
     return
   }
 
