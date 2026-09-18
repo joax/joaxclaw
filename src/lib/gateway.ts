@@ -144,6 +144,8 @@ export class GatewayClient {
   serverVersion?: string
   /** Increments on every successful handshake, so per-connection subscriptions can tell a reconnect happened. */
   connectionSeq = 0
+  /** hello-ok's `server.bootId`: new on every gateway process start, so it tells a restart from a network blip. */
+  bootId?: string
   /**
    * The update notice from hello-ok's snapshot: `updateAvailable` reaches every connection
    * (reduced to three fields without operator.read), `updateSchedule` only read-capable
@@ -212,6 +214,7 @@ export class GatewayClient {
     // from this socket's hello-ok.
     this.features = undefined
     this.policy = undefined
+    this.bootId = undefined
     this.helloUpdate = {}
     this.unsupportedMethods.clear()
 
@@ -358,6 +361,8 @@ export class GatewayClient {
       this.connectionSeq++
       const version = (res as { server?: { version?: unknown } } | undefined)?.server?.version
       this.serverVersion = typeof version === 'string' ? version : undefined
+      const bootId = (res as { server?: { bootId?: unknown } } | undefined)?.server?.bootId
+      this.bootId = typeof bootId === 'string' ? bootId : undefined
       this.policy = res?.policy
       this.helloUpdate = { available: res?.snapshot?.updateAvailable, schedule: res?.snapshot?.updateSchedule }
       const advertised = res?.features?.methods?.length ?? 0

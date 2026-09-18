@@ -21,6 +21,7 @@ import { isManagedJob } from '../../lib/managedJobs'
 import { loadedModels } from '../../lib/ollama'
 import { formatRelativeDate } from '../../lib/dateUtils'
 import type { NavSection } from '../../App'
+import { RecentMeetingsSection } from '../meetings/RecentMeetingsSection'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -836,6 +837,7 @@ function RightPanel({ onNavigate }: { onNavigate: (s: NavSection) => void }) {
       padding: '20px 16px', background: 'var(--bg-surface)', display: 'flex', flexDirection: 'column', gap: 0,
     }}>
       <ActiveSection onNavigate={onNavigate} />
+      <RecentMeetingsSection onNavigate={onNavigate} />
       <BackgroundSection />
       <RemindersSection />
       <TeamsSection onNavigate={onNavigate} />
@@ -911,6 +913,7 @@ function MobileDashboard({ onSendMessage, onOpenConversation, onNavigate }: {
         <ChatInputCard onSend={onSendMessage} narrow />
         <QuickStats onNavigate={onNavigate} />
         <ActiveSection onNavigate={onNavigate} narrow />
+        <RecentMeetingsSection onNavigate={onNavigate} narrow />
         <RecentConversations onOpen={onOpenConversation} onNavigate={onNavigate} narrow />
         <TeamsSection onNavigate={onNavigate} narrow />
         <CronsSection onNavigate={onNavigate} narrow />

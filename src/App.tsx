@@ -13,6 +13,8 @@ import { CronsView } from './components/crons/CronsView'
 import { ProcessesView } from './components/processes/ProcessesView'
 import { TeamsView } from './components/teams/TeamsView'
 import { MemoryView } from './components/memory/MemoryView'
+import { MeetingsView } from './components/meetings/MeetingsView'
+import { openMeeting } from './store/meetings'
 import { DashboardView } from './components/dashboard/DashboardView'
 import { BillingView } from './components/billing/BillingView'
 import { SystemMonitorHUD } from './components/monitor/SystemMonitorHUD'
@@ -51,7 +53,7 @@ import { useTeamsStore } from './store/teams'
 import { useSkillsStore } from './store/skills'
 import { useFilesStore, resetFilesForConnection } from './store/files'
 
-export type NavSection = 'dashboard' | 'chat' | 'talk' | 'agents' | 'processes' | 'teams' | 'crons' | 'obsidian' | 'billing' | 'gateway' | 'themes' | 'settings'
+export type NavSection = 'dashboard' | 'chat' | 'talk' | 'meetings' | 'agents' | 'processes' | 'teams' | 'crons' | 'obsidian' | 'billing' | 'gateway' | 'themes' | 'settings'
 
 export default function App() {
   const [section, setSection] = useState<NavSection>('dashboard')
@@ -180,9 +182,10 @@ export default function App() {
   // A tapped PWA notification routes here (via the service worker → main.tsx window event).
   useEffect(() => {
     const handler = (e: Event) => {
-      const nav = (e as CustomEvent).detail as { section?: NavSection; convId?: string; sessionKey?: string; mainOf?: string; taskId?: string } | undefined
+      const nav = (e as CustomEvent).detail as { section?: NavSection; convId?: string; selector?: string; sessionKey?: string; mainOf?: string; taskId?: string } | undefined
       if (!nav) return
       if (nav.convId) useChatStore.getState().selectConversation(nav.convId)
+      if (nav.selector) openMeeting(nav.selector)
       if (nav.section) setSection(nav.section)
       // A failed-task push: its chat, with the task drawer open on the task.
       if (nav.sessionKey || nav.taskId) void useTasksStore.getState().navigate(nav)
@@ -200,7 +203,7 @@ export default function App() {
   }, [status, connection?.url])
 
   const notConnected = status !== 'connected'
-  const ALL_GATEWAY_SECTIONS: NavSection[] = ['dashboard', 'chat', 'talk', 'agents', 'processes', 'teams', 'crons', 'obsidian', 'billing', 'gateway']
+  const ALL_GATEWAY_SECTIONS: NavSection[] = ['dashboard', 'chat', 'talk', 'meetings', 'agents', 'processes', 'teams', 'crons', 'obsidian', 'billing', 'gateway']
   const disabledSections: NavSection[] = notConnected
     // Keep Dashboard clickable while disconnected so it routes back to the connect
     // screen — otherwise, opening the Theme editor (the one non-gateway view) would
@@ -246,6 +249,7 @@ export default function App() {
               {section === 'dashboard' && <DashboardView onNavigate={setSection} />}
               {section === 'chat' && <ChatView />}
               {section === 'talk' && <TalkView />}
+              {section === 'meetings' && <MeetingsView onOpenChat={() => setSection('chat')} />}
               {section === 'agents' && <AgentsView onOpenChat={() => setSection('chat')} />}
               {section === 'processes' && <ProcessesView onOpenChat={() => setSection('chat')} />}
               {section === 'teams' && <TeamsView onOpenChat={() => setSection('chat')} />}

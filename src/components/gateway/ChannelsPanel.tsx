@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Plus, RefreshCw, X, Play, Square, LogOut, Trash2, Pencil, QrCode,
-  CheckCircle2, AlertCircle, Bot, Search, ExternalLink, Loader2, Star, Users, Copy, Check,
+  CheckCircle2, AlertCircle, Bot, Search, ExternalLink, Loader2, Star, Users,
 } from 'lucide-react'
 import { Btn } from '../ui/Btn'
 import { Input, Textarea } from '../ui/Input'
@@ -15,7 +15,9 @@ import {
   type ChannelConfig, type ChannelDef, type ChannelMode, type BindingScopeKind, type PluginInstallState,
 } from '../../lib/channels'
 import { usePluginCatalogStore } from '../../store/pluginCatalog'
-import type { PluginSearchPackage } from '../../lib/pluginCatalog'
+import { officialTarget } from '../../lib/pluginInstall'
+import { InstallStatus } from '../extensions/InstallStatus'
+import { CommandHint } from '../ui/CommandHint'
 import { ConsentDialog } from '../extensions/PluginBrowser'
 import { channelPolicySpec } from '../../lib/channelPolicy'
 import { ChannelPolicyEditor } from './ChannelPolicyEditor'
@@ -30,7 +32,8 @@ export function ChannelsPanel({ connected }: { connected: boolean }) {
   const agents = useAgentsStore(s => s.agents)
   const fetchAgents = useAgentsStore(s => s.fetch)
 
-  const [adding, setAdding] = useState(false)
+  // Back from a plugin install's restart: reopen the form that started it.
+  const [adding, setAdding] = useState(() => resumeChannelDef() !== null)
   const [editing, setEditing] = useState<ChannelConfig | null>(null)
   const [qrChannel, setQrChannel] = useState<{ id: string; account?: string } | null>(null)
 
@@ -97,7 +100,7 @@ export function ChannelsPanel({ connected }: { connected: boolean }) {
         </div>
       </div>
 
-      {adding && <ChannelFormModal mode="add" onClose={() => setAdding(false)} />}
+      {adding && <ChannelFormModal mode="add" onClose={() => { setAdding(false); usePluginCatalogStore.getState().clearRun('channel:') }} />}
       {editing && <ChannelFormModal mode="edit" existing={editing} onClose={() => setEditing(null)} />}
       {qrChannel && <QrLoginModal channelId={qrChannel.id} account={qrChannel.account} onClose={() => setQrChannel(null)} />}
     </div>
@@ -405,7 +408,7 @@ function ChannelFormModal({ mode, existing, onClose }: { mode: 'add' | 'edit'; e
   // Select the stable array ref, then map — mapping inside the selector returns
   // a new array every render and sends useSyncExternalStore into an infinite loop.
   const configuredIds = useChannelsStore(s => s.channels).map(c => c.id)
-  const [picked, setPicked] = useState<ChannelDef | null>(existing ? channelDef(existing.id) : null)
+  const [picked, setPicked] = useState<ChannelDef | null>(() => (existing ? channelDef(existing.id) : resumeChannelDef()))
 
   if (!picked) {
     return <CatalogPicker configuredIds={configuredIds} onPick={setPicked} onClose={onClose} />
@@ -695,13 +698,12 @@ function ModePicker({ modes, value, onChange }: { modes: ChannelMode[]; value?: 
 
 function ChannelPluginSetup({ def }: { def: ChannelDef }) {
   const plugin = def.plugin!
+  const origin = `channel:${def.id}`
   const [state, setState] = useState<PluginInstallState | 'checking' | 'unknown'>('checking')
-  const [attempted, setAttempted] = useState(false)
-  const [copied, setCopied] = useState(false)
   const busy = usePluginCatalogStore(s => s.busy)
-  const error = usePluginCatalogStore(s => s.error)
-  const installedNow = usePluginCatalogStore(s => s.justInstalled.includes(plugin.id))
-  const install = usePluginCatalogStore(s => s.install)
+  // This form's own install, from Install through the restart to what it came up as.
+  const run = usePluginCatalogStore(s => (s.run?.target.origin === origin ? s.run : null))
+  const installAndRestart = usePluginCatalogStore(s => s.installAndRestart)
 
   useEffect(() => {
     let alive = true
@@ -717,17 +719,8 @@ function ChannelPluginSetup({ def }: { def: ChannelDef }) {
     color: 'var(--text-secondary)', lineHeight: 1.5,
   })
 
-  if (installedNow) {
-    return (
-      <div className="flex items-start gap-2 px-2.5 py-2 rounded text-xs" style={tone('success')}>
-        <CheckCircle2 size={13} style={{ color: 'var(--success)', flexShrink: 0, marginTop: 1 }} />
-        <span>
-          <b style={{ color: 'var(--text-primary)' }}>{def.label} plugin installed.</b> Restart the gateway to load it
-          (Gateway tab → Restart). You can save your keys now; {def.label} connects after the restart.
-        </span>
-      </div>
-    )
-  }
+  // Installing restarts the gateway, and the form comes back after it with the outcome.
+  if (run) return <InstallStatus origin={origin} />
   if (state === 'checking' || state === 'installed') return null
   if (state === 'disabled') {
     return (
@@ -742,19 +735,10 @@ function ChannelPluginSetup({ def }: { def: ChannelDef }) {
   }
 
   const command = pluginInstallCommand(plugin)
-  const canInstall = plugin.official && gatewayClient.grantedScopes.includes('operator.admin')
-  // Official plugins install by runtime id; installParamsFor turns this into
-  // { source: 'official', pluginId }.
-  const pkg: PluginSearchPackage = {
-    name: plugin.spec ?? plugin.id, displayName: def.label, family: 'code-plugin',
-    channel: 'official', isOfficial: true, runtimeId: plugin.id,
-  }
-  const copy = () => {
-    if (!command) return
-    void navigator.clipboard?.writeText(command)
-      .then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500) })
-      .catch(() => {})
-  }
+  // Gateways before plugins.install (2026.6.x) get the host command only. The official
+  // catalog keys channel plugins by package name ("@openclaw/slack"): installing by the
+  // runtime id is refused as "unknown official plugin catalog entry" (2026.9.4).
+  const canInstall = plugin.official && gatewayClient.grantedScopes.includes('operator.admin') && gatewayClient.hasMethod('plugins.install')
 
   return (
     <div className="flex flex-col gap-2 px-2.5 py-2 rounded text-xs" style={tone('warning')}>
@@ -768,37 +752,35 @@ function ChannelPluginSetup({ def }: { def: ChannelDef }) {
             <>On OpenClaw 2026.9 and later, {def.label} runs as a plugin. If it isn't installed on your gateway yet,
               install it first.</>
           )}
+          {canInstall && <> Installing restarts the gateway, so install it before you enter your keys.</>}
         </span>
       </div>
       <div className="flex items-center gap-2 flex-wrap">
         {canInstall && (
-          <Btn size="sm" loading={busy === pkg.name} onClick={() => { setAttempted(true); void install(pkg) }}>
+          <Btn size="sm" disabled={busy !== null} title={busy !== null ? 'Another plugin is installing' : undefined}
+            onClick={() => void installAndRestart({ ...officialTarget(plugin.spec ?? plugin.id, `${def.label} plugin`, origin), pluginId: plugin.id })}>
             Install {def.label} plugin
           </Btn>
         )}
         {command ? (
-          <span className="flex items-center gap-1.5 min-w-0 flex-wrap">
-            {canInstall && <span>or run on the gateway host:</span>}
-            <code className="px-1.5 py-0.5 rounded font-mono" style={{ background: 'var(--bg-elevated)', color: 'var(--text-primary)', wordBreak: 'break-all' }}>
-              {command}
-            </code>
-            <button
-              onClick={copy}
-              title="Copy the command"
-              style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent)', padding: 0, display: 'inline-flex' }}
-            >
-              {copied ? <Check size={12} /> : <Copy size={12} />}
-            </button>
-          </span>
+          <CommandHint command={command} lead={canInstall ? 'or run on the gateway host:' : 'On the gateway host, run'} />
         ) : (
           <a href={`${DOCS_BASE}/${def.docs ?? def.id}`} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>
             How to install it
           </a>
         )}
       </div>
-      {attempted && error && busy === null && <span style={{ color: 'var(--danger)' }}>{error}</span>}
     </div>
   )
+}
+
+/**
+ * The channel whose form started a plugin install, so the panel can reopen that form when
+ * it mounts again after the restart. Null when there's nothing to come back to.
+ */
+function resumeChannelDef(): ChannelDef | null {
+  const origin = usePluginCatalogStore.getState().run?.target.origin
+  return origin?.startsWith('channel:') ? channelDef(origin.slice('channel:'.length)) : null
 }
 
 // ── WhatsApp QR login modal ──────────────────────────────────────────────────
