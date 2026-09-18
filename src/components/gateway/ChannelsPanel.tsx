@@ -735,7 +735,9 @@ function ChannelPluginSetup({ def }: { def: ChannelDef }) {
   }
 
   const command = pluginInstallCommand(plugin)
-  // Gateways before plugins.install (2026.6.x) get the host command only.
+  // Gateways before plugins.install (2026.6.x) get the host command only. The official
+  // catalog keys channel plugins by package name ("@openclaw/slack"): installing by the
+  // runtime id is refused as "unknown official plugin catalog entry" (2026.9.4).
   const canInstall = plugin.official && gatewayClient.grantedScopes.includes('operator.admin') && gatewayClient.hasMethod('plugins.install')
 
   return (
@@ -756,7 +758,7 @@ function ChannelPluginSetup({ def }: { def: ChannelDef }) {
       <div className="flex items-center gap-2 flex-wrap">
         {canInstall && (
           <Btn size="sm" disabled={busy !== null} title={busy !== null ? 'Another plugin is installing' : undefined}
-            onClick={() => void installAndRestart(officialTarget(plugin.id, `${def.label} plugin`, origin))}>
+            onClick={() => void installAndRestart({ ...officialTarget(plugin.spec ?? plugin.id, `${def.label} plugin`, origin), pluginId: plugin.id })}>
             Install {def.label} plugin
           </Btn>
         )}
