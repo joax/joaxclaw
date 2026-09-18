@@ -14,6 +14,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Tool calls no longer disappear when you reopen a chat.** When you reopened a chat or restarted the app, every tool call in it was gone, and so were the diffs, question cards, script cards and sub-agent tool lists built from them, even though they'd shown fine while the reply was streaming. The gateway keeps them. The app expected a different format from the one the gateway uses, and threw away the separate entries that carry each call's result. Both are read now, so a reopened chat shows each call with its arguments and its result or error, the same as it did live. Reopening a long chat also reads its last 500 messages instead of 200.
+
 - **Agents that start a long script now check back for the result.** Long scripts run as background jobs (`script_start`). Agents were told, by JoaxClaw's `script-runner` skill and by the tool's own reply, to end their turn because the session would be woken with the result when the script finished. That wake-up never happens for a plugin installed from npm, as joaxclaw-fs is. So an agent that followed the instructions simply stopped, and the result went unseen until someone asked again. (0.26.0 corrected the tool's description but missed these two.) Both now say the opposite: check on the job with `script_status` until it's done, and give the user the job id if it will run for a long time. The skill updates itself on the next connect. The plugin is 0.14.1; update it on the gateway with `openclaw plugins update joaxclaw-fs`.
 
 ---
