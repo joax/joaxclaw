@@ -1,8 +1,12 @@
 import { describe, it, expect } from 'vitest'
 import {
   parseRun, parseRunChanged, mergeRunChanged, phaseProgress, runTone, runTarget, outcomeFromRun, formatDowntime,
-  outcomeText, rememberSeen, bannerState, bannerTone, type UpdateRun,
+  outcomeText, rememberSeen, bannerState, bannerTone, refusalFromRun, isRunId, type UpdateRun,
 } from '../gatewayUpdate'
+import {
+  runRequested, runValidating, runRestarting, runRepairing, runSucceeded, runFailedAtVerifying, runRolledBack,
+  runRefusedRestartDisabled, runAlreadyCurrent, runUnknownVocabulary, RUN_IDS,
+} from './fixtures/sprint/gatewayUpdates'
 
 // Following an update run (PRD 02-b). The record's shape is OpenClaw 2026.9.4's
 // UpdateRunRecordSchema; the ledger records each phase as a step named after it, and a
@@ -155,6 +159,41 @@ describe('phaseProgress', () => {
   })
 })
 
+describe('phaseProgress against real ledger records', () => {
+  it('requested, validating, restarting', () => {
+    expect(phaseProgress(parseRun(runRequested))).toMatchObject({ completed: 0, total: 5 })
+    const v = phaseProgress(parseRun(runValidating))
+    expect(v).toMatchObject({ completed: 1, total: 5, currentLabel: 'Validating' })
+    expect(phaseProgress(parseRun(runRestarting)).phases.map(p => p.mark)).toEqual(['done', 'done', 'done', 'current', 'pending'])
+  })
+
+  it('a repair after verifying is a sixth phase, and the count never goes backwards', () => {
+    const p = phaseProgress(parseRun(runRepairing))
+    expect(p.phases.map(x => x.id)).toEqual(['staging', 'validating', 'activating', 'restarting', 'verifying', 'repairing'])
+    expect(p.phases.map(x => x.mark)).toEqual(['done', 'done', 'done', 'done', 'done', 'current'])
+  })
+
+  it('succeeded is 5/5', () => {
+    expect(phaseProgress(parseRun(runSucceeded))).toMatchObject({ completed: 5, total: 5, pct: 100 })
+  })
+
+  it('failed at verifying marks Verifying failed, reading the latest verifying step', () => {
+    const p = phaseProgress(parseRun(runFailedAtVerifying))
+    expect(p.phases.find(x => x.id === 'verifying')?.mark).toBe('failed')
+    expect(p.phases.find(x => x.id === 'repairing')?.mark).toBe('done')
+  })
+
+  it("a rollback, whose steps all say completed, still shows where it stopped", () => {
+    expect(phaseProgress(parseRun(runRolledBack)).phases.map(x => x.mark)).toEqual(['done', 'done', 'done', 'done', 'failed'])
+  })
+
+  it('an unknown vocabulary does not throw', () => {
+    const r = parseRun(runUnknownVocabulary)!
+    expect(r).toMatchObject({ phase: 'rehearsing', status: 'paused', trigger: 'webhook' })
+    expect(() => phaseProgress(r)).not.toThrow()
+  })
+})
+
 describe('run outcomes', () => {
   it('maps statuses to tones', () => {
     expect(runTone('running')).toBe('working')
@@ -185,11 +224,22 @@ describe('run outcomes', () => {
     expect(bannerTone(bannerState({ available: null, running: null, refusal: null, outcome: back, skipped: null, dismissedKey: null }))).toBe('failed')
   })
 
-  it('treats no-op skips as nothing to report, and other skips as failures', () => {
+  it('reads a skipped run as already-current, a refusal, or nothing', () => {
     expect(outcomeFromRun(run({ status: 'skipped', reason: 'already-current' }))).toMatchObject({ kind: 'already-current', version: '2026.9.4' })
     expect(outcomeFromRun(run({ status: 'skipped', reason: 'cancelled' }))).toBeNull()
-    expect(outcomeFromRun(run({ status: 'skipped', reason: 'restart-disabled' }))).toMatchObject({ kind: 'failed' })
+    expect(refusalFromRun(run({ status: 'skipped', reason: 'cancelled' }))).toBeNull()
+    // A refused update.run is a ledger run too (status skipped, reason = the refusal).
+    const refused = parseRun(runRefusedRestartDisabled)!
+    expect(outcomeFromRun(refused)).toBeNull()
+    expect(refusalFromRun(refused)).toEqual({ reason: 'restart-disabled' })
+    expect(refusalFromRun(parseRun(runAlreadyCurrent)!)).toBeNull()
+    expect(refusalFromRun(parseRun(runRolledBack)!)).toBeNull()
     expect(outcomeFromRun(run())).toBeNull()
+  })
+
+  it('checks a stored runId before runs.get sees it', () => {
+    expect(isRunId(RUN_IDS.ours)).toBe(true)
+    expect(isRunId('not-a-uuid')).toBe(false)
   })
 
   it('falls back to what we knew when the record is a bare stub', () => {
