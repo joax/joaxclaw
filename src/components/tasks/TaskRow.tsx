@@ -6,7 +6,7 @@ import {
 import { Pill } from '../ui/Pill'
 import { ProgressTrack } from '../ui/ProgressTrack'
 import { toneColor } from '../../lib/stateTone'
-import { metaLine, canManageTasks, type BackgroundItem, type KindIcon } from '../../lib/tasks'
+import { metaLine, canManageTasks, canRecover, type BackgroundItem, type KindIcon } from '../../lib/tasks'
 import { useTasksStore } from '../../store/tasks'
 import { useConnectionStore } from '../../store/connection'
 import { useGatewaySupport } from '../../lib/useGatewaySupport'
@@ -56,8 +56,9 @@ export function TaskRow({ item, now, sessionKey, onOpen }: {
   // A read-only token gets no actions at all. A dropped connection keeps them, disabled,
   // so the row doesn't jump around while it reconnects.
   const showStop = item.active && canWrite && (item.source === 'script' || canCancel || !connected)
-  const showRetry = item.needsYou && canWrite && (canRetry || !connected)
-  const showDismiss = item.needsYou && canWrite && (canDismiss || !connected)
+  const recoverable = !!item.task && canRecover(item.task)
+  const showRetry = recoverable && canWrite && (canRetry || !connected)
+  const showDismiss = recoverable && canWrite && (canDismiss || !connected)
   const showHide = !!sessionKey && !item.active && !item.needsYou
   const offTitle = connected ? undefined : OFFLINE_TITLE
 
