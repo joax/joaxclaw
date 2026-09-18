@@ -447,7 +447,9 @@ export function phaseProgress(run: Pick<UpdateRun, 'phase' | 'status'> & { steps
   // A rollback marks the phase it was in "completed" (finishUpdateRunRecord), so a run that
   // didn't succeed may show no failed phase at all. The last phase it reached is where it
   // stopped.
-  if (terminal && !succeeded && !phases.some(p => p.mark === 'failed')) {
+  // Only for a run that failed or rolled back: a refused (skipped) run stopped without
+  // anything failing, and its skipped step must not read as a failure in History.
+  if ((run.status === 'failed' || run.status === 'rolled-back') && !phases.some(p => p.mark === 'failed')) {
     const last = phases.map((p, i) => (p.mark === 'done' && stepOf(p.id) ? i : -1)).filter(i => i >= 0).pop()
     if (last !== undefined) phases[last] = { ...phases[last], mark: 'failed' }
   }
