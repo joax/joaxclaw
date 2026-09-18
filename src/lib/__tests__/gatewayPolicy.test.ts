@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   advertisesMethod, attachmentRejection, clientSideGate, isHandshakeMethod, connectRetryDelayMs, describeRunFailure,
-  hasCapability, overallPayloadExceeded, readMissingScope,
+  hasCapability, overallPayloadExceeded, readMissingScope, supportsMethod, supportsEvent,
 } from '../gatewayPolicy'
 
 const MB = 1024 * 1024
@@ -160,5 +160,29 @@ describe('clientSideGate', () => {
     expect(clientSideGate('sessions.list', helloOk, new Set())).toBeNull()
     expect(clientSideGate('sessions.search', undefined, new Set())).toBeNull()
     expect(clientSideGate('sessions.search', { methods: [] }, new Set())).toBeNull()
+  })
+})
+
+describe('supportsMethod (should a feature be shown)', () => {
+  const none = new Set<string>()
+  it('is true only when hello-ok lists the method', () => {
+    expect(supportsMethod({ methods: ['tasks.list'] }, none, 'tasks.list')).toBe(true)
+    expect(supportsMethod({ methods: ['tasks.list'] }, none, 'tasks.history')).toBe(false)
+  })
+  it('treats no list, or an empty one, as unsupported (unlike clientSideGate)', () => {
+    expect(supportsMethod(undefined, none, 'tasks.list')).toBe(false)
+    expect(supportsMethod({ methods: [] }, none, 'tasks.list')).toBe(false)
+  })
+  it('is false once this connection got "unknown method" for it', () => {
+    expect(supportsMethod({ methods: ['tasks.list'] }, new Set(['tasks.list']), 'tasks.list')).toBe(false)
+  })
+})
+
+describe('supportsEvent', () => {
+  it('is true only when hello-ok lists the event', () => {
+    expect(supportsEvent({ events: ['update.available'] }, 'update.available')).toBe(true)
+    expect(supportsEvent({ events: ['update.available'] }, 'tasks.changed')).toBe(false)
+    expect(supportsEvent(undefined, 'update.available')).toBe(false)
+    expect(supportsEvent({ events: [] }, 'update.available')).toBe(false)
   })
 })

@@ -13,6 +13,7 @@ import { useSettingsStore } from '../../store/settings'
 import { MessageThread } from './MessageThread'
 import { PendingQuestionDock } from './PendingQuestionDock'
 import { ProgressCardDock } from './ProgressCardDock'
+import { StripBar } from '../ui/Strip'
 import { ProgressTrack } from '../ui/ProgressTrack'
 import { ScriptJobDock } from './ScriptJobDock'
 import { MobileChatList } from './MobileChatList'
@@ -627,7 +628,9 @@ export function ChatView({ solo }: { solo?: string } = {}) {
             )}
             {/* What the agent says it's working through (the gateway's progress_card tool),
                 pinned under the context bar with the same bar so the two read alike. */}
-            <ProgressCardDock key={`progress:${activeConv.id}`} sessionKey={activeConv.sessionKey || undefined} />
+            <StripBar key={`strips:${activeConv.id}`}>
+              <ProgressCardDock sessionKey={activeConv.sessionKey || undefined} />
+            </StripBar>
             {/* Scripts this chat has running — pinned above the thread so progress and
                 output stay reachable however far the user has scrolled. */}
             <ScriptJobDock key={activeConv.id} messages={activeConv.messages} sessionKey={activeConv.sessionKey} />
