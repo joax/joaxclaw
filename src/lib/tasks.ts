@@ -124,6 +124,17 @@ export function isNeedsYou(t: Pick<TaskSummary, 'terminalOutcome' | 'deliverySta
   return t.terminalOutcome === 'blocked' && t.deliveryStatus === 'failed'
 }
 
+/**
+ * Whether Retry delivery and Dismiss delivery can work on a needs-you task. The gateway
+ * can only re-drive (or drop) a SUBAGENT's completion delivery; for any other runtime it
+ * answers `ok:false "task has no recoverable subagent completion"`, so the buttons aren't
+ * offered. It still refuses a subagent whose delivery isn't suspended ("completion
+ * delivery is not blocked"), which the summary can't show; the row reports that refusal.
+ */
+export function canRecover(t: Pick<TaskSummary, 'terminalOutcome' | 'deliveryStatus' | 'runtime'>): boolean {
+  return isNeedsYou(t) && t.runtime === 'subagent'
+}
+
 export interface ItemState { label: string; tone: StateTone }
 
 export function taskState(t: TaskSummary): ItemState {
@@ -405,6 +416,29 @@ export function readGatewayError(e: unknown): GatewayErrorInfo {
     }
   }
   return { message: e instanceof Error ? e.message : String(e) }
+}
+
+/**
+ * What to say after `tasks.cancel`, or null when it worked. The gateway answers
+ * `{found:false, cancelled:false}` with no reason when this connection can't write to the
+ * task (or it's gone), and gives a reason such as "Task is already terminal." otherwise.
+ */
+export function cancelMessage(res: { found?: boolean; cancelled?: boolean; reason?: string } | undefined): string | null {
+  if (res?.cancelled) return null
+  const why = res?.reason ?? (res?.found === false
+    ? "this connection can't find it — it may be gone, or belong to a chat you can't manage"
+    : 'the gateway gave no reason')
+  return `Couldn't stop it: ${why}`
+}
+
+/**
+ * What to say after `tasks.retry` / `tasks.dismiss` for one task, or null when it worked.
+ * A refusal is expected, not exceptional: e.g. "completion delivery is not blocked" when
+ * the delivery isn't suspended any more, or "completion delivery redrive limit reached".
+ */
+export function recoveryMessage(verb: 'retry' | 'dismiss', r: { ok?: boolean; reason?: string } | undefined): string | null {
+  if (r?.ok) return null
+  return `Couldn't ${verb}: ${r?.reason ?? 'the gateway gave no reason'}`
 }
 
 /** tasks.list's "invalid or expired … cursor": restart paging from the top. */
