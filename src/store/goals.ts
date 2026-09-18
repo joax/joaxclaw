@@ -3,7 +3,7 @@ import { nanoid } from '../lib/nanoid'
 import { gatewayClient } from '../lib/gateway'
 import type { Session } from '../lib/types'
 import {
-  actionRunsTurn, buildClearParams, buildUpdateParams, classifyGoalError, goalErrorMessage, parseGoal,
+  actionRunsTurn, buildClearParams, buildUpdateParams, goalErrorMessage, goalErrorPolicy, parseGoal,
   shouldApplyGoal, validateObjective, type GoalAction, type GoalErrorClass, type SessionGoal,
 } from '../lib/goals'
 import { useSessionsStore } from './sessions'
@@ -46,6 +46,12 @@ interface GoalsState {
   /** The last operation that failed without an answer, kept so Retry resends it as is. */
   failed: Record<string, GoalOp>
   errors: Record<string, GoalError>
+  /**
+   * Notes this app sent with Resume/Continue, per session. The gateway stores them in the
+   * same `lastStatusNote` the agent writes its reasons to, so this is how the popover
+   * tells "Your note" from the agent's.
+   */
+  sentNotes: Record<string, string[]>
   start: (convId: string, objective: string) => Promise<boolean>
   act: (convId: string, sessionKey: string, goal: SessionGoal, action: Exclude<GoalAction, 'startNew'>, extra?: { note?: string; objective?: string }) => Promise<boolean>
   retry: (convId: string) => Promise<boolean>
@@ -55,12 +61,16 @@ interface GoalsState {
 // A goal ack or update result, as far as the store needs it.
 interface GoalResult { goal?: unknown; replayed?: boolean; status?: string }
 
-/** Write a goal (or none) onto its session row, unless the row already has something newer. */
-function writeRowGoal(sessionKey: string, goal: SessionGoal | null) {
+/**
+ * Write a goal (or none) onto its session row, unless the row already has something
+ * newer. A start always writes: the gateway only starts a goal when there is none, so
+ * whatever the row still shows is stale.
+ */
+function writeRowGoal(sessionKey: string, goal: SessionGoal | null, isStart = false) {
   useSessionsStore.setState(s => {
     const row = s.sessions.find(x => x.key === sessionKey)
     if (!row) return { sessions: [{ key: sessionKey, goal } as Session, ...s.sessions] }
-    if (goal && !shouldApplyGoal(parseGoal(row.goal), goal)) return {}
+    if (goal && !isStart && !shouldApplyGoal(parseGoal(row.goal), goal)) return {}
     return { sessions: s.sessions.map(x => x.key === sessionKey ? { ...x, goal } : x) }
   })
 }
@@ -108,7 +118,8 @@ export const useGoalsStore = create<GoalsState>((set, get) => {
     try {
       return await gatewayClient.request<GoalResult>(op.method!, op.params!)
     } catch (err) {
-      undoTurn()
+      // A gateway refusal means no turn; an unanswered request may still have started one.
+      undoTurn(!!(err && typeof err === 'object' && 'gatewayError' in err))
       throw err
     }
   }
@@ -124,26 +135,24 @@ export const useGoalsStore = create<GoalsState>((set, get) => {
         // than trusting the stored goal.
         await refreshGoalRows()
       } else if (sessionKey) {
-        writeRowGoal(sessionKey, res?.status === 'cleared' ? null : parseGoal(res?.goal))
+        writeRowGoal(sessionKey, res?.status === 'cleared' ? null : parseGoal(res?.goal), op.action === 'start')
       }
+      const note = typeof op.params?.note === 'string' ? op.params.note : undefined
+      if (note && sessionKey) set(s => ({ sentNotes: { ...s.sentNotes, [sessionKey]: [...(s.sentNotes[sessionKey] ?? []), note].slice(-20) } }))
       finish(convId)
       return true
     } catch (err) {
-      const cls = classifyGoalError(err)
-      if (cls === 'admitting' && !retried.admitting) {
+      const policy = goalErrorPolicy(err, retried)
+      if (policy.next === 'resend') {
         // The gateway is still admitting this exact request; the same one again resolves it.
         await new Promise(r => setTimeout(r, RETRY_ADMITTING_MS))
         return run(convId, op, { ...retried, admitting: true })
       }
-      if (cls === 'conflict' && !retried.conflict) {
-        // The id was already used for a different request (e.g. an edited draft): this
-        // is a new intent, so it gets a new id.
-        return run(convId, reissue(op), { ...retried, conflict: true })
-      }
-      if (cls === 'rebound') void refreshGoalRows()
-      // Resend-as-is only makes sense when the gateway may not have seen it, or said to retry.
-      const retryable = cls === 'network' || cls === 'generic' || cls === 'admitting'
-      finish(convId, { cls, message: goalErrorMessage(err), retryable }, retryable ? op : undefined)
+      if (policy.next === 'reissue') return run(convId, reissue(op), { ...retried, conflict: true })
+      if (policy.refresh) void refreshGoalRows()
+      // Kept only for an unchanged resend: the gateway fingerprints every param, so a
+      // Retry must send exactly these bytes to get the receipt instead of a conflict.
+      finish(convId, { cls: policy.cls, message: goalErrorMessage(err), retryable: policy.retryable }, policy.retryable ? op : undefined)
       return false
     }
   }
@@ -160,6 +169,7 @@ export const useGoalsStore = create<GoalsState>((set, get) => {
     inflight: {},
     failed: {},
     errors: {},
+    sentNotes: {},
 
     async start(convId, objective) {
       if (busy(convId)) return false
