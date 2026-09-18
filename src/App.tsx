@@ -21,11 +21,13 @@ import { ReconnectOverlay } from './components/layout/ReconnectOverlay'
 import { UpdateBanner } from './components/layout/UpdateBanner'
 import { PluginUpdateBanner } from './components/layout/PluginUpdateBanner'
 import { GatewayUpdateBanner } from './components/layout/GatewayUpdateBanner'
+import { useGatewayUpdateStore } from './store/gatewayUpdate'
 import { ScopeWarningBanner } from './components/layout/ScopeWarningBanner'
 import { ApprovalsBanner } from './components/layout/ApprovalsBanner'
 import { WelcomeModal } from './components/layout/WelcomeModal'
 import { BottomNav } from './components/layout/BottomNav'
 import { FileDrawer } from './components/files/FileDrawer'
+import { TaskDrawer } from './components/tasks/TaskDrawer'
 import { PanelErrorBoundary } from './components/common/PanelErrorBoundary'
 import { useIsNarrow } from './lib/useIsNarrow'
 import { useNotificationsWatcher } from './lib/useNotificationsWatcher'
@@ -37,6 +39,7 @@ import { useQuestionsStore } from './store/questions'
 import { useGatewayModelsStore } from './store/gatewayModels'
 import { useToolSearchStore } from './store/toolSearch'
 import { useProgressCardsStore } from './store/progressCards'
+import { useTasksStore } from './store/tasks'
 import { useMetricsStore } from './store/metrics'
 import { useSettingsStore, ZOOM_STEP, restoreProfileFromBackup } from './store/settings'
 import { useExtensionsStore } from './store/extensions'
@@ -53,6 +56,7 @@ export default function App() {
   const narrow = useIsNarrow()
   // An expanded file takes over the content area (the drawer is a sibling of <main>).
   const filesExpanded = useFilesStore(s => s.open && s.expanded)
+  const tasksExpanded = useTasksStore(s => s.drawer.open && !!s.drawer.expanded)
   useNotificationsWatcher()
   const { status, connection, reconnecting } = useConnectionStore()
   const { start: startMetrics, stop: stopMetrics } = useMetricsStore()
@@ -132,6 +136,11 @@ export default function App() {
       // Progress cards: re-read the ones on screen, since they may have moved while this
       // client was away, and keep the progressCard.changed broadcast subscribed.
       useProgressCardsStore.getState().start()
+      // Gateway updates: the hello-ok notice (every connection), the update.* broadcasts,
+      // and the result of an update this app started before the restart.
+      useGatewayUpdateStore.getState().start()
+      // Background tasks: every agent's active and recent work, then the `task` event.
+      useTasksStore.getState().start()
     }
   }, [status])
 
@@ -211,7 +220,7 @@ export default function App() {
             content area rather than covering the chat with an overlay. */}
         <main
           className="flex-1 min-w-0 flex flex-col relative"
-          style={{ background: 'var(--bg-primary)', ...(filesExpanded ? { display: 'none' } : {}) }}
+          style={{ background: 'var(--bg-primary)', ...(filesExpanded || (tasksExpanded && !narrow) ? { display: 'none' } : {}) }}
         >
           <ThemeBackground slot="app" />
           <div className="relative z-[1] flex-1 min-w-0 min-h-0 flex flex-col">
@@ -241,6 +250,11 @@ export default function App() {
         {!showConnect && !reconnecting && (
           <PanelErrorBoundary label="Files">
             <FileDrawer onOpenChat={() => setSection('chat')} />
+          </PanelErrorBoundary>
+        )}
+        {!showConnect && !reconnecting && (
+          <PanelErrorBoundary label="Background tasks">
+            <TaskDrawer onOpenChat={() => setSection('chat')} />
           </PanelErrorBoundary>
         )}
       </div>
