@@ -54,6 +54,20 @@ export function ExtensionsView({ onOpenChat }: { onOpenChat?: () => void }) {
 
   useEffect(() => { load() }, [])
 
+  // openPluginBrowser() from elsewhere (Meetings) while this view is already mounted.
+  const browserRequested = usePluginCatalogStore(s => s.browserOpen)
+  useEffect(() => { if (browserRequested) { setTab('plugins'); setBrowsingState(true) } }, [browserRequested])
+
+  // Manage / Configure from the catalog: the Configure modal needs the extensions-store
+  // row, which a just-installed plugin may not have yet.
+  const openPluginConfig = async (pluginId: string) => {
+    let row = useExtensionsStore.getState().plugins.find(p => p.id === pluginId)
+    if (!row) { await load(); row = useExtensionsStore.getState().plugins.find(p => p.id === pluginId) }
+    if (!row) return
+    setBrowsing(false)
+    setConfigPlugin(row)
+  }
+
   async function handleSave() {
     try {
       await save()
@@ -250,6 +264,8 @@ export function ExtensionsView({ onOpenChat }: { onOpenChat?: () => void }) {
         <PluginBrowser
           onClose={() => setBrowsing(false)}
           installedIds={new Set(plugins.map(p => p.id))}
+          onManage={openPluginConfig}
+          onOpenChat={onOpenChat}
         />
       )}
       {browsing && tab === 'skills' && (

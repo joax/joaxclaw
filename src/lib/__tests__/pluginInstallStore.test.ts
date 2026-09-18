@@ -216,3 +216,70 @@ describe('installAndRestart', () => {
     expect(usePluginCatalogStore.getState().run?.target.displayName).toBe('Zoom')
   })
 })
+
+describe('catalog browsing', () => {
+  const item = (id: string, pluginId?: string) => ({
+    id, catalog: { name: id, official: false, categories: [] },
+    local: { present: false, installed: false, enabled: false, state: 'not-installed', action: 'install', ...(pluginId ? { pluginId } : {}) },
+  })
+  beforeEach(() => {
+    usePluginCatalogStore.setState({ intent: 'featured', category: null, catalogQuery: '', items: [], nextCursor: null, selectedId: null, pendingPluginId: null, details: {} })
+  })
+
+  it('loads a view, and Load more follows the cursor', async () => {
+    handlers['plugins.catalog.browse'] = p => (p.cursor ? { items: [item('b')] } : { items: [item('a')], nextCursor: 'c1' })
+    await usePluginCatalogStore.getState().loadView()
+    expect(calls.at(-1)?.params).toEqual({ intent: 'featured', pageSize: 24 })
+    expect(usePluginCatalogStore.getState().nextCursor).toBe('c1')
+    await usePluginCatalogStore.getState().loadMore()
+    expect(calls.at(-1)?.params).toEqual({ intent: 'featured', cursor: 'c1', pageSize: 24 })
+    expect(usePluginCatalogStore.getState().items.map(e => e.id)).toEqual(['a', 'b'])
+    expect(usePluginCatalogStore.getState().nextCursor).toBeNull()
+  })
+
+  it('stops paging when the gateway echoes the cursor back (ClawHub failed on that page)', async () => {
+    handlers['plugins.catalog.browse'] = p => (p.cursor ? { items: [], nextCursor: p.cursor, remoteError: 'ClawHub is unavailable: fetch failed.' } : { items: [item('a')], nextCursor: 'c1' })
+    await usePluginCatalogStore.getState().loadView()
+    await usePluginCatalogStore.getState().loadMore()
+    expect(usePluginCatalogStore.getState().nextCursor).toBeNull()
+    expect(usePluginCatalogStore.getState().remoteError).toMatch(/ClawHub is unavailable/)
+  })
+
+  it('never pages a search', async () => {
+    handlers['plugins.catalog.browse'] = () => ({ items: [item('a')], nextCursor: 'c1' })
+    usePluginCatalogStore.setState({ catalogQuery: 'slack' })
+    await usePluginCatalogStore.getState().loadView()
+    const before = calls.length
+    await usePluginCatalogStore.getState().loadMore()
+    expect(calls.length).toBe(before)
+  })
+
+  it('drops an answer for a view the user has already left', async () => {
+    let release: (v: unknown) => void = () => {}
+    handlers['plugins.catalog.browse'] = p => (p.intent === 'trending'
+      ? new Promise(r => { release = r })
+      : { items: [item('official-1')] })
+    usePluginCatalogStore.setState({ intent: 'trending' })
+    const slow = usePluginCatalogStore.getState().loadView()
+    usePluginCatalogStore.setState({ intent: 'official' })
+    await usePluginCatalogStore.getState().loadView()
+    release({ items: [item('trending-1')] })
+    await slow
+    expect(usePluginCatalogStore.getState().items.map(e => e.id)).toEqual(['official-1'])
+  })
+
+  it('selects a requested plugin once a list containing it arrives', async () => {
+    handlers['plugins.catalog.browse'] = () => ({ items: [item('ch_zoom', 'zoom-meetings')] })
+    handlers['plugins.catalog.get'] = () => ({ plugin: item('ch_zoom', 'zoom-meetings'), detail: { origin: 'local', topics: [], configuration: [], mcpServers: [], skills: [], versions: [] } })
+    usePluginCatalogStore.setState({ pendingPluginId: 'zoom-meetings' })
+    await usePluginCatalogStore.getState().loadView()
+    expect(usePluginCatalogStore.getState().selectedId).toBe('ch_zoom')
+    expect(usePluginCatalogStore.getState().pendingPluginId).toBeNull()
+  })
+
+  it('reports discovery being down', async () => {
+    handlers['plugins.catalog.browse'] = () => { throw gwError({}, 'Plugin discovery is unavailable: offline. Retry to reconnect to ClawHub.') }
+    await usePluginCatalogStore.getState().loadView()
+    expect(usePluginCatalogStore.getState()).toMatchObject({ listState: 'error', listError: 'Plugin discovery is unavailable: offline. Retry to reconnect to ClawHub.' })
+  })
+})
