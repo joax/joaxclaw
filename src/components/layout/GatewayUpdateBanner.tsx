@@ -1,8 +1,8 @@
-import { useState, type ReactNode } from 'react'
-import { Server, X, Loader2, ArrowUpCircle, AlertTriangle, CheckCircle2, Terminal, XCircle, Undo2 } from 'lucide-react'
+import { useEffect, useState, type ReactNode } from 'react'
+import { Server, X, Loader2, ArrowUpCircle, AlertTriangle, CheckCircle2, Terminal, XCircle, Undo2, Clock, PauseCircle } from 'lucide-react'
 import { useConnectionStore } from '../../store/connection'
 import { useGatewayUpdateStore } from '../../store/gatewayUpdate'
-import { bannerState, bannerTone, formatDowntime, phaseProgress, refusalCopy, runTarget, showChannel, type BannerState } from '../../lib/gatewayUpdate'
+import { bannerState, bannerTone, formatClock, formatDowntime, formatHm, isFailedRun, phaseProgress, refusalCopy, runTarget, showChannel, type BannerState } from '../../lib/gatewayUpdate'
 import { toneColor, toneTint } from '../../lib/stateTone'
 import { gatewayClient } from '../../lib/gateway'
 import { useIsNarrow } from '../../lib/useIsNarrow'
@@ -10,6 +10,7 @@ import { Btn } from '../ui/Btn'
 import { CommandHint } from '../ui/CommandHint'
 import { UpdateConfirmOverlay } from '../gateway/UpdateConfirmOverlay'
 import { PhaseLine } from '../gateway/UpdatePhases'
+import { CopyFailureButton, UpdateHistoryOverlay } from '../gateway/UpdateHistoryOverlay'
 
 // The gateway update banner: one place, several short states (lib/gatewayUpdate
 // bannerState). "Available" reaches every connection, from the hello-ok snapshot and the
@@ -30,7 +31,19 @@ export function GatewayUpdateBanner({ onOpenChat }: { onOpenChat?: () => void })
   const admin = scopes.includes('operator.admin')
   const write = scopes.includes('operator.write')
   const canRun = admin && gatewayClient.hasMethod('update.run')
+  const canHold = admin && gatewayClient.hasMethod('update.hold')
+  const canHistory = admin && gatewayClient.hasMethod('update.runs.list')
   const connected = status === 'connected'
+
+  // The campaign countdown ticks once a second, and only while there's a campaign to show.
+  const [now, setNow] = useState(() => Date.now())
+  const campaignShown = !!st.schedule?.campaign && st.schedule.campaign.state !== 'applying'
+  useEffect(() => {
+    if (!campaignShown) return
+    setNow(Date.now())
+    const t = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(t)
+  }, [campaignShown])
 
   const view = bannerState({
     available: st.available,
@@ -41,6 +54,8 @@ export function GatewayUpdateBanner({ onOpenChat }: { onOpenChat?: () => void })
     outcome: st.outcome,
     skipped: st.skipped,
     dismissedKey: st.dismissedKey,
+    schedule: st.schedule,
+    now,
   })
 
   const viaAgent = async () => {
@@ -84,6 +99,33 @@ export function GatewayUpdateBanner({ onOpenChat }: { onOpenChat?: () => void })
     if (copy.action === 'command' && copy.command) extra = <CommandHint command={copy.command} />
   } else if (view.kind === 'running') {
     extra = <PhaseLine progress={phaseProgress(view.run ?? null)} narrow={narrow} />
+  } else if (view.kind === 'campaign') {
+    // Hold is once per campaign, so it goes for good once used (holdUntilMs stays set).
+    if (admin) {
+      actions = (
+        <>
+          {canHold && !view.holdUsed && (
+            <Btn size="sm" variant="outline" icon={<PauseCircle size={12} />} loading={st.holding} onClick={() => void st.hold()} style={tap} {...off}>Hold 1 hour</Btn>
+          )}
+          {canRun && <Btn size="sm" icon={<ArrowUpCircle size={12} />} onClick={st.openConfirm} style={tap} {...off}>Update now</Btn>}
+        </>
+      )
+    }
+    if (st.holdError) extra = <span className="text-xs" style={{ color: toneColor('failed') }}>Couldn't hold the update: {st.holdError}</span>
+  } else if (view.kind === 'result') {
+    const o = view.outcome
+    const runId = 'runId' in o ? o.runId : undefined
+    const failedRun = st.resultRun && isFailedRun(st.resultRun) ? st.resultRun : null
+    if (canHistory) {
+      actions = (
+        <>
+          <Btn size="sm" variant="outline" disabled={!runId} title={runId ? undefined : 'No run record to show'} onClick={() => st.openHistory(runId)} style={tap}>Details</Btn>
+          {failedRun && <CopyFailureButton run={failedRun} />}
+        </>
+      )
+    } else if (failedRun) {
+      actions = <CopyFailureButton run={failedRun} />
+    }
   }
 
   const dismissible = view.kind !== 'running' && view.kind !== 'hidden'
@@ -131,6 +173,7 @@ export function GatewayUpdateBanner({ onOpenChat }: { onOpenChat?: () => void })
         </div>
       )}
       {st.confirmOpen && <UpdateConfirmOverlay />}
+      <UpdateHistoryOverlay />
     </>
   )
 }
@@ -140,6 +183,7 @@ function BannerIcon({ view, color }: { view: BannerState; color: string }) {
   switch (view.kind) {
     case 'running': return <Loader2 size={14} className="animate-spin" style={style} />
     case 'refused': return <AlertTriangle size={14} style={style} />
+    case 'campaign': return view.countdown.kind === 'held' ? <PauseCircle size={14} style={style} /> : <Clock size={14} style={style} />
     case 'result':
       switch (view.outcome.kind) {
         case 'back-on': return <Server size={14} style={style} />
@@ -179,6 +223,13 @@ function BannerMessage({ view, narrow }: { view: BannerState; narrow?: boolean }
     }
     case 'refused':
       return <>The gateway didn't update: <span style={dim}>{lcfirst(refusalCopy(view.refusal).text)}</span></>
+    case 'campaign': {
+      const target = <b>{view.target ?? 'the new version'}</b>
+      const c = view.countdown
+      if (c.kind === 'held') return <>Update to {target} is on hold until {formatHm(c.untilMs)}.</>
+      if (c.kind === 'countdown') return <>The gateway updates to {target} in <span className="font-mono">{formatClock(c.ms)}</span>.</>
+      return <>The gateway updates to {target} when current work finishes, or in <span className="font-mono">{formatClock(c.ms)}</span> at the latest.</>
+    }
     case 'result': {
       const o = view.outcome
       if (o.kind === 'already-current') return <>The gateway is already on {o.version}.</>
