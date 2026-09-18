@@ -112,11 +112,19 @@ export function MessageThread({ conv, showTools, showReasoning }: Props) {
             <p className="text-sm">No messages in this session</p>
             <p className="text-xs" style={{ opacity: 0.6 }}>{conv.sessionKey}</p>
           </div>
-        ) : conv.messages.map((msg, i) =>
+        ) : <>
+          {/* Opening a chat reads its latest entries only; export pages through all of them. */}
+          {conv.historyHasMore && (
+            <p className="text-xs text-center" style={{ color: 'var(--text-secondary)' }}>
+              Earlier messages aren't loaded. Export reads the whole chat.
+            </p>
+          )}
+          {conv.messages.map((msg, i) =>
           msg.role === 'user'
             ? <UserMessage key={msg.id} message={msg} />
             : <AssistantMessage key={msg.id} message={msg} showTools={showTools} showReasoning={showReasoning} convId={conv.id} isLast={i === conv.messages.length - 1} />
-        )}
+          )}
+        </>}
 
         {runningWithoutStream && <StillRunningNotice />}
       </div>

@@ -386,3 +386,16 @@ export function eligibleSessionKey(key: string): boolean {
   if (key === 'global') return false
   return !/:(subagent|cron|acp):|:heartbeat/.test(key)
 }
+
+/**
+ * After a run ends, whether to re-read the session rows for its goal. The agent's
+ * update_goal and create_goal send no sessions.changed; the change arrives with the
+ * run-end snapshot. When that snapshot hasn't come (no sessions.changed since the final
+ * frame) and the row's goal is exactly as it was, the rows are read once. A goal that
+ * was done can't change from the agent's side, so it's left alone.
+ */
+export function goalRefreshNeeded(atFinal: SessionGoal | null, current: SessionGoal | null, changedSinceFinal: boolean): boolean {
+  if (changedSinceFinal || atFinal?.status === 'complete') return false
+  if (!atFinal || !current) return !atFinal && !current
+  return current.id === atFinal.id && current.updatedAt === atFinal.updatedAt
+}

@@ -188,6 +188,9 @@ export interface Conversation {
   // Per-chat overrides, independent of the agent's configured model.
   modelOverride?: string       // 'provider/model' — empty/undefined = agent default
   thinkingLevel?: ThinkingLevel // undefined / 'adaptive' = no override
+  // chat.history said older entries exist beyond what was loaded (PRD 05 FR-15).
+  historyHasMore?: boolean
+  historyTotal?: number
 }
 
 // ── Connection ────────────────────────────────────────────────────────────────

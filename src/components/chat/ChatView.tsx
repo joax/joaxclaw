@@ -1,5 +1,5 @@
 import { useState, useEffect, type ReactNode, type MouseEvent as ReactMouseEvent } from 'react'
-import { Plus, Search, Trash2, MessageSquare, Radio, Heart, ExternalLink, ArrowLeftToLine, ArrowLeft, ChevronDown, Pencil, Clock, FolderOpen } from 'lucide-react'
+import { Plus, Search, Trash2, MessageSquare, Radio, Heart, ExternalLink, ArrowLeftToLine, ArrowLeft, ChevronDown, Pencil, Clock, FolderOpen, Download } from 'lucide-react'
 import { useIsNarrow } from '../../lib/useIsNarrow'
 import { ModelIcon } from '../ui/ModelIcon'
 import { useChatStore } from '../../store/chat'
@@ -22,6 +22,10 @@ import { MessageInput } from './MessageInput'
 import { useLogoUrl } from '../../lib/logo'
 import { ModelSelect, ThinkingSelect, DisplayMenu } from './ChatHeaderControls'
 import { GoalControl } from './GoalControl'
+import { GoalMarker } from './GoalBadges'
+import { ChatMoreMenu } from './ChatMoreMenu'
+import { ExportChatHost } from './ExportChatDialog'
+import { useChatExportStore } from '../../store/chatExport'
 import { formatRelativeDate } from '../../lib/dateUtils'
 import type { Session } from '../../lib/types'
 import { isSessionRunning } from '../../lib/sessionRunning'
@@ -519,6 +523,7 @@ export function ChatView({ solo }: { solo?: string } = {}) {
                     actions={showTools}       setActions={setShowTools}
                     context={showContext}     setContext={setShowContext}
                   />
+                  <ChatMoreMenu sessionKey={activeConv.sessionKey || undefined} title={convDisplayName(activeConv) || activeConv.title} empty={!activeConv.loadingHistory && activeConv.messages.length === 0} />
                 </div>
                 {/* Per-chat model + thinking overrides — own row, scrolls if it can't fit. */}
                 <div className="flex items-center gap-1.5 px-3 pb-2" style={{ overflowX: 'auto' }}>
@@ -623,6 +628,8 @@ export function ChatView({ solo }: { solo?: string } = {}) {
                     <ExternalLink size={13} />
                   </button>
                 ) : null}
+                {/* The chat's own actions (export), last in the header. */}
+                <ChatMoreMenu sessionKey={activeConv.sessionKey || undefined} title={convDisplayName(activeConv) || activeConv.title} empty={!activeConv.loadingHistory && activeConv.messages.length === 0} />
               </div>
             </div>
             )}
@@ -655,6 +662,8 @@ export function ChatView({ solo }: { solo?: string } = {}) {
         </div>
       </div>
       )}
+      {/* The export dialog, for the header menu and the chat-list rows alike. */}
+      <ExportChatHost />
     </div>
   )
 }
@@ -782,7 +791,7 @@ function ContextBar({ sessionKey }: { sessionKey: string }) {
 
 function RowBtn({ children, title, danger, onClick }: { children: ReactNode; title: string; danger?: boolean; onClick: (e: ReactMouseEvent) => void }) {
   return (
-    <button title={title} onClick={onClick} className="flex items-center justify-center rounded p-1"
+    <button title={title} aria-label={title} onClick={onClick} className="flex items-center justify-center rounded p-1"
       style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: danger ? 'var(--danger)' : 'var(--text-secondary)' }}>
       {children}
     </button>
@@ -831,6 +840,7 @@ function ChatRow({ item }: { item: ChatItem }) {
         )}
         {item.cron && !editing && <span title="Scheduled run (automation)" style={{ display: 'inline-flex', flexShrink: 0 }}><Clock size={11} style={{ color: 'var(--text-secondary)' }} /></span>}
         {item.heartbeat && !editing && <span title="Heartbeat session" style={{ display: 'inline-flex', flexShrink: 0 }}><Heart size={11} style={{ color: 'var(--accent)', opacity: 0.8 }} /></span>}
+        {!editing && <GoalMarker sessionKey={item.sessionKey} />}
         {!editing && !hovered && item.time && <span className="text-xs shrink-0" style={{ color: 'var(--text-secondary)' }}>{item.time}</span>}
       </div>
       {item.subtitle && !editing && (
@@ -841,6 +851,7 @@ function ChatRow({ item }: { item: ChatItem }) {
           style={{ background: item.isActive ? 'color-mix(in srgb, var(--accent) 15%, var(--bg-elevated))' : 'var(--bg-elevated)', borderRadius: 4 }}>
           {item.onRename && <RowBtn title="Rename" onClick={e => { e.stopPropagation(); setDraft(item.name); setEditing(true) }}><Pencil size={11} /></RowBtn>}
           {item.onPopOut && <RowBtn title="Pop out to a window" onClick={e => { e.stopPropagation(); item.onPopOut!() }}><ExternalLink size={11} /></RowBtn>}
+          {item.sessionKey && <RowBtn title="Export chat" onClick={e => { e.stopPropagation(); useChatExportStore.getState().open({ sessionKey: item.sessionKey!, title: item.name }) }}><Download size={11} /></RowBtn>}
           {item.onDelete && <RowBtn title="Delete" danger onClick={e => { e.stopPropagation(); item.onDelete!() }}><Trash2 size={11} /></RowBtn>}
         </div>
       )}

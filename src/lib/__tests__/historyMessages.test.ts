@@ -1,7 +1,12 @@
 import { describe, it, expect } from 'vitest'
 import {
   extractToolCalls, toolResultUpdate, applyToolResults, mergeFinalToolCalls, historyMessageId,
+  foldNestedToolRows, markRunningCalls, isToolResultRole,
 } from '../historyMessages'
+import {
+  EXPORT_HISTORY_MESSAGES, EXPORT_HISTORY_RESPONSE, EXPORT_HISTORY_RESPONSE_IDLE, EXPECTED_TOOL_OUTCOMES,
+  TOOL_CALL_SPELLINGS, TOOL_RESULT_ROLE_SPELLINGS,
+} from './fixtures/sprint/chatExport'
 import type { ChatMessage, ToolCall } from '../types'
 
 // Reopening a chat lost every tool call. The gateway's history carries them as
@@ -119,5 +124,64 @@ describe('historyMessageId', () => {
     expect(historyMessageId({ id: 'm1' })).toBe('m1')
     expect(historyMessageId({ __openclaw: { id: 'tx-9', seq: 3 } })).toBe('tx-9')
     expect(historyMessageId({ role: 'user' })).toBeUndefined()
+  })
+})
+
+// ── PRD 05 gaps closed with the export PR (2026.9.4 source-derived fixture) ─────────
+
+describe('every tool-call and result spelling the gateway accepts', () => {
+  it('maps toolUse, tool_call and TOOLCALL blocks, with ids in any id field', () => {
+    const ids = TOOL_CALL_SPELLINGS.flatMap(m => extractToolCalls(m).map(c => c.id))
+    expect(ids).toEqual(['v1', 'v2', 'v3', 'v4', 'v5', 'v6'])
+  })
+
+  it('pairs results in toolResult, tool_result, tool and function rows', () => {
+    expect(TOOL_RESULT_ROLE_SPELLINGS.map(r => toolResultUpdate(r)?.callId)).toEqual(['v1', 'v2', 'v3', 'v4'])
+  })
+
+  it('knows a result row even when the oversized placeholder lost its id', () => {
+    const oversized = EXPORT_HISTORY_MESSAGES.find(m => m.__openclaw?.id === 'ev-0009')
+    expect(toolResultUpdate(oversized)).toBeNull()
+    expect(isToolResultRole(oversized)).toBe(true)
+    expect(isToolResultRole({ role: 'assistant' })).toBe(false)
+  })
+})
+
+describe('foldNestedToolRows', () => {
+  it("turns a sub-agent's nested row into a call on the assistant before it plus a result row", () => {
+    const folded = foldNestedToolRows(EXPORT_HISTORY_MESSAGES)
+    expect(folded.some(m => (m as { role?: string }).role === 'custom')).toBe(false)
+    const host = folded.find(m => extractToolCalls(m).some(c => c.id === 'call_nest07'))
+    expect(host && (host as { __openclaw: { id: string } }).__openclaw.id).toBe('ev-0012')
+    expect(folded.map(r => toolResultUpdate(r)).find(u => u?.callId === 'call_nest07')?.patch).toEqual({ status: 'done', result: '# Pricing notes\n- Acme: $29' })
+  })
+
+  it('leaves other rows untouched', () => {
+    const rows = [{ role: 'user', content: 'hi' }, { role: 'custom', customType: 'something.else' }]
+    expect(foldNestedToolRows(rows)).toEqual(rows)
+  })
+})
+
+describe('markRunningCalls', () => {
+  const toMessages = (raw: unknown[]): ChatMessage[] => {
+    const folded = foldNestedToolRows(raw)
+    const updates = folded.map(r => toolResultUpdate(r)).filter((u): u is NonNullable<typeof u> => !!u)
+    const msgs: ChatMessage[] = folded
+      .filter(r => ['user', 'assistant'].includes((r as { role: string }).role))
+      .map((r, i) => ({ id: String(i), sessionId: '', role: (r as { role: 'user' | 'assistant' }).role, content: '', createdAt: '', toolCalls: extractToolCalls(r) }))
+    return applyToolResults(msgs, updates)
+  }
+  const outcome = (msgs: ChatMessage[]) => Object.fromEntries(msgs.flatMap(m => m.toolCalls ?? []).map(c => [c.id, c.status]))
+
+  it('shows the latest unanswered call as running while the run is active', () => {
+    const got = outcome(markRunningCalls(toMessages(EXPORT_HISTORY_RESPONSE.messages), true))
+    for (const [id, want] of Object.entries(EXPECTED_TOOL_OUTCOMES)) expect([id, got[id]]).toEqual([id, want.status])
+  })
+
+  it('and as done once the run has finished', () => {
+    const got = outcome(markRunningCalls(toMessages(EXPORT_HISTORY_RESPONSE_IDLE.messages), false))
+    expect(got.call_hool08).toBe('done')
+    // An older call whose result was the oversized placeholder has finished, not running.
+    expect(got.call_init04).toBe('done')
   })
 })

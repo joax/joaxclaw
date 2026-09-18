@@ -1,3 +1,4 @@
+import { Target } from 'lucide-react'
 import type { ChatMessage } from '../../lib/types'
 import { formatTimestamp } from '../../lib/dateUtils'
 import { AudioPlayer } from './AudioPlayer'
@@ -50,6 +51,12 @@ export function UserMessage({ message }: Props) {
           <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>
             {formatTimestamp(message.createdAt)}
           </span>
+          {/* The objective that started this chat's goal (set locally; not in reloaded history). */}
+          {message.goal && (
+            <span className="inline-flex items-center gap-1 text-xs" style={{ color: 'var(--accent)' }}>
+              <Target size={10} /> Goal
+            </span>
+          )}
           <span className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>You</span>
         </div>
         {imageAttachments.length > 0 && (

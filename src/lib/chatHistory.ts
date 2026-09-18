@@ -1,6 +1,6 @@
 import { nanoid } from './nanoid'
 import type { ChatMessage, MediaAttachment } from './types'
-import { extractToolCalls, toolResultUpdate, applyToolResults, historyMessageId, type ToolResultUpdate } from './historyMessages'
+import { extractToolCalls, toolResultUpdate, applyToolResults, historyMessageId, foldNestedToolRows, markRunningCalls, type ToolResultUpdate } from './historyMessages'
 
 // chat.history entries as the app's messages. Moved out of store/chat.ts unchanged, so the
 // task drawer can render `tasks.history` (which returns the same objects chat.history does)
@@ -108,11 +108,15 @@ export function extractAttachments(msg: unknown): MediaAttachment[] {
 // dropped, and so is an assistant
 // entry with nothing to show (a bare unclosed <think>).
 export function toChatMessages(
-  raw: unknown[],
+  rawRows: unknown[],
   sessionKey: string,
   /** Which plugin a tool belongs to, as the live path tags it (see historyMessages.ts). */
   pluginIdFor?: (toolName: string) => string | undefined,
+  /** The session still has a run going: its unanswered calls show as running. */
+  activeRun = false,
 ): ChatMessage[] {
+  // A sub-agent's nested calls come as their own rows; fold them into the ordinary shape.
+  const raw = foldNestedToolRows(rawRows)
   // Results arrive as their own `toolResult` rows; they're attached to their calls below.
   const results = raw.map(toolResultUpdate).filter((u): u is ToolResultUpdate => u !== null)
   const messages = raw
@@ -151,5 +155,5 @@ export function toChatMessages(
         .trim()
       return bare !== ''
     })
-  return applyToolResults(messages, results)
+  return markRunningCalls(applyToolResults(messages, results), activeRun)
 }

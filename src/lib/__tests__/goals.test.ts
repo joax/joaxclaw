@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   parseGoal, goalView, formatElapsed, availableActions, buildStartParams, buildUpdateParams,
   buildClearParams, classifyGoalError, validateObjective, eligibleSessionKey, shouldApplyGoal,
-  resumeActionFor, isOpenGoal, goalErrorPolicy, goalErrorCopy, goalErrorMessage, noteIsOurs, type SessionGoal,
+  resumeActionFor, isOpenGoal, goalErrorPolicy, goalErrorCopy, goalErrorMessage, noteIsOurs, goalRefreshNeeded, type SessionGoal,
 } from '../goals'
 import {
   goalErrors, asAppGatewayError, APP_NETWORK_ERROR_MESSAGES, NOW, SESSION_KEY, OP_START, OP_PAUSE, OP_RESUME, OP_EDIT, OP_CLEAR,
@@ -10,6 +10,7 @@ import {
   startParams, pauseParams, continueParams, editParams, clearParams, continueAck, pauseResultReplayed,
   OBJECTIVE_NFD, OBJECTIVE_NFC, OBJECTIVE_WITH_CONTROL_CHAR, OBJECTIVE_16000, OBJECTIVE_16001,
   rowSubagentWithGoal, rowCronKey, rowHeartbeatKey, rowWithGoal,
+  sessionsChangedRunEndBlocked, sessionsChangedGoalCleared, sessionsChangedGlobalNoGoal, sessionsChangedCoalesced,
 } from './fixtures/sprint/chatGoals'
 
 // A chat's goal lives on the gateway session row; lib/goals reads it loosely and builds
@@ -394,5 +395,44 @@ describe('isOpenGoal', () => {
     expect(isOpenGoal(goal({ status: 'paused' }))).toBe(true)
     expect(isOpenGoal(goal({ status: 'complete' }))).toBe(false)
     expect(isOpenGoal(null)).toBe(false)
+  })
+})
+
+describe('goalRefreshNeeded', () => {
+  it('re-reads once when no run-end snapshot came and the goal has not moved', () => {
+    expect(goalRefreshNeeded(goal({ updatedAt: 5 }), goal({ updatedAt: 5 }), false)).toBe(true)
+    // The agent may have created a goal on a chat that had none.
+    expect(goalRefreshNeeded(null, null, false)).toBe(true)
+  })
+
+  it('does nothing once the run-end snapshot or a newer goal arrived', () => {
+    expect(goalRefreshNeeded(goal({ updatedAt: 5 }), goal({ updatedAt: 5 }), true)).toBe(false)
+    expect(goalRefreshNeeded(goal({ updatedAt: 5 }), goal({ updatedAt: 9, status: 'complete' }), false)).toBe(false)
+    expect(goalRefreshNeeded(goal(), null, false)).toBe(false)
+    expect(goalRefreshNeeded(null, goal(), false)).toBe(false)
+    expect(goalRefreshNeeded(goal(), goal({ id: 'g2' }), false)).toBe(false)
+  })
+
+  it('leaves a done goal alone', () => {
+    expect(goalRefreshNeeded(goal({ status: 'complete' }), goal({ status: 'complete' }), false)).toBe(false)
+  })
+})
+
+describe('fixtures: sessions.changed carries the goal', () => {
+  // store/sessions merges payloads whole ({...row, ...payload}); these check what that merge sees.
+  const merge = (row: Record<string, unknown>, p: Record<string, unknown>) => ({ ...row, ...p })
+  const row = { key: SESSION_KEY, goal: goalActive }
+
+  it("the run-end snapshot brings the agent's blocked goal", () => {
+    expect(parseGoal(merge(row, sessionsChangedRunEndBlocked as unknown as Record<string, unknown>).goal)?.status).toBe('blocked')
+  })
+
+  it('goal:null clears it, and a payload without a goal key leaves it', () => {
+    expect(parseGoal(merge(row, sessionsChangedGoalCleared as unknown as Record<string, unknown>).goal)).toBeNull()
+    expect(parseGoal(merge(row, sessionsChangedGlobalNoGoal as unknown as Record<string, unknown>).goal)?.id).toBe(goalActive.id)
+  })
+
+  it('applies whatever the reason', () => {
+    expect(parseGoal(merge({ key: SESSION_KEY }, sessionsChangedCoalesced as unknown as Record<string, unknown>).goal)?.status).toBe('active')
   })
 })
