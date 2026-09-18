@@ -16,7 +16,6 @@ import { LocalEnginesCard } from './LocalEnginesCard'
 import { SessionsView } from '../sessions/SessionsView'
 import { ExtensionsView } from '../extensions/ExtensionsView'
 import { ModelsView } from '../models/ModelsView'
-import { buildGatewayUpdatePrompt } from '../../lib/gatewayUpdate'
 import { useGatewayUpdateStore } from '../../store/gatewayUpdate'
 import { sendViaAgent } from '../../lib/agentPrompt'
 import { Card } from '../ui/Card'
@@ -216,25 +215,18 @@ export function GatewayView({ onOpenChat }: { onOpenChat?: () => void } = {}) {
     }
   }
 
-  // Gateway update availability (from the channel-aware update.status RPC) — reflect it
-  // on the Update button; refresh whenever this view opens.
-  const gwUpdate = useGatewayUpdateStore(s => s.info)
+  // Gateway update availability (the hello-ok notice, kept current by update.available;
+  // update.status for admin) — reflect it on the Update button; refresh when this view opens.
+  const gwUpdate = useGatewayUpdateStore(s => s.available)
+  const gwUpdating = useGatewayUpdateStore(s => s.pending || !!s.followed)
   const checkGwUpdate = useGatewayUpdateStore(s => s.check)
   useEffect(() => { checkGwUpdate() }, [checkGwUpdate])
 
-  // Update OpenClaw itself on the gateway host. Unlike restart/stop (which shell out
-  // locally), this asks the connected agent to run `openclaw update` on its host, so it
-  // works for a remote gateway too — the agent always runs on the gateway host.
-  const handleUpdate = async () => {
-    setCmdRunning(true)
-    const built = await buildGatewayUpdatePrompt()
-    setCmdRunning(false)
-    if (!built.ok || !built.prompt) {
-      setCmdOutput(built.error ?? 'Failed to prepare the update')
-      return
-    }
-    setCmdOutput('Update requested — opening a chat and asking the agent to run it on the gateway host.')
-    sendViaAgent(built.prompt, onOpenChat)
+  // Update OpenClaw itself on the gateway host: the same flow as the banner. With admin
+  // that's a confirm and then update.run; without, an agent on the host runs it.
+  const handleUpdate = () => {
+    setCmdOutput('')
+    useGatewayUpdateStore.getState().beginUpdate(onOpenChat)
   }
 
   const handleConnect = () => {
@@ -352,7 +344,7 @@ export function GatewayView({ onOpenChat }: { onOpenChat?: () => void } = {}) {
                   {gwStatus?.pid && <span className="opacity-60">PID {gwStatus.pid}</span>}
                   {remote && <span className="opacity-60">· remote</span>}
                 </div>
-                <Btn variant={gwUpdate ? undefined : 'outline'} size="sm" icon={<ArrowUpCircle size={12} />} loading={cmdRunning} disabled={status !== 'connected'} onClick={handleUpdate}
+                <Btn variant={gwUpdate ? undefined : 'outline'} size="sm" icon={<ArrowUpCircle size={12} />} loading={cmdRunning || gwUpdating} disabled={status !== 'connected'} onClick={handleUpdate}
                   title={gwUpdate ? `Update available: ${gwUpdate.currentVersion} → ${gwUpdate.latestVersion}` : 'Update OpenClaw on the gateway host'}>
                   {gwUpdate ? `Update → ${gwUpdate.latestVersion}` : 'Update'}
                 </Btn>
