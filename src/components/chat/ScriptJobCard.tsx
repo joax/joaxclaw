@@ -4,6 +4,7 @@ import { stopJob, fmtElapsed } from '../../lib/scriptJobs'
 import { scriptState } from '../../lib/tasks'
 import { toneColor } from '../../lib/stateTone'
 import { ProgressTrack } from '../ui/ProgressTrack'
+import { useTasksStore } from '../../store/tasks'
 import { useScriptJob } from './useScriptJob'
 
 // Live card for a background script started via the joaxclaw-fs `script_start` tool.
@@ -51,13 +52,22 @@ export function ScriptJobCard({ jobId, command }: { jobId: string; command?: str
     <div className="mb-2" style={{ border: `1px solid ${running ? 'color-mix(in srgb, var(--accent) 40%, var(--border))' : 'var(--border)'}`, borderRadius: 'var(--radius)', overflow: 'hidden', background: 'var(--bg-surface)' }}>
       {/* Header */}
       <div className="flex items-center gap-2 px-3 py-2" style={{ background: 'var(--bg-elevated)', borderBottom: '1px solid var(--border)' }}>
-        <Terminal size={12} style={{ color: tone, flexShrink: 0 }} />
-        <span className="text-xs font-semibold" style={{ color: 'var(--text-primary)', flexShrink: 0 }}>Script</span>
-        {cmd && (
-          <span className="text-xs truncate font-mono" style={{ color: 'var(--text-secondary)', flex: 1, minWidth: 0 }} title={cmd}>
-            {cmd}
-          </span>
-        )}
+        {/* The header opens the job in the task drawer: its full output, and Stop. */}
+        <button
+          type="button"
+          onClick={() => useTasksStore.getState().openJob(jobId)}
+          title="Show in the task drawer"
+          className="flex items-center gap-2 text-left"
+          style={{ flex: 1, minWidth: 0, background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'inherit' }}
+        >
+          <Terminal size={12} style={{ color: tone, flexShrink: 0 }} />
+          <span className="text-xs font-semibold" style={{ color: 'var(--text-primary)', flexShrink: 0 }}>Script</span>
+          {cmd && (
+            <span className="text-xs truncate font-mono" style={{ color: 'var(--text-secondary)', flex: 1, minWidth: 0 }} title={cmd}>
+              {cmd}
+            </span>
+          )}
+        </button>
         <div className="flex items-center gap-1.5 ml-auto shrink-0">
           <StatusIcon size={12} className={running ? 'animate-spin' : ''} style={{ color: tone }} />
           <span className="text-xs" style={{ color: tone, whiteSpace: 'nowrap' }}>{statusText}</span>

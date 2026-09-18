@@ -3,7 +3,8 @@ import {
   parseTask, parseTaskList, taskState, isNeedsYou, kindInfo, orderItems, orderTasks, stripItems,
   dashboardItems, summaryLine, chipLabel, worstTone, taskMatchesSession, fromTask, fromScriptJob,
   scriptState, metaLine, readGatewayError, isStaleCursor, isTaskGone, addHidden, canManageTasks,
-  mergeTask, canRecover, cancelMessage, recoveryMessage, STRIP_DONE_MS, STRIP_FAILED_MS, type TaskSummary,
+  mergeTask, stitchPages, listItems, taskAgents, deliveryLabel, resultText, taskChatKey,
+  canRecover, cancelMessage, recoveryMessage, STRIP_DONE_MS, STRIP_FAILED_MS, type TaskSummary,
 } from '../tasks'
 import type { ScriptJob } from '../scriptJobs'
 
@@ -317,6 +318,59 @@ describe('mergeTask', () => {
     expect(mergeTask(undefined, newer)).toBe(newer)
     expect(mergeTask(newer, older)).toBe(newer)
     expect(mergeTask(older, newer)).toMatchObject({ status: 'completed', prompt: 'p', result: 'r' })
+  })
+})
+
+describe('stitchPages', () => {
+  const m = (id: string, text = id) => ({ role: 'assistant', id, content: text })
+  it('joins [newest, older…] pages chronologically without the overlap', () => {
+    const pages = [[m('c'), m('d', 'd2')], [m('a'), m('b'), m('c')]]
+    expect(stitchPages(pages).map(x => (x as { id: string }).id)).toEqual(['a', 'b', 'c', 'd'])
+  })
+  it('keeps the newest copy of a message seen twice, and messages without ids', () => {
+    const out = stitchPages([[m('a', 'new'), { role: 'user', content: 'no id' }], [m('a', 'old')]])
+    expect(out).toEqual([m('a', 'new'), { role: 'user', content: 'no id' }])
+  })
+})
+
+describe('listItems / taskAgents', () => {
+  const tasks = [
+    task({ id: 'r', agentId: 'researcher' }),
+    task({ id: 'n', agentId: 'main', status: 'completed', terminalOutcome: 'blocked', deliveryStatus: 'failed', endedAt: NOW }),
+    task({ id: 'f', agentId: 'main', status: 'timed_out', endedAt: NOW }),
+    task({ id: 'd', agentId: 'researcher', status: 'completed', endedAt: NOW }),
+  ]
+  const jobs = [fromScriptJob(job())]
+  const ids = (filter: 'running' | 'needsYou' | 'failed' | 'all', agentId?: string) =>
+    listItems({ tasks, jobs, filter, agentId }).map(i => i.id)
+
+  it('filters by tab', () => {
+    expect(ids('running')).toEqual(['r', 'j1'])
+    expect(ids('needsYou')).toEqual(['n'])
+    expect(ids('failed')).toEqual(['f'])
+    expect(ids('all')).toHaveLength(5)
+  })
+  it('filters by agent, which leaves scripts out', () => {
+    expect(ids('all', 'researcher').sort()).toEqual(['d', 'r'])
+    expect(taskAgents(tasks)).toEqual(['main', 'researcher'])
+  })
+})
+
+describe('drawer text', () => {
+  it('labels every delivery status', () => {
+    expect(['pending', 'delivered', 'session_queued', 'failed', 'dismissed', 'parent_missing', 'not_applicable', undefined].map(deliveryLabel))
+      .toEqual(['Pending', 'Delivered', 'Queued in chat', "Couldn't deliver", 'Dismissed', 'Chat is gone', '—', '—'])
+  })
+  it('picks the result, then the terminal summary, then progress', () => {
+    expect(resultText({ result: 'r', terminalSummary: 't' })).toBe('r')
+    expect(resultText({ terminalSummary: 't', progressSummary: 'p' })).toBe('t')
+    expect(resultText({ progressSummary: 'p' })).toBe('p')
+    expect(resultText({})).toBeUndefined()
+  })
+  it("opens a subagent's own chat, otherwise the requester's", () => {
+    expect(taskChatKey({ runtime: 'subagent', childSessionKey: 'c', sessionKey: 's' })).toBe('c')
+    expect(taskChatKey({ runtime: 'cli', childSessionKey: 'c', sessionKey: 's' })).toBe('s')
+    expect(taskChatKey({ runtime: 'subagent', sessionKey: 's' })).toBe('s')
   })
 })
 

@@ -1,6 +1,7 @@
 import type { StateTone } from './stateTone'
 import type { ScriptJob } from './scriptJobs'
 import { isSameSession } from './progressCard'
+import { historyMessageId } from './historyMessages'
 
 // Background tasks: the gateway's record of work an agent started and left running —
 // subagents, background commands, automation runs, media jobs — plus the script jobs the
@@ -481,3 +482,76 @@ export function addHidden(map: Record<string, string[]>, sessionKey: string, key
   }
   return next
 }
+
+// ── Output pages ─────────────────────────────────────────────────────────────
+
+/**
+ * `tasks.history` pages ([newest, older, …], each chronological) as one chronological
+ * list. The cursor is an offset from the newest end, so once new messages arrive a page
+ * can overlap the one before it; a message seen twice keeps its newest copy, in place.
+ */
+export function stitchPages(pages: unknown[][]): unknown[] {
+  const out: unknown[] = []
+  const at = new Map<string, number>()
+  for (const page of [...pages].reverse()) {
+    for (const m of page) {
+      const id = historyMessageId(m)
+      if (id && at.has(id)) { out[at.get(id)!] = m; continue }
+      if (id) at.set(id, out.length)
+      out.push(m)
+    }
+  }
+  return out
+}
+
+// ── Drawer list mode ─────────────────────────────────────────────────────────
+
+export type ListFilter = 'running' | 'needsYou' | 'failed' | 'all'
+
+/** The drawer's list: every item, narrowed by the filter tab and the agent menu. */
+export function listItems(args: { tasks: TaskSummary[]; jobs: BackgroundItem[]; filter: ListFilter; agentId?: string }): BackgroundItem[] {
+  const all = dedupe([...args.tasks.map(fromTask), ...args.jobs])
+  return orderItems(all.filter(i => {
+    // Scripts belong to no agent, so an agent filter leaves them out.
+    if (args.agentId && i.agentId !== args.agentId) return false
+    switch (args.filter) {
+      case 'running': return i.active
+      case 'needsYou': return i.needsYou
+      case 'failed': return !i.active && !i.needsYou && i.state.tone === 'failed'
+      default: return true
+    }
+  }))
+}
+
+/** The agents that have tasks, for the list's agent menu. */
+export function taskAgents(tasks: TaskSummary[]): string[] {
+  return [...new Set(tasks.map(t => t.agentId).filter((a): a is string => !!a))].sort()
+}
+
+// ── Drawer text ──────────────────────────────────────────────────────────────
+
+const DELIVERY: Record<string, string> = {
+  pending: 'Pending',
+  delivered: 'Delivered',
+  session_queued: 'Queued in chat',
+  failed: "Couldn't deliver",
+  dismissed: 'Dismissed',
+  parent_missing: 'Chat is gone',
+  not_applicable: '—',
+}
+
+/** Where the result went: "Delivered", "Couldn't deliver", … */
+export function deliveryLabel(status: string | undefined): string {
+  return (status && DELIVERY[status]) || '—'
+}
+
+/** The Result tab: the gateway's result, else how it ended, else its latest progress. */
+export function resultText(t: Pick<TaskSummary, 'result' | 'terminalSummary' | 'progressSummary' | 'error'>): string | undefined {
+  return t.result ?? t.terminalSummary ?? t.progressSummary ?? t.error
+}
+
+/** "Open its chat": a subagent's own session, otherwise the chat that started the task. */
+export function taskChatKey(t: Pick<TaskSummary, 'runtime' | 'childSessionKey' | 'sessionKey'>): string | undefined {
+  return (t.runtime === 'subagent' && t.childSessionKey) || t.sessionKey || t.childSessionKey
+}
+
