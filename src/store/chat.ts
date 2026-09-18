@@ -3,7 +3,7 @@ import { nanoid } from '../lib/nanoid'
 import type { Conversation, ChatMessage, ContextOverflowInfo, ToolCall, SubThread, MediaAttachment, ThinkingLevel } from '../lib/types'
 import { gatewayClient } from '../lib/gateway'
 import { decideIngest } from '../lib/sessionMessageIngest'
-import { extractToolCalls, toolResultUpdate, applyToolResults, mergeFinalToolCalls, historyMessageId, type ToolResultUpdate } from '../lib/historyMessages'
+import { extractToolCalls, toolResultUpdate, applyToolResults, mergeFinalToolCalls } from '../lib/historyMessages'
 import { describeRunFailure } from '../lib/gatewayPolicy'
 import { agentIdFromSessionKey as agentIdFromKey } from '../lib/sessionName'
 import { hasProduced } from '../lib/streamStatus'
@@ -17,10 +17,9 @@ import { useConnectionStore } from './connection'
 import { useSettingsStore } from './settings'
 import { notify, notifyPreview } from '../lib/notifications'
 import { buildProfilePreamble } from '../lib/userProfile'
+import { toChatMessages as historyToChatMessages, extractModel, extractText, extractReasoning, extractAttachments } from '../lib/chatHistory'
+import { buildStartParams } from '../lib/goals'
 
-const AUDIO_EXT = /\.(mp3|ogg|wav|m4a|aac|opus|webm|flac)(\?[^\s]*)?$/i
-const AUDIO_MIME = /^audio\//i
-const URL_RE = /https?:\/\/[^\s<>"')\]]+/g
 
 // Tracks active stream handlers per convId so they can be cancelled
 const activeStreams = new Map<string, { unsub: () => void; sessionKey: string }>()
@@ -452,6 +451,19 @@ interface ChatState {
   loadSessionMessages: (sessionKey: string, agentId: string, agentName: string) => Promise<string>
   /** A session.message event: add the new message to that session's open conversation, if it belongs there. */
   ingestSessionMessage: (payload: unknown) => void
+  /**
+   * Start a goal (PRD 04): creates the session if the chat has none, saves the chat's
+   * thinking level on it, shows the objective as the user's message and streams the
+   * reply. Resolves with chat.send's ack (it carries the new goal); rejects, with the
+   * optimistic messages removed, when the gateway refuses the start.
+   */
+  sendGoalStart: (convId: string, op: { objective: string; opId: string; issuedAtMs: number }) => Promise<Record<string, unknown>>
+  /**
+   * Attach a live stream for a turn a goal action starts (Resume). Returns an undo for when
+   * the action fails: `definite` (the gateway refused it) always removes the placeholder;
+   * otherwise it's kept if the turn produced output after all.
+   */
+  beginGoalTurn: (convId: string) => (definite?: boolean) => void
 }
 
 function makeTitle(text: string): string {
@@ -466,97 +478,6 @@ function sessionTitle(sessionKey: string, agentName: string): string {
   return agentIdFromKey(sessionKey)
 }
 
-function extractModel(msg: unknown): string | undefined {
-  if (!msg || typeof msg !== 'object') return undefined
-  const m = msg as Record<string, unknown>
-  if (typeof m.model === 'string' && m.model) return m.model
-  return undefined
-}
-
-function extractText(msg: unknown): string {
-  if (!msg || typeof msg !== 'object') return ''
-  const m = msg as Record<string, unknown>
-  if (typeof m.text === 'string' && m.text) return m.text as string
-  if (Array.isArray(m.content)) {
-    return (m.content as Record<string, unknown>[])
-      .filter(b => b && typeof b === 'object' && b['type'] === 'text' && typeof b['text'] === 'string')
-      .map(b => b['text'] as string)
-      .join('\n')
-  }
-  if (typeof m.content === 'string') return m.content as string
-  return ''
-}
-
-function extractReasoning(msg: unknown): string {
-  if (!msg || typeof msg !== 'object') return ''
-  const m = msg as Record<string, unknown>
-  if (Array.isArray(m.content)) {
-    const blocks = m.content as Record<string, unknown>[]
-    return blocks
-      .filter(b => b && typeof b === 'object' && b['type'] === 'thinking' && typeof b['thinking'] === 'string')
-      .map(b => b['thinking'] as string)
-      .join('\n')
-  }
-  return ''
-}
-
-function extractAttachments(msg: unknown): MediaAttachment[] {
-  if (!msg || typeof msg !== 'object') return []
-  const m = msg as Record<string, unknown>
-  const result: MediaAttachment[] = []
-
-  if (Array.isArray(m.content)) {
-    for (const b of m.content as Record<string, unknown>[]) {
-      if (!b || typeof b !== 'object') continue
-      const btype = b['type'] as string | undefined
-      const mediaType = (b['mediaType'] ?? b['mimeType']) as string | undefined
-
-      const isAudioBlock =
-        btype === 'audio' ||
-        (btype === 'file' && mediaType && AUDIO_MIME.test(mediaType))
-
-      if (isAudioBlock) {
-        const src = b['source'] as Record<string, unknown> | undefined
-        result.push({
-          type: 'audio',
-          url: (b['url'] ?? src?.['url']) as string | undefined,
-          data: (b['data'] ?? src?.['data']) as string | undefined,
-          mediaType: mediaType ?? (src?.['mediaType'] as string | undefined),
-          name: b['name'] as string | undefined
-        })
-      }
-    }
-  }
-
-  // User messages from WhatsApp/channels store media as MediaPath/MediaPaths top-level fields
-  const mediaPaths = Array.isArray(m['MediaPaths'])
-    ? m['MediaPaths'] as string[]
-    : typeof m['MediaPath'] === 'string' ? [m['MediaPath'] as string] : []
-  const mediaTypes = Array.isArray(m['MediaTypes'])
-    ? m['MediaTypes'] as string[]
-    : typeof m['MediaType'] === 'string' ? [m['MediaType'] as string] : []
-  for (let i = 0; i < mediaPaths.length; i++) {
-    const p = mediaPaths[i]
-    const mt = mediaTypes[i] ?? ''
-    if (typeof p === 'string' && p && AUDIO_MIME.test(mt)) {
-      result.push({ type: 'audio', url: `file://${p}`, mediaType: mt || undefined })
-    }
-  }
-
-  // Scan text for bare audio URLs
-  const text = typeof m.text === 'string' ? m.text
-    : typeof m.content === 'string' ? m.content
-    : extractText(msg)
-  let match: RegExpExecArray | null
-  URL_RE.lastIndex = 0
-  while ((match = URL_RE.exec(text)) !== null) {
-    if (AUDIO_EXT.test(match[0])) {
-      result.push({ type: 'audio', url: match[0] })
-    }
-  }
-
-  return result
-}
 
 // Which plugin a tool belongs to, as the live path tags it (see lib/historyMessages.ts).
 const pluginIdFor = (toolName: string) => useExtensionsStore.getState().toolNameMap.get(toolName)
@@ -565,50 +486,9 @@ const pluginIdFor = (toolName: string) => useExtensionsStore.getState().toolName
 // chats in one read; export pages through the rest (docs/prd/05-chat-export.md).
 const HISTORY_LIMIT = 500
 
-// chat.history entries, and the message in a session.message event (same shape), as the
-// app's messages. Tool results are attached to the calls they answer; system entries are
-// dropped, and so is an assistant
-// entry with nothing to show (a bare unclosed <think>).
-function toChatMessages(raw: unknown[], sessionKey: string): ChatMessage[] {
-  // Results arrive as their own `toolResult` rows; they're attached to their calls below.
-  const results = raw.map(toolResultUpdate).filter((u): u is ToolResultUpdate => u !== null)
-  const messages = raw
-    .filter((m): m is Record<string, unknown> => !!m && typeof m === 'object')
-    .filter(m => {
-      const role = m['role'] as string
-      return role === 'user' || role === 'assistant'
-    })
-    .map(m => {
-      const atts = extractAttachments(m)
-      const toolCalls = extractToolCalls(m, pluginIdFor)
-      return {
-        id: historyMessageId(m) ?? nanoid(),
-        sessionId: sessionKey,
-        role: m['role'] as 'user' | 'assistant',
-        content: extractText(m),
-        reasoning: extractReasoning(m) || undefined,
-        toolCalls: toolCalls.length ? toolCalls : undefined,
-        attachments: atts.length ? atts : undefined,
-        model: extractModel(m),
-        createdAt: typeof m['timestamp'] === 'number'
-          ? new Date(m['timestamp']).toISOString()
-          : new Date().toISOString()
-      }
-    })
-    .filter(msg => {
-      if (msg.role !== 'assistant') return true
-      if (msg.toolCalls?.length || msg.attachments?.length || msg.reasoning) return true
-      // Keep messages that have real thinking content inside complete <think>...</think> blocks
-      const thinkContent = [...msg.content.matchAll(/<think>([\s\S]*?)<\/think>/gi)]
-        .map(m => m[1].trim()).join('')
-      if (thinkContent) return true
-      // Drop messages whose only content is a bare unclosed <think> tag (no real text, no thinking)
-      const bare = msg.content
-        .replace(/<think>[\s\S]*/gi, '')
-        .trim()
-      return bare !== ''
-    })
-  return applyToolResults(messages, results)
+// The mapping itself lives in lib/chatHistory.ts (the task drawer uses it too).
+function toChatMessages(raw: unknown[], sessionKey: string, activeRun = false): ChatMessage[] {
+  return historyToChatMessages(raw, sessionKey, pluginIdFor, activeRun)
 }
 
 // On reload, the sub-agent "threads" (session yields) are NOT in the parent's
@@ -1186,14 +1066,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
 
     try {
-      const history = await gatewayClient.request<{ messages: unknown[] }>('chat.history', { sessionKey, limit: HISTORY_LIMIT })
-      const messages = toChatMessages(history.messages ?? [], sessionKey)
+      const history = await gatewayClient.request<{
+        messages: unknown[]; hasMore?: boolean; totalMessages?: number; sessionInfo?: { hasActiveRun?: boolean }
+      }>('chat.history', { sessionKey, limit: HISTORY_LIMIT })
+      const messages = toChatMessages(history.messages ?? [], sessionKey, history.sessionInfo?.hasActiveRun === true)
+      // Past HISTORY_LIMIT the start of a long chat isn't loaded; the thread says so.
+      const historyHasMore = history.hasMore === true
+      const historyTotal = typeof history.totalMessages === 'number' ? history.totalMessages : undefined
 
       // The conversation was already selected above; fill in its history and clear the
       // loading flag. Match by sessionKey so we hit it whether it was pre-existing or the
       // placeholder we just inserted.
       set(s => ({
-        conversations: s.conversations.map(c => c.sessionKey === sessionKey ? { ...c, messages, loadingHistory: false } : c),
+        conversations: s.conversations.map(c => c.sessionKey === sessionKey ? { ...c, messages, loadingHistory: false, historyHasMore, historyTotal } : c),
       }))
 
       // Sub-agent yields live in child sessions, not the parent history — reattach them
@@ -1246,6 +1131,84 @@ export const useChatStore = create<ChatState>((set, get) => ({
       conversations: s.conversations.map(c => c.id === conv.id ? { ...c, messages: [...c.messages, incoming] } : c),
     }))
   },
+
+  // Goals (PRD 04). A goal start is a chat.send with an intent, and the gateway refuses
+  // any per-request override on it (thinking, attachments, timeout), so it can't share
+  // sendMessage's payload. It shares the session creation and the stream instead. It has
+  // no init-conflict retry either: that path sends a fresh idempotency key per attempt,
+  // and a goal start's key is its operation id, which a retry must reuse unchanged.
+  async sendGoalStart(convId, { objective, opId, issuedAtMs }) {
+    let conv = get().conversations.find(c => c.id === convId)
+    if (!conv) throw new Error('This chat is no longer open.')
+    let key = conv.sessionKey
+    if (!key) {
+      const session = await gatewayClient.request<{ key: string }>('sessions.create', {
+        agentId: conv.agentId,
+        ...(conv.modelOverride ? { model: conv.modelOverride } : {}),
+      })
+      key = session.key
+      set(s => ({ conversations: s.conversations.map(c => c.id === convId ? { ...c, sessionKey: key } : c) }))
+      conv = { ...conv, sessionKey: key }
+    }
+    // The goal's turns run at the session's level, so the level shown in the header is
+    // saved there first. Patching thinkingLevel needs operator.admin, so a write-only
+    // token starts the goal at the session's current level; a failure isn't worth
+    // refusing the goal over either.
+    const thinking = thinkingForSend(conv)
+    if (thinking && useConnectionStore.getState().grantedScopes.includes('operator.admin')) {
+      await gatewayClient.request('sessions.patch', { key, thinkingLevel: thinking }).catch(() => {})
+    }
+
+    // One bubble per operation: a retry reuses the operation id and must not add another.
+    const userId = `goal:${opId}`
+    if (!get().conversations.find(c => c.id === convId)?.messages.some(m => m.id === userId)) {
+      const userMsg: ChatMessage = { id: userId, sessionId: key, role: 'user', content: objective, goal: true, createdAt: new Date().toISOString() }
+      set(s => ({
+        conversations: s.conversations.map(c => c.id !== convId ? c : {
+          ...c,
+          title: c.messages.length === 0 ? makeTitle(objective) : c.title,
+          lastMessage: objective,
+          lastAt: userMsg.createdAt,
+          messages: [...c.messages, userMsg],
+        }),
+      }))
+    }
+    const undoTurn = get().beginGoalTurn(convId)
+    try {
+      return await gatewayClient.request<Record<string, unknown>>('chat.send', buildStartParams(key, objective, opId, issuedAtMs))
+    } catch (err) {
+      // A refusal means neither the objective nor a reply is coming. An unanswered request
+      // may have started the turn, in which case its output keeps both.
+      const definite = !!(err && typeof err === 'object' && 'gatewayError' in err)
+      undoTurn(definite)
+      const turnLive = !definite && [...(get().conversations.find(c => c.id === convId)?.messages ?? [])].reverse()
+        .some(m => m.role === 'assistant' && hasProduced(m))
+      if (!turnLive) set(s => ({ conversations: s.conversations.map(c => c.id !== convId ? c : { ...c, messages: c.messages.filter(m => m.id !== userId) }) }))
+      throw err
+    }
+  },
+
+  beginGoalTurn(convId) {
+    const conv = get().conversations.find(c => c.id === convId)
+    if (!conv?.sessionKey || activeStreams.has(convId)) return () => {}
+    const msgId = nanoid()
+    const placeholder: ChatMessage = {
+      id: msgId, sessionId: conv.sessionKey, role: 'assistant', content: '', reasoning: '',
+      toolCalls: [], createdAt: new Date().toISOString(), streaming: true, reasoningStreaming: false,
+    }
+    set(s => ({ conversations: s.conversations.map(c => c.id !== convId ? c : { ...c, messages: [...c.messages, placeholder] }) }))
+    const update: UpdateFn = (updater) => set(s => ({
+      conversations: s.conversations.map(c => c.id !== convId ? c : { ...c, messages: c.messages.map(m => m.id === msgId ? updater(m) : m) }),
+    }))
+    attachChatStream(convId, conv.sessionKey, update)
+    return (definite = false) => {
+      const msg = get().conversations.find(c => c.id === convId)?.messages.find(m => m.id === msgId)
+      if (!definite && msg && hasProduced(msg)) return   // the turn did start after all; keep it
+      const entry = activeStreams.get(convId)
+      if (entry) { activeStreams.delete(convId); entry.unsub() }
+      set(s => ({ conversations: s.conversations.map(c => c.id !== convId ? c : { ...c, messages: c.messages.filter(m => m.id !== msgId) }) }))
+    }
+  },
 }))
 
 // ── Gateway-restart recovery ────────────────────────────────────────────────────
@@ -1293,4 +1256,24 @@ useConnectionStore.subscribe((s, prev) => {
 // each one goes.
 gatewayClient.on(frame => {
   if (frame.event === 'session.message') useChatStore.getState().ingestSessionMessage(frame.payload)
+  // A reopened chat shows the unanswered calls of a still-running turn as running. When
+  // that run ends they have finished, whether or not their results reached this pane.
+  if (frame.event === 'chat') {
+    const p = frame.payload as { sessionKey?: unknown; state?: unknown } | undefined
+    if (typeof p?.sessionKey === 'string' && (p.state === 'final' || p.state === 'aborted' || p.state === 'error')) settleRunningCalls(p.sessionKey)
+  }
 })
+
+function settleRunningCalls(sessionKey: string): void {
+  const { conversations } = useChatStore.getState()
+  const conv = conversations.find(c => c.sessionKey === sessionKey)
+  if (!conv?.messages.some(m => !m.streaming && m.toolCalls?.some(tc => tc.status === 'running'))) return
+  useChatStore.setState({
+    conversations: conversations.map(c => c.id !== conv.id ? c : {
+      ...c,
+      messages: c.messages.map(m => m.streaming || !m.toolCalls?.some(tc => tc.status === 'running') ? m : {
+        ...m, toolCalls: m.toolCalls.map(tc => (tc.status === 'running' ? { ...tc, status: 'done' as const } : tc)),
+      }),
+    }),
+  })
+}

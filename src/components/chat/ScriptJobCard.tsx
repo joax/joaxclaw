@@ -1,14 +1,18 @@
 import { useEffect, useRef, useState } from 'react'
 import { Terminal, Loader2, CheckCircle2, XCircle, ChevronDown, ChevronRight, Square, AlertTriangle } from 'lucide-react'
 import { stopJob, fmtElapsed } from '../../lib/scriptJobs'
+import { scriptState } from '../../lib/tasks'
+import { toneColor } from '../../lib/stateTone'
+import { ProgressTrack } from '../ui/ProgressTrack'
+import { useTasksStore } from '../../store/tasks'
 import { useScriptJob } from './useScriptJob'
 
 // Live card for a background script started via the joaxclaw-fs `script_start` tool.
 // Follows jobs.get on the host while the job runs; shows status, elapsed, a % bar when
 // the script prints one, and a streaming output tail. Because the job lives on the
-// host, this reconnects to live progress even after an app reload. While the job runs
-// it is also mirrored in the chat's sticky ScriptJobDock, which stays visible when this
-// card scrolls out of view.
+// host, this reconnects to live progress even after an app reload. The job is also a row
+// in the chat's Background strip, which stays visible when this card scrolls out of view.
+// Colours come from lib/tasks' scriptState, so the card and the strip always agree.
 
 export function ScriptJobCard({ jobId, command }: { jobId: string; command?: string }) {
   const { job, expired } = useScriptJob(jobId)
@@ -29,7 +33,8 @@ export function ScriptJobCard({ jobId, command }: { jobId: string; command?: str
   const cmd = job?.command ?? command ?? ''
   const percent = job?.percent ?? null
 
-  const tone = running ? 'var(--warning)' : expired ? 'var(--text-secondary)' : failed ? 'var(--danger)' : 'var(--success)'
+  // Running is accent (working), not the amber this card used to use: amber means "needs you".
+  const tone = job || expired ? toneColor(scriptState(job, expired).tone) : toneColor('working')
   const StatusIcon = running ? Loader2 : expired ? AlertTriangle : failed ? XCircle : CheckCircle2
   const statusText = running
     ? `Running · ${fmtElapsed(job?.elapsedMs ?? 0)}${percent != null ? ` · ${percent}%` : ''}`
@@ -44,16 +49,25 @@ export function ScriptJobCard({ jobId, command }: { jobId: string; command?: str
   }
 
   return (
-    <div className="mb-2" style={{ border: `1px solid ${running ? 'color-mix(in srgb, var(--warning) 40%, var(--border))' : 'var(--border)'}`, borderRadius: 'var(--radius)', overflow: 'hidden', background: 'var(--bg-surface)' }}>
+    <div className="mb-2" style={{ border: `1px solid ${running ? 'color-mix(in srgb, var(--accent) 40%, var(--border))' : 'var(--border)'}`, borderRadius: 'var(--radius)', overflow: 'hidden', background: 'var(--bg-surface)' }}>
       {/* Header */}
       <div className="flex items-center gap-2 px-3 py-2" style={{ background: 'var(--bg-elevated)', borderBottom: '1px solid var(--border)' }}>
-        <Terminal size={12} style={{ color: 'var(--warning)', flexShrink: 0 }} />
-        <span className="text-xs font-semibold" style={{ color: 'var(--text-primary)', flexShrink: 0 }}>Script</span>
-        {cmd && (
-          <span className="text-xs truncate font-mono" style={{ color: 'var(--text-secondary)', flex: 1, minWidth: 0 }} title={cmd}>
-            {cmd}
-          </span>
-        )}
+        {/* The header opens the job in the task drawer: its full output, and Stop. */}
+        <button
+          type="button"
+          onClick={() => useTasksStore.getState().openJob(jobId)}
+          title="Show in the task drawer"
+          className="flex items-center gap-2 text-left"
+          style={{ flex: 1, minWidth: 0, background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'inherit' }}
+        >
+          <Terminal size={12} style={{ color: tone, flexShrink: 0 }} />
+          <span className="text-xs font-semibold" style={{ color: 'var(--text-primary)', flexShrink: 0 }}>Script</span>
+          {cmd && (
+            <span className="text-xs truncate font-mono" style={{ color: 'var(--text-secondary)', flex: 1, minWidth: 0 }} title={cmd}>
+              {cmd}
+            </span>
+          )}
+        </button>
         <div className="flex items-center gap-1.5 ml-auto shrink-0">
           <StatusIcon size={12} className={running ? 'animate-spin' : ''} style={{ color: tone }} />
           <span className="text-xs" style={{ color: tone, whiteSpace: 'nowrap' }}>{statusText}</span>
@@ -72,8 +86,8 @@ export function ScriptJobCard({ jobId, command }: { jobId: string; command?: str
 
       {/* Progress bar (only when the script emits a percentage) */}
       {running && percent != null && (
-        <div style={{ height: 3, background: 'var(--bg-primary)' }}>
-          <div style={{ width: `${percent}%`, height: '100%', background: 'var(--warning)', transition: 'width 0.3s' }} />
+        <div style={{ display: 'flex' }}>
+          <ProgressTrack pct={percent} color={tone} height={3} label="Script progress" />
         </div>
       )}
 

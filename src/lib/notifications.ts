@@ -14,7 +14,7 @@ import { isElectron } from './platform'
 import { useSettingsStore } from '../store/settings'
 
 export interface NotifyNavigate {
-  section: 'chat' | 'processes' | 'teams' | 'crons' | 'meetings'
+  section: 'chat' | 'processes' | 'teams' | 'crons' | 'gateway' | 'meetings'
   convId?: string
 }
 

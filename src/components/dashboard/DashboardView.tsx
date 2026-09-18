@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import {
   Send, ChevronDown, Loader2, CheckCircle2, XCircle,
-  ArrowRight, Activity, Timer, Cpu, Clock, Zap, UsersRound, Terminal, Square, Bell, X,
+  ArrowRight, Activity, Timer, Cpu, Clock, Zap, UsersRound, Bell, X,
 } from 'lucide-react'
 import { useConnectionStore, useIsRemoteGateway } from '../../store/connection'
 import { focusGatewayTab, type SettingsTab } from '../gateway/GatewayView'
@@ -14,7 +14,7 @@ import { useTeamsStore } from '../../store/teams'
 import { useLogoUrl } from '../../lib/logo'
 import { useCronsStore } from '../../store/crons'
 import { useMetricsStore } from '../../store/metrics'
-import { listJobs, stopJob, type ScriptJob } from '../../lib/scriptJobs'
+import { BackgroundSection } from './BackgroundSection'
 import { useIsNarrow } from '../../lib/useIsNarrow'
 import { reminderBySession, fmtCountdown, isReminderJob } from '../../lib/reminders'
 import { isManagedJob } from '../../lib/managedJobs'
@@ -778,55 +778,6 @@ function TeamsSection({ onNavigate, narrow }: { onNavigate: (s: NavSection) => v
   return narrow ? <MobileCard>{content}</MobileCard> : <div style={{ marginBottom: 16 }}>{content}</div>
 }
 
-// ── Scripts (background jobs the model launched via script_start) ───────────────
-
-function ScriptsSection({ narrow }: { narrow?: boolean }) {
-  const status = useConnectionStore(s => s.status)
-  const [jobs, setJobs] = useState<ScriptJob[]>([])
-
-  // Poll the host for tracked script jobs. listJobs() returns [] when the plugin is too
-  // old for jobs.list, and gateway.ts caches the unknown method so this stays cheap.
-  useEffect(() => {
-    if (status !== 'connected') { setJobs([]); return }
-    let alive = true
-    const poll = async () => { const list = await listJobs(); if (alive) setJobs(list) }
-    poll()
-    const id = setInterval(poll, 3000)
-    return () => { alive = false; clearInterval(id) }
-  }, [status])
-
-  const running = jobs.filter(j => j.running)
-  if (running.length === 0) return null
-
-  const content = (
-    <>
-      <SectionHead Icon={Terminal} label="Scripts" narrow />
-      <div style={{ display: 'flex', flexDirection: 'column', gap: narrow ? 2 : 4 }}>
-        {running.slice(0, 5).map(job => (
-          <div key={job.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: narrow ? '8px 0' : '5px 0' }}>
-            <Loader2 size={narrow ? 13 : 11} className="animate-spin" style={{ color: 'var(--warning)', flexShrink: 0 }} />
-            <span style={{ fontSize: narrow ? 13 : 11, color: 'var(--text-primary)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'monospace' }} title={job.command}>
-              {job.command}
-            </span>
-            <span style={{ fontSize: narrow ? 11 : 10, color: 'var(--text-secondary)', flexShrink: 0, opacity: 0.8, fontVariantNumeric: 'tabular-nums' }}>
-              {job.percent != null ? `${job.percent}% · ` : ''}{fmtElapsed(Math.round(job.elapsedMs / 1000))}
-            </span>
-            <button
-              onClick={() => { void stopJob(job.id) }}
-              title="Stop the script"
-              style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--danger)', padding: narrow ? 6 : 2, flexShrink: 0 }}
-            >
-              <Square size={narrow ? 13 : 10} />
-            </button>
-          </div>
-        ))}
-      </div>
-    </>
-  )
-
-  return narrow ? <MobileCard>{content}</MobileCard> : <div style={{ marginBottom: 16 }}>{content}</div>
-}
-
 // ── Reminders (one-shot self-pings the model scheduled) ─────────────────────────
 
 function RemindersSection({ narrow }: { narrow?: boolean }) {
@@ -887,7 +838,7 @@ function RightPanel({ onNavigate }: { onNavigate: (s: NavSection) => void }) {
     }}>
       <ActiveSection onNavigate={onNavigate} />
       <RecentMeetingsSection onNavigate={onNavigate} />
-      <ScriptsSection />
+      <BackgroundSection />
       <RemindersSection />
       <TeamsSection onNavigate={onNavigate} />
       <CronsSection onNavigate={onNavigate} />
@@ -967,7 +918,7 @@ function MobileDashboard({ onSendMessage, onOpenConversation, onNavigate }: {
         <TeamsSection onNavigate={onNavigate} narrow />
         <CronsSection onNavigate={onNavigate} narrow />
         <RemindersSection narrow />
-        <ScriptsSection narrow />
+        <BackgroundSection narrow />
         <ResourcesSection narrow />
       </div>
     </div>
