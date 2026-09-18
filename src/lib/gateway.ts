@@ -66,6 +66,7 @@ interface StoredDeviceToken { token: string; scopes: string[]; issuedAtMs?: numb
 interface HelloOk {
   features?: GatewayFeatures
   policy?: GatewayPolicy
+  snapshot?: { updateAvailable?: unknown; updateSchedule?: unknown }
   auth?: {
     scopes?: string[]
     role?: string
@@ -145,6 +146,12 @@ export class GatewayClient {
   connectionSeq = 0
   /** hello-ok's `server.bootId`: new on every gateway process start, so it tells a restart from a network blip. */
   bootId?: string
+  /**
+   * The update notice from hello-ok's snapshot: `updateAvailable` reaches every connection
+   * (reduced to three fields without operator.read), `updateSchedule` only read-capable
+   * ones. Raw; lib/gatewayUpdate parses it. Reset with every new socket.
+   */
+  helloUpdate: { available?: unknown; schedule?: unknown } = {}
   // Multiple views observe the connection log (the connect screen and the
   // Gateway → Connection log panel), so this is a subscriber set rather than a
   // single callback — otherwise the last mounter clobbers the others.
@@ -208,6 +215,7 @@ export class GatewayClient {
     this.features = undefined
     this.policy = undefined
     this.bootId = undefined
+    this.helloUpdate = {}
     this.unsupportedMethods.clear()
 
     const ws = wsApi()
@@ -356,6 +364,7 @@ export class GatewayClient {
       const bootId = (res as { server?: { bootId?: unknown } } | undefined)?.server?.bootId
       this.bootId = typeof bootId === 'string' ? bootId : undefined
       this.policy = res?.policy
+      this.helloUpdate = { available: res?.snapshot?.updateAvailable, schedule: res?.snapshot?.updateSchedule }
       const advertised = res?.features?.methods?.length ?? 0
       if (advertised) this._addLog('info', `Gateway advertises ${advertised} methods${res?.policy?.attachments?.maxBytes ? `, attachments up to ${Math.round(res.policy.attachments.maxBytes / 1048576)}MB` : ''}.`)
 
