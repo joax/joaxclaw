@@ -1,8 +1,11 @@
-import { useState } from 'react'
-import { Search, Download, Loader2, ShieldAlert, X, CheckCircle2 } from 'lucide-react'
+import { useState, type ReactNode } from 'react'
+import { Search, Download, Loader2, ShieldAlert, X, CheckCircle2, AlertTriangle } from 'lucide-react'
 import { usePluginCatalogStore } from '../../store/pluginCatalog'
 import { describeSurface, surfaceHasDanger, trustLabel } from '../../lib/pluginCatalog'
+import { findingLocation, hasCriticalFinding } from '../../lib/pluginInstall'
 import { Btn } from '../ui/Btn'
+import { Pill } from '../ui/Pill'
+import { InstallStatus } from './InstallStatus'
 
 // Find and install plugins from ClawHub.
 //
@@ -12,7 +15,7 @@ import { Btn } from '../ui/Btn'
 
 export function PluginBrowser({ onClose, installedIds }: { onClose: () => void; installedIds: Set<string> }) {
   const {
-    query, results, searching, searched, busy, error, consent, justInstalled, restartRequired,
+    query, results, searching, searched, busy, error, consent, policy, justInstalled,
     search, install, clearError,
   } = usePluginCatalogStore()
   const [draft, setDraft] = useState(query)
@@ -30,7 +33,7 @@ export function PluginBrowser({ onClose, installedIds }: { onClose: () => void; 
 
         <div className="flex items-center justify-between">
           <h3 className="font-semibold text-base" style={{ color: 'var(--text-primary)' }}>Browse plugins</h3>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)' }}>
+          <button onClick={onClose} aria-label="Close" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)' }}>
             <X size={16} />
           </button>
         </div>
@@ -50,11 +53,11 @@ export function PluginBrowser({ onClose, installedIds }: { onClose: () => void; 
           <Btn size="sm" loading={searching} disabled={!draft.trim()} onClick={() => void search(draft)}>Search</Btn>
         </div>
 
-        {restartRequired && (
-          <div className="text-xs px-2 py-1.5 rounded" style={{ background: 'color-mix(in srgb, var(--accent) 12%, transparent)', color: 'var(--text-primary)' }}>
-            Restart the gateway for these changes to take effect.
-          </div>
-        )}
+        <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+          Installing restarts the gateway. JoaxClaw reconnects on its own.
+        </p>
+
+        <InstallStatus origin="browser" />
 
         {error && (
           <div className="text-xs px-2 py-1.5 rounded flex items-start gap-2" style={{ background: 'color-mix(in srgb, var(--danger) 10%, transparent)', color: 'var(--danger)' }}>
@@ -91,12 +94,13 @@ export function PluginBrowser({ onClose, installedIds }: { onClose: () => void; 
                   </div>
                 </div>
                 {installed ? (
-                  <span className="flex items-center gap-1 text-xs shrink-0" style={{ color: 'var(--accent)' }}>
+                  <span className="flex items-center gap-1 text-xs shrink-0" style={{ color: 'var(--success)' }}>
                     <CheckCircle2 size={12} /> Installed
                   </span>
                 ) : (
-                  <Btn size="sm" variant="outline" icon={busy === p.name ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />}
-                    disabled={busy !== null} onClick={() => void install(p)}>
+                  <Btn size="sm" variant="outline" icon={busy === p.displayName ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />}
+                    disabled={busy !== null} title={busy !== null && busy !== p.displayName ? 'Another plugin is installing' : undefined}
+                    onClick={() => void install(p)}>
                     Install
                   </Btn>
                 )}
@@ -106,73 +110,129 @@ export function PluginBrowser({ onClose, installedIds }: { onClose: () => void; 
         </div>
       </div>
 
-      {consent && <ConsentDialog />}
+      {(consent || policy) && <ConsentDialog />}
     </div>
   )
 }
 
-// What the plugin is asking to be allowed to do.
+// What the plugin is asking to be allowed to do, or what the install policy flagged.
 //
 // The gateway refuses an install until this surface is acknowledged, and hands back a
 // token to acknowledge it with. Echoing that token automatically would defeat the point:
 // it is the record that a person saw this and agreed. `widened` is why it re-asks — a
 // plugin cannot quietly grow its reach across an update on consent given for less.
-/** The plugin consent prompt. Also shown by the channel form when it installs a channel plugin. */
+//
+// The same dialog asks the second question (review mode): the gateway's install policy
+// found something in the package worth a look, and says what and where. Continuing
+// retries with `acknowledgeInstallPolicyWarning`.
+/** The plugin consent / install-review prompt. Also shown by the channel form and Meetings. */
 export function ConsentDialog() {
+  const consent = usePluginCatalogStore(s => s.consent)
+  const policy = usePluginCatalogStore(s => s.policy)
+  if (consent) return <CapabilityConsent />
+  if (policy) return <PolicyReview />
+  return null
+}
+
+function DialogShell({ danger, title, onClose, children }: { danger: boolean; title: string; onClose: () => void; children: ReactNode }) {
+  return (
+    <div className="fixed inset-0 z-[110] flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.55)' }} onClick={onClose}>
+      <div role="dialog" aria-modal="true" aria-label={title} className="flex flex-col p-5 gap-3" style={{
+        background: 'var(--bg-surface)', border: `1px solid ${danger ? 'var(--danger)' : 'var(--border)'}`,
+        borderRadius: 'var(--radius)', width: 480, maxWidth: '92vw', maxHeight: '80vh', overflowY: 'auto',
+      }} onClick={e => e.stopPropagation()}>
+        {children}
+      </div>
+    </div>
+  )
+}
+
+function CapabilityConsent() {
   const { consent, busy, acceptConsent, dismissConsent } = usePluginCatalogStore()
   if (!consent) return null
-  const { challenge, pkg, declared } = consent
+  const { challenge, name, declared } = consent
 
   const widened = describeSurface(challenge.widened)
   const full = describeSurface(declared)
   const lines = widened.length > 0 ? widened : full
   const danger = surfaceHasDanger(challenge.widened) || surfaceHasDanger(declared)
+  const title = widened.length > 0 ? `${name} wants more access` : `Allow ${name} to do this?`
 
   return (
-    <div className="fixed inset-0 z-[110] flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.55)' }} onClick={dismissConsent}>
-      <div className="flex flex-col p-5 gap-3" style={{
-        background: 'var(--bg-surface)', border: `1px solid ${danger ? 'var(--danger)' : 'var(--border)'}`,
-        borderRadius: 'var(--radius)', width: 480, maxWidth: '92vw', maxHeight: '80vh', overflowY: 'auto',
-      }} onClick={e => e.stopPropagation()}>
-        <div className="flex items-center gap-2">
-          <ShieldAlert size={16} style={{ color: danger ? 'var(--danger)' : 'var(--accent)' }} />
-          <h3 className="font-semibold text-base" style={{ color: 'var(--text-primary)' }}>
-            {widened.length > 0 ? `${pkg.displayName} wants more access` : `Allow ${pkg.displayName} to do this?`}
-          </h3>
-        </div>
-
-        <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
-          {widened.length > 0
-            ? `You approved this plugin before${challenge.acceptedAt ? ` on ${new Date(challenge.acceptedAt).toLocaleDateString()}` : ''}. Since then it has declared the following in addition:`
-            : 'Installing it lets it register the following on your gateway:'}
-        </p>
-
-        {lines.length === 0 ? (
-          <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
-            This plugin declares no channels, tools or config flags.
-          </p>
-        ) : (
-          <div className="flex flex-col gap-2">
-            {lines.map(line => (
-              <div key={line.label}>
-                <div className="text-xs font-semibold" style={{ color: line.dangerous ? 'var(--danger)' : 'var(--text-secondary)' }}>
-                  {line.label}
-                </div>
-                <div className="text-xs font-mono" style={{ color: 'var(--text-primary)' }}>
-                  {line.items.join(', ')}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-
-        <div className="flex gap-2 justify-end mt-1">
-          <Btn size="sm" variant="outline" onClick={dismissConsent}>Cancel</Btn>
-          <Btn size="sm" variant={danger ? 'danger' : 'primary'} loading={busy !== null} onClick={() => void acceptConsent()}>
-            Install anyway
-          </Btn>
-        </div>
+    <DialogShell danger={danger} title={title} onClose={dismissConsent}>
+      <div className="flex items-center gap-2">
+        <ShieldAlert size={16} style={{ color: danger ? 'var(--danger)' : 'var(--accent)' }} />
+        <h3 className="font-semibold text-base" style={{ color: 'var(--text-primary)' }}>{title}</h3>
       </div>
-    </div>
+
+      <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+        {widened.length > 0
+          ? `You approved this plugin before${challenge.acceptedAt ? ` on ${new Date(challenge.acceptedAt).toLocaleDateString()}` : ''}. Since then it has declared the following in addition:`
+          : 'Installing it lets it register the following on your gateway:'}
+      </p>
+
+      {lines.length === 0 ? (
+        <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
+          This plugin declares no channels, tools or config flags.
+        </p>
+      ) : (
+        <div className="flex flex-col gap-2">
+          {lines.map(line => (
+            <div key={line.label}>
+              <div className="text-xs font-semibold" style={{ color: line.dangerous ? 'var(--danger)' : 'var(--text-secondary)' }}>
+                {line.label}
+              </div>
+              <div className="text-xs font-mono" style={{ color: 'var(--text-primary)' }}>
+                {line.items.join(', ')}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="flex gap-2 justify-end mt-1">
+        <Btn size="sm" variant="outline" onClick={dismissConsent}>Cancel</Btn>
+        <Btn size="sm" variant={danger ? 'danger' : 'primary'} loading={busy !== null} onClick={() => void acceptConsent()}>
+          Install {name}
+        </Btn>
+      </div>
+    </DialogShell>
+  )
+}
+
+// Severity → state tone. `info` is informational, not a state, so it stays neutral.
+const SEVERITY_TONE = { info: 'neutral', warn: 'needsYou', critical: 'failed' } as const
+
+function PolicyReview() {
+  const { policy, busy, acceptPolicy, dismissPolicy } = usePluginCatalogStore()
+  if (!policy) return null
+  const { warning, name } = policy
+  const critical = hasCriticalFinding(warning)
+  return (
+    <DialogShell danger={critical} title="Review required" onClose={dismissPolicy}>
+      <div className="flex items-center gap-2">
+        <AlertTriangle size={16} style={{ color: critical ? 'var(--danger)' : 'var(--warning)' }} />
+        <h3 className="font-semibold text-base" style={{ color: 'var(--text-primary)' }}>Review required</h3>
+      </div>
+      <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>The gateway&apos;s install policy flagged {name}:</p>
+      <p className="text-sm" style={{ color: 'var(--text-primary)' }}>&ldquo;{warning.reason}&rdquo;</p>
+      {warning.findings.length > 0 && (
+        <ul className="flex flex-col gap-1.5" style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+          {warning.findings.map((f, i) => (
+            <li key={`${f.ruleId}-${i}`} className="flex items-start gap-2 text-xs" style={{ color: 'var(--text-primary)' }}>
+              <Pill tone={SEVERITY_TONE[f.severity]}>{f.severity}</Pill>
+              {findingLocation(f) && <span className="font-mono shrink-0" style={{ color: 'var(--text-secondary)' }}>{findingLocation(f)}</span>}
+              <span style={{ minWidth: 0 }}>{f.message}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="flex gap-2 justify-end mt-1">
+        <Btn size="sm" variant="outline" onClick={dismissPolicy}>Cancel</Btn>
+        <Btn size="sm" variant={critical ? 'danger' : 'primary'} loading={busy !== null} onClick={() => void acceptPolicy()}>
+          Continue installation
+        </Btn>
+      </div>
+    </DialogShell>
   )
 }
