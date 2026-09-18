@@ -18,7 +18,7 @@ import { fmtElapsed } from '../../lib/scriptJobs'
 import { agentIdFromSessionKey } from '../../lib/sessionName'
 import {
   fromTask, fromScriptJob, listItems, taskAgents, stitchPages, deliveryLabel, resultText, taskChatKey,
-  fmtDuration, canManageTasks, type ListFilter, type TaskSummary, type BackgroundItem,
+  fmtDuration, canManageTasks, canRecover, type ListFilter, type TaskSummary, type BackgroundItem,
 } from '../../lib/tasks'
 import { useTasksStore } from '../../store/tasks'
 import { useTaskHistoryStore } from '../../store/taskHistory'
@@ -263,7 +263,14 @@ function TaskDetail({ taskId, onOpenChat }: { taskId: string; onOpenChat?: () =>
 
   const chatKey = taskChatKey(task)
   const offTitle = connected ? undefined : 'Reconnect to manage tasks'
-  const tabs: Tab[] = history ? ['output', 'prompt', 'result'] : ['prompt', 'result']
+  // Before 2026.9 there's no transcript to read, and before 2026.7 tasks carry no prompt or
+  // result either (2026.6.5's summary has neither), so a tab is only offered when it has
+  // something to show.
+  const result = resultText(task)
+  const tabs: Tab[] = history ? ['output', 'prompt', 'result']
+    : [...(task.prompt ? ['prompt' as const] : []), ...(result ? ['result' as const] : [])]
+  const shown: Tab | undefined = tabs.includes(tab) ? tab : tabs[0]
+  const recoverable = canRecover(task) && canWrite
   const tools = task.toolUseCount !== undefined
     ? `${task.toolUseCount}${task.lastToolName ? ` · last ${task.lastToolName}` : ''}` : task.lastToolName
 
@@ -276,29 +283,31 @@ function TaskDetail({ taskId, onOpenChat }: { taskId: string; onOpenChat?: () =>
         ['Started', item.startedAt !== undefined ? new Date(item.startedAt).toLocaleTimeString() : undefined],
         ['Tools', tools],
         ['Changes', task.diffStat ? `${task.diffStat.files} ${task.diffStat.files === 1 ? 'file' : 'files'} · +${task.diffStat.added} −${task.diffStat.removed}` : undefined],
-        ['Delivery', deliveryLabel(task.deliveryStatus)],
+        ['Delivery', task.deliveryStatus ? deliveryLabel(task.deliveryStatus) : undefined],
       ]} />
 
-      <div className="flex items-center gap-1 px-3 py-2 shrink-0" role="group" aria-label="Show">
-        {tabs.map(t => (
-          <FilterTab key={t} label={t === 'output' ? 'Output' : t === 'prompt' ? 'Prompt' : 'Result'} active={tab === t} onClick={() => setTab(t)} />
-        ))}
-      </div>
+      {tabs.length > 0 && (
+        <div className="flex items-center gap-1 px-3 py-2 shrink-0" role="group" aria-label="Show">
+          {tabs.map(t => (
+            <FilterTab key={t} label={t === 'output' ? 'Output' : t === 'prompt' ? 'Prompt' : 'Result'} active={shown === t} onClick={() => setTab(t)} />
+          ))}
+        </div>
+      )}
       {!history && (
-        <p className="text-xs px-4 shrink-0" style={{ margin: '0 0 6px', color: 'var(--text-secondary)' }}>
+        <p className="text-xs px-4 shrink-0" style={{ margin: tabs.length ? '0 0 6px' : '10px 0 6px', color: 'var(--text-secondary)' }}>
           Live output needs OpenClaw 2026.9 or later.
         </p>
       )}
 
       <div className="flex flex-col flex-1 min-h-0">
-        {tab === 'output' && history && <OutputTab task={task} />}
-        {tab === 'prompt' && <TextTab text={task.prompt} empty="No prompt recorded." />}
-        {tab === 'result' && <TextTab text={resultText(task)} empty={item.active ? 'No result yet.' : 'No result recorded.'} />}
+        {shown === 'output' && history && <OutputTab task={task} />}
+        {shown === 'prompt' && <TextTab text={task.prompt} empty="No prompt recorded." />}
+        {shown === 'result' && <TextTab text={result} empty={item.active ? 'No result yet.' : 'No result recorded.'} />}
       </div>
 
       {!gone && (
         <>
-          {item.needsYou && canWrite && (
+          {recoverable && (canRetry || canDismiss) && (
             <p className="flex items-center gap-1 text-xs px-4 pt-2 shrink-0" style={{ margin: 0, color: 'var(--warning)', borderTop: '1px solid var(--border)' }}>
               <AlertTriangle size={11} aria-hidden /> Retrying may post the result twice.
             </p>
@@ -308,14 +317,14 @@ function TaskDetail({ taskId, onOpenChat }: { taskId: string; onOpenChat?: () =>
             {chatKey && (
               <FooterBtn onClick={() => void openChat(chatKey)}><MessageSquare size={12} /> Open its chat</FooterBtn>
             )}
-            <CopyResult text={resultText(task)} />
+            <CopyResult text={result} />
             <span style={{ flex: 1 }} />
-            {item.needsYou && canWrite && canRetry && (
+            {recoverable && canRetry && (
               <FooterBtn onClick={() => void retry(task.id)} disabled={!connected || !!pending} title={offTitle} label={`Retry delivery for ${task.title}`}>
                 {pending === 'retry' && <Loader2 size={11} className="animate-spin" />} Retry delivery
               </FooterBtn>
             )}
-            {item.needsYou && canWrite && canDismiss && (
+            {recoverable && canDismiss && (
               <FooterBtn onClick={() => void dismiss(task.id)} disabled={!connected || !!pending} title={offTitle} label={`Dismiss delivery for ${task.title}`}>
                 {pending === 'dismiss' && <Loader2 size={11} className="animate-spin" />} Dismiss delivery
               </FooterBtn>
