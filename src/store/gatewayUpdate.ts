@@ -4,7 +4,8 @@ import { useConnectionStore } from './connection'
 import {
   availableKey, buildGatewayUpdatePrompt, inferOutcome, isTerminal, mergeRunChanged, outcomeFromRun, outcomeText,
   isRunId, parseRun, parseRunChanged, parseRunResponse, parseSchedule, parseUpdateAvailable, phaseLabel, refusalFromRun, rememberSeen, rpcErrorRefusal, runTarget,
-  type Outcome, type Refusal, type UpdateAvailable, type UpdateRun, type UpdateSchedule,
+  parseReportPreview, parseReportResult,
+  type Outcome, type Refusal, type ReportPreview, type ReportResult, type UpdateAvailable, type UpdateRun, type UpdateSchedule,
 } from '../lib/gatewayUpdate'
 import { sendViaAgent } from '../lib/agentPrompt'
 import { notify } from '../lib/notifications'
@@ -29,6 +30,9 @@ const SKIP_KEY = 'joaxclaw-gateway-update-skip'  // persisted: a latestVersion t
 const RUN_KEY = 'joaxclaw-gateway-update-run'
 // Runs whose result was already shown, so a reload doesn't show it again.
 const SEEN_KEY = 'joaxclaw-gateway-update-seen'
+// Runs this app started (History labels them "JoaxClaw").
+const OWN_KEY = 'joaxclaw-gateway-update-own'
+const REPORT_TIMEOUT_MS = 105_000  // the Control UI's: submitting files a GitHub issue
 
 const RUN_TIMEOUT_MS = 15 * 60_000  // an unsupervised git checkout blocks through staging and validation
 const POLL_MS = 2000
@@ -66,8 +70,21 @@ interface GatewayUpdateState {
   refusal: Refusal | null
   outcome: Outcome | null
   seen: string[]
-  /** A via-agent update, which has no run record, waiting for its restart. */
-  viaAgent: { target?: string; atMs: number } | null
+  /** The finished run behind `outcome`, for its Details and "Copy failure details". */
+  resultRun: UpdateRun | null
+  /** Runs this app started: the ledger records them as `api`, and History says "JoaxClaw". */
+  ownRunIds: string[]
+  /**
+   * An update with no run record to read (sent to an agent, or an automatic update seen
+   * without admin), waiting for its restart.
+   */
+  expectingBack: { target?: string; atMs: number } | null
+  holding: boolean
+  holdError: string | null
+  historyOpen: boolean
+  /** The run whose details History opens on, or null for the list. */
+  historyRunId: string | null
+  history: { runs: UpdateRun[]; loading: boolean; error: string | null; loadedAtMs: number | null }
   start: () => Promise<void>
   ingestHello: () => void
   ingestAvailable: (payload: unknown) => void
@@ -81,6 +98,15 @@ interface GatewayUpdateState {
   runUpdate: () => Promise<void>
   skip: () => void
   dismiss: (key: string) => void
+  /** Hold 1 hour: defer the automatic update, once per campaign. */
+  hold: () => Promise<void>
+  openHistory: (runId?: string | null) => void
+  closeHistory: () => void
+  showRun: (runId: string | null) => void
+  loadHistory: () => Promise<void>
+  /** update.report preview; null when the gateway won't report this run (so no button). */
+  previewReport: (runId: string) => Promise<ReportPreview | null>
+  submitReport: (preview: ReportPreview) => Promise<ReportResult>
 }
 
 function readJson<T>(key: string): T | null {
@@ -112,6 +138,8 @@ let pollTimer: ReturnType<typeof setTimeout> | null = null
 let pollStartedAtMs = 0
 // The phase we last re-armed the restart expectation for, so a poll doesn't re-arm it every 2 s.
 let armedPhase: string | null = null
+// Likewise the campaign we armed it for when it started applying.
+let armedCampaign: string | null = null
 
 function stopPolling() {
   if (pollTimer) { clearTimeout(pollTimer); pollTimer = null }
@@ -159,7 +187,7 @@ export const useGatewayUpdateStore = create<GatewayUpdateState>((set, get) => {
     const refusal = refusalFromRun(run)
     if (refusal) { set({ refusal, outcome: null, dismissedKey: null }); return }
     const outcome = outcomeFromRun(run, { target: f?.target, version: gatewayClient.serverVersion })
-    if (outcome) set({ outcome, refusal: null, dismissedKey: null })
+    if (outcome) set({ outcome, resultRun: run, refusal: null, dismissedKey: null })
     if (outcome && outcome.kind !== 'already-current') {
       const failed = outcome.kind === 'failed' || outcome.kind === 'rolled-back'
       void notify({ title: failed ? 'Gateway update failed' : 'Gateway updated', body: outcomeText(outcome), tag: 'gateway-update', navigate: { section: 'gateway' } })
@@ -172,13 +200,37 @@ export const useGatewayUpdateStore = create<GatewayUpdateState>((set, get) => {
     stopPolling()
     setFollowed(null)
     const outcome = inferOutcome(gatewayClient.serverVersion, target)
-    set({ run: null, ...(outcome ? { outcome, refusal: null, dismissedKey: null } : {}) })
+    set({ run: null, ...(outcome ? { outcome, resultRun: null, refusal: null, dismissedKey: null } : {}) })
+  }
+
+  const rememberOwn = (runId: string) => {
+    const ownRunIds = rememberSeen(get().ownRunIds, runId)
+    writeJson(OWN_KEY, ownRunIds)
+    set({ ownRunIds })
+  }
+
+  // A campaign that starts applying restarts the gateway for every connection, so arm the
+  // expectation here for all of them (once per campaign). Without admin there's no run to
+  // follow; the next reconnect is reported by the version it comes back on.
+  const setSchedule = (schedule: UpdateSchedule | null) => {
+    set({ schedule })
+    const c = schedule?.campaign
+    if (c?.state !== 'applying' || armedCampaign === c.id) return
+    armedCampaign = c.id
+    const target = schedule?.targetVersion ?? get().available?.latestVersion
+    useConnectionStore.getState().expectRestart({
+      reason: 'Gateway is updating',
+      detail: `Applying the automatic update${target ? ` to ${target}` : ''}. JoaxClaw reconnects on its own.`,
+      windowMs: 10 * 60_000,
+      untilMs: Date.now() + 15 * 60_000,
+    })
+    if (!hasAdmin()) set({ expectingBack: { ...(target ? { target } : {}), atMs: Date.now() } })
   }
 
   const applyRun = (run: UpdateRun) => {
     const f = get().followed
     if (!f || (f.runId && f.runId !== run.runId)) return
-    if (!f.runId) setFollowed({ ...f, runId: run.runId })
+    if (!f.runId) { setFollowed({ ...f, runId: run.runId }); if (f.own) rememberOwn(run.runId) }
     if (isTerminal(run.status)) { finish(run); return }
     set({ run })
     armFor(run)
@@ -265,7 +317,14 @@ export const useGatewayUpdateStore = create<GatewayUpdateState>((set, get) => {
     refusal: null,
     outcome: null,
     seen: readJson<string[]>(SEEN_KEY) ?? [],
-    viaAgent: null,
+    resultRun: null,
+    ownRunIds: readJson<string[]>(OWN_KEY) ?? [],
+    expectingBack: null,
+    holding: false,
+    holdError: null,
+    historyOpen: false,
+    historyRunId: null,
+    history: { runs: [], loading: false, error: null, loadedAtMs: null },
 
     // Called on every connect. The listeners are added once and survive reconnects: the
     // update events are scope-guarded broadcasts, with nothing to subscribe per connection.
@@ -277,21 +336,23 @@ export const useGatewayUpdateStore = create<GatewayUpdateState>((set, get) => {
           else if (frame.event === 'update.run.changed') get().ingestRunChanged(frame.payload)
         })
       }
-      get().ingestHello()
       armedPhase = null
       // A new connection starts the poll afresh (its 20 min budget too), if a run needs it.
       stopPolling()
       pollStartedAtMs = 0
 
-      // Back after an update sent to an agent: no record, so the version tells.
-      const va = get().viaAgent
+      // Back after an update we couldn't follow (sent to an agent, or an automatic one seen
+      // without admin): no record, so the version tells.
+      const va = get().expectingBack
       if (va) {
-        set({ viaAgent: null })
+        set({ expectingBack: null })
         if (Date.now() - va.atMs < VIA_AGENT_WINDOW_MS) {
           const outcome = inferOutcome(gatewayClient.serverVersion, va.target)
-          if (outcome) set({ outcome, dismissedKey: null })
+          if (outcome) set({ outcome, resultRun: null, dismissedKey: null })
         }
       }
+      get().ingestHello()
+      set({ holdError: null })
 
       // update.status first: it carries the admin detail, and on gateways without
       // update.runs.get it is also where the followed run's record comes from.
@@ -312,13 +373,15 @@ export const useGatewayUpdateStore = create<GatewayUpdateState>((set, get) => {
 
     ingestHello() {
       const h = gatewayClient.helloUpdate
-      set({ available: parseUpdateAvailable(h.available), schedule: parseSchedule(h.schedule) })
+      set({ available: parseUpdateAvailable(h.available) })
+      setSchedule(parseSchedule(h.schedule))
     },
 
     ingestAvailable(payload) {
       const p = (payload && typeof payload === 'object' ? payload : {}) as { updateAvailable?: unknown; schedule?: unknown }
+      set({ available: parseUpdateAvailable(p.updateAvailable) })
       // Clients without operator.read get no `schedule` key at all; keep what we have then.
-      set({ available: parseUpdateAvailable(p.updateAvailable), ...('schedule' in p ? { schedule: parseSchedule(p.schedule) } : {}) })
+      if ('schedule' in p) setSchedule(parseSchedule(p.schedule))
     },
 
     // update.run.changed (admin): {runId, phase, status, updatedAtMs}. Events for other
@@ -338,7 +401,7 @@ export const useGatewayUpdateStore = create<GatewayUpdateState>((set, get) => {
       const run = mergeRunChanged(get().run, ev)
       // A terminal event has no steps or versions: read the full record before reporting.
       if (isTerminal(ev.status) && hasAdmin() && gatewayClient.hasMethod('update.runs.get')) {
-        if (!f.runId) setFollowed({ ...f, runId: ev.runId })
+        if (!f.runId) { setFollowed({ ...f, runId: ev.runId }); if (f.own) rememberOwn(ev.runId) }
         set({ run })
         void refresh().then(r => { if (r !== 'ok' && get().followed) finish(run) })
         return
@@ -361,10 +424,10 @@ export const useGatewayUpdateStore = create<GatewayUpdateState>((set, get) => {
           // Only 2026.9 sends updateAvailable here (2026.6.5 answers just {sentinel}): without
           // the key, keep what the hello snapshot said.
           ...(res && 'updateAvailable' in res ? { available: parseUpdateAvailable(res.updateAvailable) } : {}),
-          ...(res && 'schedule' in res ? { schedule: parseSchedule(res.schedule) } : {}),
           checking: false,
           checkedAtMs: Date.now(),
         })
+        if (res && 'schedule' in res) setSchedule(parseSchedule(res.schedule))
         ingestStatusRuns(res)
       } catch (e) {
         set({ checking: false, error: String(e), checkedAtMs: Date.now() })
@@ -379,7 +442,7 @@ export const useGatewayUpdateStore = create<GatewayUpdateState>((set, get) => {
     async updateViaAgent(onOpenChat) {
       const built = await buildGatewayUpdatePrompt()
       if (!built.ok || !built.prompt) return
-      set({ viaAgent: { target: get().available?.latestVersion, atMs: Date.now() } })
+      set({ expectingBack: { target: get().available?.latestVersion, atMs: Date.now() } })
       sendViaAgent(built.prompt, onOpenChat)
     },
 
@@ -423,6 +486,7 @@ export const useGatewayUpdateStore = create<GatewayUpdateState>((set, get) => {
           // there's nothing to follow, so the banner stays on "running" until the restart.
           if (f && res.runId) {
             setFollowed({ ...f, runId: res.runId })
+            rememberOwn(res.runId)
             void refresh()
             ensurePolling()
           }
@@ -458,9 +522,68 @@ export const useGatewayUpdateStore = create<GatewayUpdateState>((set, get) => {
       // it is closed too: × means "quiet for now", not "show me the next thing".
       const avail = get().available
       if (key.startsWith('refused:') || key.startsWith('result:')) {
-        set({ refusal: null, outcome: null, dismissedKey: avail ? availableKey(avail.latestVersion) : key })
+        set({ refusal: null, outcome: null, resultRun: null, dismissedKey: avail ? availableKey(avail.latestVersion) : key })
       } else {
-        set({ dismissedKey: key })
+        set({ dismissedKey: key, holdError: null })
+      }
+    },
+
+    // update.hold: once per campaign. `ok:false` isn't an error (no campaign, already
+    // applying, already held) and the gateway doesn't say which. Either way the reply
+    // carries the current schedule, so the banner shows whatever state that gives.
+    async hold() {
+      if (get().holding) return
+      set({ holding: true, holdError: null })
+      try {
+        const res = await gatewayClient.request<{ ok?: boolean; schedule?: unknown }>('update.hold', {})
+        if (res && 'schedule' in res) setSchedule(parseSchedule(res.schedule))
+        else if (!res?.ok) setSchedule(null)
+        set({ holding: false })
+      } catch (e) {
+        const ge = (e as { gatewayError?: { message?: string } }).gatewayError
+        set({ holding: false, holdError: ge?.message ?? (e instanceof Error ? e.message : String(e)) })
+      }
+    },
+
+    openHistory(runId = null) {
+      set({ historyOpen: true, historyRunId: runId })
+      void get().loadHistory()
+    },
+    closeHistory() { set({ historyOpen: false, historyRunId: null }) },
+    showRun(runId) { set({ historyRunId: runId }) },
+
+    // The last 20 runs, newest first (update.runs.list, admin, 2026.9+).
+    async loadHistory() {
+      set(s => ({ history: { ...s.history, loading: true, error: null } }))
+      try {
+        const res = await gatewayClient.request<{ runs?: unknown[] }>('update.runs.list', { limit: 20 })
+        const runs = (Array.isArray(res?.runs) ? res.runs : []).map(parseRun).filter((r): r is UpdateRun => !!r)
+        set({ history: { runs, loading: false, error: null, loadedAtMs: Date.now() } })
+      } catch (e) {
+        const ge = (e as { gatewayError?: { message?: string } }).gatewayError
+        set(s => ({ history: { ...s.history, loading: false, error: ge?.message ?? (e instanceof Error ? e.message : String(e)) } }))
+      }
+    },
+
+    // The gateway only reports its latest failed run, and only for an owner or a
+    // shared-token (system) operator; anything else answers FORBIDDEN or INVALID_REQUEST.
+    // Either way the answer is just "no Report button", never an error.
+    async previewReport(runId) {
+      try {
+        const p = parseReportPreview(await gatewayClient.request('update.report', { action: 'preview', attemptId: runId }))
+        return p ? { ...p, attemptId: p.attemptId || runId } : null
+      } catch {
+        return null
+      }
+    },
+
+    async submitReport(preview) {
+      try {
+        const res = await gatewayClient.request('update.report', { action: 'submit', attemptId: preview.attemptId, previewDigest: preview.previewDigest }, REPORT_TIMEOUT_MS)
+        return parseReportResult(res) ?? { status: 'retryable', message: 'The gateway gave an answer JoaxClaw could not read.' }
+      } catch (e) {
+        const ge = (e as { gatewayError?: { message?: string } }).gatewayError
+        return { status: 'retryable', message: ge?.message ?? (e instanceof Error ? e.message : String(e)) }
       }
     },
   }
