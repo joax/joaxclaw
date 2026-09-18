@@ -11,6 +11,7 @@ import { Btn } from '../ui/Btn'
 import { useSessionSearchStore } from '../../store/sessionSearch'
 import { groupHits, trimSnippet } from '../../lib/sessionSearch'
 import { toneColor, toneTint } from '../../lib/stateTone'
+import { GoalCell, useGoalsSupported } from '../chat/GoalBadges'
 
 type SortKey = 'updatedAt' | 'status' | 'model'
 interface Props { onOpenChat: () => void }
@@ -93,6 +94,7 @@ export function SessionsView({ onOpenChat }: Props) {
   const [sort, setSort] = useState<SortKey>('updatedAt')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
   const [filterStatus, setFilterStatus] = useState<string>('all')
+  const goalsOn = useGoalsSupported()
   const [search, setSearch] = useState('')
 
   // Transcript search (sessions.search) — distinct from the instant name filter above.
@@ -291,6 +293,7 @@ export function SessionsView({ onOpenChat }: Props) {
               <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-surface)' }}>
                 <Th>Name</Th>
                 <Th onClick={() => handleSort('status')} sortKey="status" active={sort} dir={sortDir}>Status</Th>
+                {goalsOn && <Th>Goal</Th>}
                 <Th onClick={() => handleSort('model')} sortKey="model" active={sort} dir={sortDir}>Model</Th>
                 <Th>Cost</Th>
                 <Th onClick={() => handleSort('updatedAt')} sortKey="updatedAt" active={sort} dir={sortDir}>Last active</Th>
@@ -340,6 +343,11 @@ export function SessionsView({ onOpenChat }: Props) {
                         )}
                       </div>
                     </td>
+                    {goalsOn && (
+                      <td className="px-3 py-2.5">
+                        <GoalCell goal={s.goal} />
+                      </td>
+                    )}
                     <td className="px-3 py-2.5">
                       <ModelCell session={s} running={isRunning(s)} />
                     </td>
@@ -392,7 +400,7 @@ export function SessionsView({ onOpenChat }: Props) {
               })}
               {filtered.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="px-4 py-8 text-center text-sm" style={{ color: 'var(--text-secondary)' }}>
+                  <td colSpan={goalsOn ? 7 : 6} className="px-4 py-8 text-center text-sm" style={{ color: 'var(--text-secondary)' }}>
                     No sessions match your filters
                   </td>
                 </tr>

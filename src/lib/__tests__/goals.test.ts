@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   parseGoal, goalView, formatElapsed, availableActions, buildStartParams, buildUpdateParams,
   buildClearParams, classifyGoalError, validateObjective, eligibleSessionKey, shouldApplyGoal,
-  resumeActionFor, isOpenGoal, goalErrorPolicy, type SessionGoal,
+  resumeActionFor, isOpenGoal, goalErrorPolicy, goalRefreshNeeded, type SessionGoal,
 } from '../goals'
 
 // A chat's goal lives on the gateway session row; lib/goals reads it loosely and builds
@@ -285,5 +285,22 @@ describe('goalErrorPolicy', () => {
     expect(goalErrorPolicy('busy', fresh)).toEqual({ next: 'stop', refresh: false, retryable: false })
     expect(goalErrorPolicy('ineligible', fresh).retryable).toBe(false)
     expect(goalErrorPolicy('rebound', fresh)).toEqual({ next: 'stop', refresh: true, retryable: false })
+  })
+})
+
+describe('goalRefreshNeeded', () => {
+  it('re-reads an active goal that has not moved since the run ended', () => {
+    expect(goalRefreshNeeded(goal({ updatedAt: 5 }), goal({ updatedAt: 5 }))).toBe(true)
+  })
+
+  it('does nothing once a newer state arrived, or the goal was cleared', () => {
+    expect(goalRefreshNeeded(goal({ updatedAt: 5 }), goal({ updatedAt: 9, status: 'complete' }))).toBe(false)
+    expect(goalRefreshNeeded(goal(), null)).toBe(false)
+    expect(goalRefreshNeeded(goal(), goal({ id: 'g2' }))).toBe(false)
+  })
+
+  it('ignores goals that were not active at the end of the run', () => {
+    expect(goalRefreshNeeded(goal({ status: 'paused' }), goal({ status: 'paused' }))).toBe(false)
+    expect(goalRefreshNeeded(null, null)).toBe(false)
   })
 })

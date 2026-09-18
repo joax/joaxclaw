@@ -3,7 +3,7 @@ import { nanoid } from '../lib/nanoid'
 import { gatewayClient } from '../lib/gateway'
 import type { Session } from '../lib/types'
 import {
-  actionRunsTurn, buildClearParams, buildUpdateParams, classifyGoalError, goalErrorMessage, goalErrorPolicy, parseGoal,
+  actionRunsTurn, buildClearParams, buildUpdateParams, classifyGoalError, goalErrorMessage, goalErrorPolicy, goalRefreshNeeded, parseGoal,
   shouldApplyGoal, validateObjective, type GoalAction, type GoalErrorClass, type SessionGoal,
 } from '../lib/goals'
 import { useSessionsStore } from './sessions'
@@ -199,4 +199,24 @@ export const useGoalsStore = create<GoalsState>((set, get) => {
       })
     },
   }
+})
+
+// The run-end fallback (FR-10): a goal that was active when a run finished and hasn't
+// changed 2 s later gets its row re-read once, in case the agent marked it done or
+// blocked and the gateway hasn't broadcast that yet.
+const GOAL_SETTLE_MS = 2_000
+const settling = new Set<string>()
+gatewayClient.on(frame => {
+  if (frame.event !== 'chat') return
+  const p = frame.payload as { sessionKey?: unknown; state?: unknown } | undefined
+  const key = typeof p?.sessionKey === 'string' ? p.sessionKey : ''
+  if (p?.state !== 'final' || !key || settling.has(key)) return
+  const goalOf = () => parseGoal(useSessionsStore.getState().sessions.find(s => s.key === key)?.goal)
+  const atFinal = goalOf()
+  if (atFinal?.status !== 'active') return
+  settling.add(key)
+  setTimeout(() => {
+    settling.delete(key)
+    if (goalRefreshNeeded(atFinal, goalOf())) void refreshGoalRows()
+  }, GOAL_SETTLE_MS)
 })

@@ -316,3 +316,14 @@ export function eligibleSessionKey(key: string): boolean {
   if (key === 'global') return false
   return !/:(subagent|cron|acp):|:heartbeat/.test(key)
 }
+
+/**
+ * After a run ends, whether the row's goal still needs re-reading. When the agent calls
+ * update_goal (done or blocked), it isn't confirmed that the gateway broadcasts the change
+ * straight away, so a goal that was active at the final frame and hasn't moved since is
+ * re-read once. Anything newer arriving (another revision, a cleared goal) settles it.
+ */
+export function goalRefreshNeeded(atFinal: SessionGoal | null, current: SessionGoal | null): boolean {
+  if (!atFinal || atFinal.status !== 'active' || !current) return false
+  return current.id === atFinal.id && current.updatedAt <= atFinal.updatedAt
+}

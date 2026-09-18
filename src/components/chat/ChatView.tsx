@@ -22,6 +22,7 @@ import { MessageInput } from './MessageInput'
 import { useLogoUrl } from '../../lib/logo'
 import { ModelSelect, ThinkingSelect, DisplayMenu } from './ChatHeaderControls'
 import { GoalControl } from './GoalControl'
+import { GoalMarker } from './GoalBadges'
 import { formatRelativeDate } from '../../lib/dateUtils'
 import type { Session } from '../../lib/types'
 import { isSessionRunning } from '../../lib/sessionRunning'
@@ -832,6 +833,7 @@ function ChatRow({ item }: { item: ChatItem }) {
         )}
         {item.cron && !editing && <span title="Scheduled run (automation)" style={{ display: 'inline-flex', flexShrink: 0 }}><Clock size={11} style={{ color: 'var(--text-secondary)' }} /></span>}
         {item.heartbeat && !editing && <span title="Heartbeat session" style={{ display: 'inline-flex', flexShrink: 0 }}><Heart size={11} style={{ color: 'var(--accent)', opacity: 0.8 }} /></span>}
+        {!editing && <GoalMarker sessionKey={item.sessionKey} />}
         {!editing && !hovered && item.time && <span className="text-xs shrink-0" style={{ color: 'var(--text-secondary)' }}>{item.time}</span>}
       </div>
       {item.subtitle && !editing && (
