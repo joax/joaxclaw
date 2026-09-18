@@ -164,12 +164,14 @@ describe('installAndRestart', () => {
     expect(usePluginCatalogStore.getState().run?.phase).toBe('restarting')
   })
 
-  it('waits longer for a deferred restart', async () => {
+  it('waits longer for a deferred restart (the gateway defers up to 300 s)', async () => {
     handlers['plugins.install'] = () => ({ ok: true, plugin: { id: 'zoom-meetings' }, restartRequired: true })
     handlers['gateway.restart.request'] = () => ({ ok: true, status: 'deferred' })
     await usePluginCatalogStore.getState().installAndRestart(officialTarget('zoom-meetings', 'Zoom'))
-    vi.advanceTimersByTime(90_000)
+    vi.advanceTimersByTime(300_000)
     expect(usePluginCatalogStore.getState().run).toMatchObject({ phase: 'restarting', deferred: true })
+    vi.advanceTimersByTime(60_000)
+    expect(usePluginCatalogStore.getState().run).toMatchObject({ phase: 'failed', failure: 'timeout' })
   })
 
   it('reports a plugin missing after the restart', async () => {
@@ -179,6 +181,31 @@ describe('installAndRestart', () => {
     reconnect()
     await flush()
     expect(usePluginCatalogStore.getState().run).toMatchObject({ phase: 'failed', failure: 'missing' })
+  })
+
+  it('keeps the install warnings for the outcome', async () => {
+    handlers['plugins.install'] = () => ({ ok: true, plugin: { id: 'zoom-meetings', state: 'needs-setup' }, restartRequired: true, warnings: ['Installed without enabling it.'] })
+    handlers['plugins.list'] = () => listWith('needs-setup')
+    await usePluginCatalogStore.getState().installAndRestart(officialTarget('zoom-meetings', 'Zoom'))
+    reconnect()
+    await flush()
+    expect(usePluginCatalogStore.getState().run).toMatchObject({ phase: 'done', outcome: 'needs-setup', warnings: ['Installed without enabling it.'] })
+  })
+
+  it('waits for a coalesced restart\'s delay before timing out', async () => {
+    handlers['plugins.install'] = () => ({ ok: true, plugin: { id: 'zoom-meetings' }, restartRequired: true })
+    handlers['gateway.restart.request'] = () => ({ ok: true, status: 'coalesced', restart: { delayMs: 21_000 } })
+    await usePluginCatalogStore.getState().installAndRestart(officialTarget('zoom-meetings', 'Zoom'))
+    vi.advanceTimersByTime(90_000)
+    expect(usePluginCatalogStore.getState().run?.phase).toBe('restarting')
+    vi.advanceTimersByTime(21_000)
+    expect(usePluginCatalogStore.getState().run).toMatchObject({ phase: 'failed', failure: 'timeout' })
+  })
+
+  it('offers a retry when ClawHub\'s security check is unreachable', async () => {
+    handlers['plugins.install'] = () => { throw gwError({ clawhubTrustCode: 'clawhub_security_unavailable', version: '1.4.2' }, 'trust check failed') }
+    await usePluginCatalogStore.getState().installAndRestart(clawhubTarget('@acme/tracker', 'Tracker'))
+    expect(usePluginCatalogStore.getState().run).toMatchObject({ phase: 'failed', failure: 'trustUnavailable' })
   })
 
   it('runs one install at a time', async () => {

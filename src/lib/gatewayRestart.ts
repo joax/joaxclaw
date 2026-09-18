@@ -10,8 +10,14 @@ import { gatewayClient } from './gateway'
 
 export type RestartStatus = 'scheduled' | 'deferred' | 'coalesced'
 
-export async function requestGatewayRestart(reason: string): Promise<{ status: RestartStatus | undefined }> {
-  const res = await gatewayClient.request<{ status?: unknown }>('gateway.restart.request', { reason })
+// A request inside the 30 s cooldown after the last one is `coalesced`, and the restart
+// may be scheduled `delayMs` later.
+export async function requestGatewayRestart(reason: string): Promise<{ status: RestartStatus | undefined; delayMs: number }> {
+  const res = await gatewayClient.request<{ status?: unknown; restart?: { delayMs?: unknown } }>('gateway.restart.request', { reason })
   const s = res?.status
-  return { status: s === 'scheduled' || s === 'deferred' || s === 'coalesced' ? s : undefined }
+  const delay = res?.restart?.delayMs
+  return {
+    status: s === 'scheduled' || s === 'deferred' || s === 'coalesced' ? s : undefined,
+    delayMs: typeof delay === 'number' && delay > 0 ? delay : 0,
+  }
 }
