@@ -6,6 +6,9 @@ import {
   errMissingAdminForRun, errRateLimitedRun, status2026_6_5, statusIdle, RUN_IDS, type GatewayErrorFrame,
   statusNothing, statusActiveRun, evRunChangedValidating, evRunChangedOtherRunRunning, evRunChangedOtherRunTerminal, evRunChangedSequence,
   runValidating, runSucceeded, runRefusedRestartDisabled, runsGetRunning, runsGetRolledBack, runsGetNull, errRestartDraining, errInvalidRunId,
+  holdOk, holdRefusedAlreadyHeld, holdRefusedNoCampaign, holdRefusedNoSchedule, errHoldUnavailable, evCampaignApplying, evCampaignCleared,
+  scheduleHeld, runsListFull, runsListEmpty, errUnknownRunsList, reportPreviewReady, reportSubmitCreated, errReportForbidden, errReportStale,
+  helloSnapshotReadCampaign as helloCampaign,
 } from './fixtures/sprint/gatewayUpdates'
 
 // The gateway-update store against the real payload shapes (QA fixtures, OpenClaw
@@ -60,6 +63,8 @@ const updateCalls = () => h.client.calls.filter(c => c.method.startsWith('update
 const fresh = {
   available: null, schedule: null, checking: false, checkedAtMs: null, error: null, skipped: null, dismissedKey: null,
   confirmOpen: false, pending: false, followed: null, refusal: null, outcome: null, run: null, seen: [] as string[],
+  resultRun: null, ownRunIds: [] as string[], expectingBack: null, holding: false, holdError: null, historyOpen: false, historyRunId: null,
+  history: { runs: [], loading: false, error: null, loadedAtMs: null },
 }
 
 function connect(scopes: string[], hello: { updateAvailable?: unknown; updateSchedule?: unknown } = {}) {
@@ -67,11 +72,11 @@ function connect(scopes: string[], hello: { updateAvailable?: unknown; updateSch
   useConnectionStore.setState({ status: 'connected', grantedScopes: scopes, restartExpectation: null, connection: { url: 'ws://studio:18789', token: 't' } })
 }
 
-const view = () => {
+const view = (now = Date.now()) => {
   const s = useGatewayUpdateStore.getState()
   return bannerState({
     available: s.available, running: s.pending || s.followed ? { target: s.followed?.target } : null,
-    refusal: s.refusal, outcome: s.outcome, skipped: s.skipped, dismissedKey: s.dismissedKey,
+    refusal: s.refusal, outcome: s.outcome, skipped: s.skipped, dismissedKey: s.dismissedKey, schedule: s.schedule, now,
   })
 }
 
@@ -452,5 +457,103 @@ describe('the result after the reconnect', () => {
     await useGatewayUpdateStore.getState().start()
     expect(updateCalls()).toEqual([])
     expect(view()).toMatchObject({ kind: 'result', outcome: { kind: 'ok', version: '2026.9.5' } })
+  })
+})
+
+// ── Campaigns, Hold and History (02-c) ──────────────────────────────────────────────
+
+describe('automatic updates', () => {
+  beforeEach(() => {
+    connect(ADMIN, helloCampaign)
+    h.client.methods = new Set([...RUN_METHODS, 'update.hold'])
+    useGatewayUpdateStore.getState().ingestHello()
+  })
+
+  it('Hold 1 hour sends update.hold with exactly {} and shows the hold', async () => {
+    h.client.handlers['update.hold'] = () => holdOk
+    await useGatewayUpdateStore.getState().hold()
+    expect(h.client.calls.find(c => c.method === 'update.hold')?.params).toEqual({})
+    expect(view(scheduleHeld.campaign!.updatedAtMs)).toMatchObject({ kind: 'campaign', countdown: { kind: 'held' }, holdUsed: true })
+  })
+
+  it('a refused hold takes the schedule it came with, with no error line', async () => {
+    h.client.handlers['update.hold'] = () => holdRefusedAlreadyHeld
+    await useGatewayUpdateStore.getState().hold()
+    expect(useGatewayUpdateStore.getState().schedule?.campaign?.holdUntilMs).toBe(scheduleHeld.campaign!.holdUntilMs)
+    h.client.handlers['update.hold'] = () => holdRefusedNoCampaign
+    await useGatewayUpdateStore.getState().hold()
+    expect(useGatewayUpdateStore.getState().schedule?.campaign).toBeUndefined()
+    h.client.handlers['update.hold'] = () => holdRefusedNoSchedule
+    await useGatewayUpdateStore.getState().hold()
+    expect(useGatewayUpdateStore.getState()).toMatchObject({ schedule: null, holdError: null })
+  })
+
+  it('a failed hold says so under the banner', async () => {
+    h.client.handlers['update.hold'] = fail(errHoldUnavailable)
+    await useGatewayUpdateStore.getState().hold()
+    expect(useGatewayUpdateStore.getState().holdError).toBe('update hold status is temporarily unavailable')
+  })
+
+  it('applying is running for everyone, arms the restart expectation, and a cleared campaign leaves running', () => {
+    connect(['operator.read'])
+    h.client.emit('update.available', evCampaignApplying)
+    expect(view()).toMatchObject({ kind: 'running', own: false })
+    expect(useConnectionStore.getState().restartExpectation?.reason).toBe('Gateway is updating')
+    expect(useGatewayUpdateStore.getState().expectingBack).toMatchObject({ target: '2026.9.5' })
+    h.client.emit('update.available', evCampaignCleared)
+    expect(view().kind).toBe('available')
+  })
+})
+
+describe('update history', () => {
+  beforeEach(() => {
+    connect(ADMIN)
+    h.client.methods = new Set([...RUN_METHODS, 'update.runs.list', 'update.report'])
+  })
+
+  it('loads the last 20 runs, newest first', async () => {
+    h.client.handlers['update.runs.list'] = () => runsListFull
+    useGatewayUpdateStore.getState().openHistory()
+    await vi.waitFor(() => expect(useGatewayUpdateStore.getState().history.loading).toBe(false))
+    expect(h.client.calls.find(c => c.method === 'update.runs.list')?.params).toEqual({ limit: 20 })
+    expect(useGatewayUpdateStore.getState().history.runs).toHaveLength(20)
+  })
+
+  it('an empty history, and a failed load', async () => {
+    h.client.handlers['update.runs.list'] = () => runsListEmpty
+    await useGatewayUpdateStore.getState().loadHistory()
+    expect(useGatewayUpdateStore.getState().history).toMatchObject({ runs: [], error: null })
+    h.client.handlers['update.runs.list'] = fail(errUnknownRunsList)
+    await useGatewayUpdateStore.getState().loadHistory()
+    expect(useGatewayUpdateStore.getState().history.error).toBe('unknown method: update.runs.list')
+  })
+
+  it('a report preview is ready only when the gateway says so; FORBIDDEN or stale is just no button', async () => {
+    h.client.handlers['update.report'] = () => reportPreviewReady
+    expect(await useGatewayUpdateStore.getState().previewReport(RUN_IDS.failed)).toMatchObject({ attemptId: RUN_IDS.failed, title: expect.any(String) })
+    expect(h.client.calls.find(c => c.method === 'update.report')?.params).toEqual({ action: 'preview', attemptId: RUN_IDS.failed })
+    h.client.handlers['update.report'] = fail(errReportForbidden)
+    expect(await useGatewayUpdateStore.getState().previewReport(RUN_IDS.failed)).toBeNull()
+    h.client.handlers['update.report'] = fail(errReportStale)
+    expect(await useGatewayUpdateStore.getState().previewReport(RUN_IDS.failed)).toBeNull()
+  })
+
+  it('submits with the preview digest and a 105 s timeout', async () => {
+    h.client.handlers['update.report'] = () => reportSubmitCreated
+    const preview = { attemptId: RUN_IDS.failed, title: 't', body: 'b', previewDigest: 'd'.repeat(64) }
+    expect(await useGatewayUpdateStore.getState().submitReport(preview)).toMatchObject({ status: 'created', url: expect.stringMatching(/^https:/) })
+    const call = h.client.calls.find(c => c.method === 'update.report')!
+    expect(call).toMatchObject({ params: { action: 'submit', attemptId: RUN_IDS.failed, previewDigest: 'd'.repeat(64) }, timeoutMs: 105_000 })
+    h.client.handlers['update.report'] = fail(errReportStale)
+    expect(await useGatewayUpdateStore.getState().submitReport(preview)).toEqual({ status: 'retryable', message: 'This failed update attempt is stale or unavailable.' })
+  })
+
+  it('remembers the runs it started, for the "JoaxClaw" label', async () => {
+    connect(ADMIN, { updateAvailable: availableFull })
+    h.client.handlers['update.run'] = () => runResponseHandoffStarted
+    h.client.handlers['update.runs.get'] = () => runsGetRunning
+    await useGatewayUpdateStore.getState().runUpdate()
+    expect(useGatewayUpdateStore.getState().ownRunIds).toContain(RUN_IDS.ours)
+    expect(JSON.parse(h.mem.get('joaxclaw-gateway-update-own')!)).toContain(RUN_IDS.ours)
   })
 })
