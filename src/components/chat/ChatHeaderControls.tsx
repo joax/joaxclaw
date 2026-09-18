@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef } from 'react'
-import { ChevronDown, Brain, Check, SlidersHorizontal, Wrench, Layers } from 'lucide-react'
+import { useState, useEffect } from 'react'
+import { ChevronDown, Brain, SlidersHorizontal, Wrench, Layers } from 'lucide-react'
 import { ModelIcon } from '../ui/ModelIcon'
 import { useModelsStore } from '../../store/models'
 import { loadedModelIds } from '../../lib/ollama'
@@ -8,35 +8,7 @@ import { THINKING_LEVELS, type ThinkingLevel } from '../../lib/types'
 import { useSessionsStore } from '../../store/sessions'
 import { useGatewayModelsStore } from '../../store/gatewayModels'
 import { effectiveModelRef, findGatewayModel, supportedThinkingLevels } from '../../lib/gatewayModels'
-
-// ── Shared popover button shell ───────────────────────────────────────────────
-
-function useClickOutside(onClose: () => void) {
-  const ref = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    function onDown(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) onClose()
-    }
-    document.addEventListener('mousedown', onDown)
-    return () => document.removeEventListener('mousedown', onDown)
-  }, [onClose])
-  return ref
-}
-
-const triggerStyle: React.CSSProperties = {
-  display: 'flex', alignItems: 'center', gap: 4,
-  padding: '3px 7px', fontSize: 11, maxWidth: 200,
-  borderRadius: 'var(--radius)', border: '1px solid var(--border)',
-  background: 'var(--bg-elevated)', color: 'var(--text-secondary)',
-  cursor: 'pointer', whiteSpace: 'nowrap',
-}
-
-const menuStyle: React.CSSProperties = {
-  position: 'absolute', right: 0, top: '100%', marginTop: 4, zIndex: 100,
-  minWidth: 220, maxHeight: 320, overflowY: 'auto', paddingBlock: 4,
-  background: 'var(--bg-elevated)', border: '1px solid var(--border)',
-  borderRadius: 'var(--radius)', boxShadow: '0 6px 16px rgba(0,0,0,0.35)',
-}
+import { useClickOutside, triggerStyle, menuStyle, MenuRow, CheckRow } from '../ui/Popover'
 
 function shortModel(full: string): string {
   const slash = full.indexOf('/')
@@ -192,27 +164,6 @@ export function ThinkingSelect({ value, onChange, sessionKey, modelOverride, age
   )
 }
 
-// ── Shared menu row ───────────────────────────────────────────────────────────
-
-function MenuRow({ selected, onClick, children }: { selected: boolean; onClick: () => void; children: React.ReactNode }) {
-  return (
-    <button
-      onClick={onClick}
-      style={{
-        display: 'flex', alignItems: 'center', gap: 8, width: '100%',
-        padding: '6px 12px', background: 'none', border: 'none',
-        cursor: 'pointer', textAlign: 'left',
-        color: selected ? 'var(--accent)' : 'var(--text-primary)',
-      }}
-      onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-primary)')}
-      onMouseLeave={e => (e.currentTarget.style.background = 'none')}
-    >
-      {children}
-      {selected && <Check size={12} style={{ flexShrink: 0 }} />}
-    </button>
-  )
-}
-
 // ── Display menu ──────────────────────────────────────────────────────────────
 // Collapses the presentation controls (Basic/Advanced + the multi-select Reasoning /
 // Actions / Context toggles) into one popover so the chat header stays uncluttered —
@@ -276,28 +227,3 @@ export function DisplayMenu({
   )
 }
 
-function CheckRow({ label, icon, checked, disabled, onToggle }: {
-  label: string; icon: React.ReactNode; checked: boolean; disabled?: boolean; onToggle: () => void
-}) {
-  return (
-    <button
-      onClick={disabled ? undefined : onToggle}
-      disabled={disabled}
-      className="flex items-center gap-2 w-full px-2.5 py-1.5 text-left text-xs"
-      style={{
-        background: 'none', border: 'none',
-        cursor: disabled ? 'default' : 'pointer',
-        color: disabled ? 'var(--text-secondary)' : 'var(--text-primary)',
-        opacity: disabled ? 0.45 : 1,
-      }}
-      onMouseEnter={e => { if (!disabled) (e.currentTarget as HTMLButtonElement).style.background = 'var(--bg-primary)' }}
-      onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = 'none' }}
-    >
-      <span style={{ width: 14, display: 'flex', justifyContent: 'center', flexShrink: 0 }}>
-        {checked && <Check size={12} style={{ color: 'var(--accent)' }} />}
-      </span>
-      {icon}
-      <span style={{ flex: 1 }}>{label}</span>
-    </button>
-  )
-}

@@ -7,6 +7,7 @@ import {
 import type { NavSection } from '../../App'
 import { HelpModal } from '../help/HelpModal'
 import { useHelpStore } from '../../store/help'
+import { BottomSheet } from '../ui/BottomSheet'
 
 // Mobile primary navigation: a fixed bottom tab bar (thumb zone) with the four
 // day-to-day surfaces + a "More" tab that opens a bottom sheet with everything
@@ -76,48 +77,28 @@ export function BottomNav({ section, onNavigate, disabledSections = [] }: Props)
 
       {/* More sheet — same bottom-sheet treatment as the system monitor. */}
       {moreOpen && (
-        <>
-          <div
-            className="animate-fade-in"
-            style={{ position: 'fixed', inset: 0, zIndex: 60, background: 'rgba(0,0,0,0.55)' }}
-            onClick={() => setMoreOpen(false)}
-          />
-          <div
-            className="animate-slide-up"
-            style={{
-              position: 'fixed', left: 0, right: 0, bottom: 0, zIndex: 61,
-              background: 'var(--bg-surface)', borderTop: '1px solid var(--border)',
-              borderTopLeftRadius: 16, borderTopRightRadius: 16,
-              maxHeight: '80vh', overflowY: 'auto',
-              boxShadow: '0 -8px 32px rgba(0,0,0,0.45)',
-              paddingBottom: 'calc(env(safe-area-inset-bottom) + 8px)',
-            }}
-          >
-            <div style={{ display: 'flex', justifyContent: 'center', paddingTop: 8, paddingBottom: 4 }}>
-              <div style={{ width: 40, height: 4, borderRadius: 2, background: 'var(--border)' }} />
-            </div>
-            <div style={{ padding: '4px 12px 8px' }}>
-              {MORE_GROUPS.map(g => (
-                <div key={g.heading} style={{ marginBottom: 10 }}>
-                  <p style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-secondary)', padding: '6px 8px' }}>
-                    {g.heading}
-                  </p>
-                  {g.items.map(it => (
-                    <MoreRow
-                      key={it.id} Icon={it.Icon} label={it.label}
-                      active={section === it.id} disabled={disabledSections.includes(it.id)}
-                      onClick={() => go(it.id)}
-                    />
-                  ))}
-                </div>
-              ))}
-              {/* Help opens the modal rather than routing to a section. */}
-              <div style={{ borderTop: '1px solid var(--border)', paddingTop: 6 }}>
-                <MoreRow Icon={HelpCircle} label="Help" active={helpOpen} onClick={() => { setMoreOpen(false); openHelp() }} />
+        <BottomSheet onClose={() => setMoreOpen(false)}>
+          <div style={{ padding: '4px 12px 8px' }}>
+            {MORE_GROUPS.map(g => (
+              <div key={g.heading} style={{ marginBottom: 10 }}>
+                <p style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-secondary)', padding: '6px 8px' }}>
+                  {g.heading}
+                </p>
+                {g.items.map(it => (
+                  <MoreRow
+                    key={it.id} Icon={it.Icon} label={it.label}
+                    active={section === it.id} disabled={disabledSections.includes(it.id)}
+                    onClick={() => go(it.id)}
+                  />
+                ))}
               </div>
+            ))}
+            {/* Help opens the modal rather than routing to a section. */}
+            <div style={{ borderTop: '1px solid var(--border)', paddingTop: 6 }}>
+              <MoreRow Icon={HelpCircle} label="Help" active={helpOpen} onClick={() => { setMoreOpen(false); openHelp() }} />
             </div>
           </div>
-        </>
+        </BottomSheet>
       )}
 
       {helpOpen && <HelpModal initialTab={helpTab} onClose={closeHelp} />}

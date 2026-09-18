@@ -10,6 +10,7 @@ import { reminderBySession, fmtCountdown, type PendingReminder } from '../../lib
 import { Btn } from '../ui/Btn'
 import { useSessionSearchStore } from '../../store/sessionSearch'
 import { groupHits, trimSnippet } from '../../lib/sessionSearch'
+import { toneColor, toneTint } from '../../lib/stateTone'
 
 type SortKey = 'updatedAt' | 'status' | 'model'
 interface Props { onOpenChat: () => void }
@@ -50,7 +51,7 @@ function isRunning(s: Session): boolean {
 
 function statusColor(status: string): { bg: string; color: string; dot: string } {
   switch (status) {
-    case 'running': return { bg: 'color-mix(in srgb, var(--success) 15%, transparent)', color: 'var(--success)', dot: 'var(--success)' }
+    case 'running': return { bg: toneTint('working', 15), color: toneColor('working'), dot: toneColor('working') }
     case 'done': return { bg: 'var(--bg-elevated)', color: 'var(--text-secondary)', dot: 'var(--border)' }
     case 'failed': case 'killed': case 'timeout':
       return { bg: 'color-mix(in srgb, var(--danger) 15%, transparent)', color: 'var(--danger)', dot: 'var(--danger)' }

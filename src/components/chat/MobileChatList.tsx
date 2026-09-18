@@ -1,13 +1,14 @@
 import { useState } from 'react'
 import { Search, Plus, MoreVertical, Pencil, Trash2, Check, X } from 'lucide-react'
 import type { ChatItem } from './ChatView'
+import { toneColor } from '../../lib/stateTone'
 
 // Purpose-built mobile chat list (replaces the stretched desktop sidebar on phones).
 // Full-width tappable rows with an avatar, name, last-message preview and time; a
 // persistent ⋯ menu for Rename/Delete (touch has no hover); and a thumb-reachable
 // ＋ FAB for a new chat. Grouped by the same Active / Scheduled / date sections.
 
-export interface MobileGroup { label: string; tone?: 'success' | 'muted'; items: ChatItem[] }
+export interface MobileGroup { label: string; tone?: 'working' | 'muted'; items: ChatItem[] }
 
 interface Props {
   search: string
@@ -48,7 +49,7 @@ export function MobileChatList({ search, setSearch, groups, onNewChat, emptyHint
 
         {groups.filter(g => g.items.length).map(group => (
           <div key={group.label}>
-            <div className="px-4 pt-3 pb-1 text-xs font-semibold uppercase" style={{ letterSpacing: '0.05em', color: group.tone === 'success' ? 'var(--success)' : 'var(--text-secondary)' }}>
+            <div className="px-4 pt-3 pb-1 text-xs font-semibold uppercase" style={{ letterSpacing: '0.05em', color: group.tone === 'working' ? toneColor('working') : 'var(--text-secondary)' }}>
               {group.label}
               <span style={{ opacity: 0.6 }}> · {group.items.length}</span>
             </div>
@@ -122,7 +123,7 @@ function Row({ item, menuOpen, renaming, onMenu, onStartRename, onEndRename, onC
         <span style={{ position: 'relative', flexShrink: 0, width: 40, height: 40, borderRadius: 20, background: 'var(--bg-elevated)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20 }}>
           {item.emoji}
           {item.running && (
-            <span className="animate-pulse-dot" style={{ position: 'absolute', right: -1, bottom: -1, width: 12, height: 12, borderRadius: 6, background: 'var(--success)', border: '2px solid var(--bg-primary)' }} />
+            <span className="animate-pulse-dot" style={{ position: 'absolute', right: -1, bottom: -1, width: 12, height: 12, borderRadius: 6, background: toneColor('working'), border: '2px solid var(--bg-primary)' }} />
           )}
         </span>
         {/* Text */}

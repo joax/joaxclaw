@@ -24,6 +24,8 @@ import { formatRelativeDate } from '../../lib/dateUtils'
 import type { Session } from '../../lib/types'
 import { isSessionRunning } from '../../lib/sessionRunning'
 import { agentIdFromSessionKey as sessionAgentId, isAutoKeyTitle, isCronSessionKey } from '../../lib/sessionName'
+import { FilterTab } from '../ui/FilterTab'
+import { toneColor, toneTint } from '../../lib/stateTone'
 
 // A single row in the unified chat list — an opened conversation or a running-but-
 // unopened gateway session, normalized to one shape.
@@ -321,7 +323,7 @@ export function ChatView({ solo }: { solo?: string } = {}) {
           onNewChat={startNewChat}
           emptyHint={search ? 'No chats found' : 'Tap the ＋ button to start a chat'}
           groups={[
-            { label: 'Active', tone: 'success', items: activeItems },
+            { label: 'Active', tone: 'working', items: activeItems },
             { label: 'Scheduled', tone: 'muted', items: cronItems },
             ...dateGroups.map(g => ({ label: g.label, tone: 'muted' as const, items: g.items })),
           ]}
@@ -420,9 +422,9 @@ export function ChatView({ solo }: { solo?: string } = {}) {
           {activeItems.length > 0 && (
             <div className="mb-2">
               <div className="flex items-center gap-1.5 px-2 py-1.5">
-                <Radio size={11} className="animate-pulse-dot" style={{ color: 'var(--success)' }} />
-                <p className="text-xs font-semibold" style={{ color: 'var(--success)' }}>Active</p>
-                <span className="text-xs px-1.5 rounded-full ml-auto" style={{ background: 'color-mix(in srgb, var(--success) 20%, transparent)', color: 'var(--success)', fontSize: 10 }}>
+                <Radio size={11} className="animate-pulse-dot" style={{ color: toneColor('working') }} />
+                <p className="text-xs font-semibold" style={{ color: toneColor('working') }}>Active</p>
+                <span className="text-xs px-1.5 rounded-full ml-auto" style={{ background: toneTint('working', 20), color: toneColor('working'), fontSize: 10 }}>
                   {activeItems.length}
                 </span>
               </div>
@@ -772,22 +774,6 @@ function ContextBar({ sessionKey }: { sessionKey: string }) {
   )
 }
 
-function FilterTab({ label, count, active, onClick }: { label: string; count?: number; active: boolean; onClick: () => void }) {
-  return (
-    <button
-      onClick={onClick}
-      className="text-xs font-medium"
-      style={{
-        padding: '3px 10px', borderRadius: 999, cursor: 'pointer', border: 'none',
-        background: active ? 'color-mix(in srgb, var(--accent) 15%, var(--bg-elevated))' : 'transparent',
-        color: active ? 'var(--accent)' : 'var(--text-secondary)',
-      }}
-    >
-      {label}{count ? ` · ${count}` : ''}
-    </button>
-  )
-}
-
 function RowBtn({ children, title, danger, onClick }: { children: ReactNode; title: string; danger?: boolean; onClick: (e: ReactMouseEvent) => void }) {
   return (
     <button title={title} onClick={onClick} className="flex items-center justify-center rounded p-1"
@@ -820,7 +806,7 @@ function ChatRow({ item }: { item: ChatItem }) {
     >
       <div className="flex items-center gap-1.5">
         {item.running
-          ? <span title="Running" className="animate-pulse-dot" style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--success)', flexShrink: 0 }} />
+          ? <span title="Running" className="animate-pulse-dot" style={{ width: 7, height: 7, borderRadius: '50%', background: toneColor('working'), flexShrink: 0 }} />
           : <span style={{ fontSize: 12, lineHeight: 1, flexShrink: 0 }}>{item.emoji}</span>}
         {editing ? (
           <input

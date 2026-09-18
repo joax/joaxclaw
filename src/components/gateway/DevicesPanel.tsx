@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import {
-  RefreshCw, ChevronDown, ChevronRight, Copy, Check, Trash2, RotateCw, Ban,
+  RefreshCw, ChevronDown, ChevronRight, Check, Trash2, RotateCw, Ban,
   Globe, Smartphone, Monitor, Terminal, Server, ShieldCheck, KeyRound, X, AlertTriangle, Pencil,
 } from 'lucide-react'
 import { Btn } from '../ui/Btn'
@@ -12,6 +12,7 @@ import {
 } from '../../store/devices'
 import { relativeFromMs } from '../../lib/dateUtils'
 import { describeLastSeen, describeUsage, diskUsed, loadFraction, memoryUsed, statsAreStale, type GatewayNode } from '../../lib/nodeStats'
+import { CopyButton } from '../ui/CommandHint'
 
 // ── small shared bits ───────────────────────────────────────────────────────────
 
@@ -33,19 +34,6 @@ function platformIcon(platform?: string, mode?: string) {
 
 function shortId(id: string): string {
   return id.length > 16 ? `${id.slice(0, 8)}…${id.slice(-5)}` : id
-}
-
-function CopyBtn({ value }: { value: string }) {
-  const [done, setDone] = useState(false)
-  return (
-    <button
-      onClick={() => { void navigator.clipboard.writeText(value); setDone(true); setTimeout(() => setDone(false), 1200) }}
-      title="Copy"
-      style={{ background: 'none', border: 'none', cursor: 'pointer', color: done ? C.success : C.dim, padding: 2, display: 'inline-flex' }}
-    >
-      {done ? <Check size={12} /> : <Copy size={12} />}
-    </button>
-  )
 }
 
 function Chip({ children, tone = 'neutral' }: { children: React.ReactNode; tone?: 'neutral' | 'accent' | 'warning' | 'danger' }) {
@@ -324,10 +312,10 @@ function DeviceRow({ device, canManage, paired }: { device: PairedDevice; canMan
           <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr auto', gap: '2px 8px', alignItems: 'center', fontSize: 11, marginBottom: 8 }}>
             <span style={{ color: C.dim }}>deviceId</span>
             <span style={{ fontFamily: 'monospace', color: C.text, overflow: 'hidden', textOverflow: 'ellipsis' }}>{device.deviceId}</span>
-            <CopyBtn value={device.deviceId} />
+            <CopyButton value={device.deviceId} />
             <span style={{ color: C.dim }}>publicKey</span>
             <span style={{ fontFamily: 'monospace', color: C.text, overflow: 'hidden', textOverflow: 'ellipsis' }}>{device.publicKey}</span>
-            <CopyBtn value={device.publicKey} />
+            <CopyButton value={device.publicKey} />
           </div>
 
           <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: C.dim, marginBottom: 2 }}>Tokens</div>
@@ -364,7 +352,7 @@ function RotateModal() {
             <>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', borderRadius: 'var(--radius)', background: C.elevated, border: `1px solid ${C.border}` }}>
                 <code style={{ fontSize: 12, fontFamily: 'monospace', color: C.text, wordBreak: 'break-all', flex: 1 }}>{rotated.token}</code>
-                <CopyBtn value={rotated.token} />
+                <CopyButton value={rotated.token} />
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: C.warning }}>
                 <AlertTriangle size={12} style={{ flexShrink: 0 }} />

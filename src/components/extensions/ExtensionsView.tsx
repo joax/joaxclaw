@@ -13,6 +13,7 @@ import { Input } from '../ui/Input'
 import { PluginConfigModal } from './PluginConfigModal'
 import { usePluginUpdateStore } from '../../store/pluginUpdate'
 import { PLUGIN_ID, isUpdateAvailable, startPluginUpdate } from '../../lib/pluginUpdate'
+import { EmptyState } from '../ui/EmptyState'
 
 type Tab = 'skills' | 'plugins'
 
@@ -215,7 +216,7 @@ export function ExtensionsView({ onOpenChat }: { onOpenChat?: () => void }) {
           <Group label="Active" count={sActive.length}>{sActive.map(renderSkillRow)}</Group>
           <Group label="Off" count={sOff.length}>{sOff.map(renderSkillRow)}</Group>
           {!loading && shownCount === 0 && !error && (
-            <EmptyState label={search ? 'No skills match your search' : 'No skills configured'} />
+            <EmptyState icon={Puzzle} label={search ? 'No skills match your search' : 'No skills configured'} />
           )}
         </div>
       )}
@@ -230,7 +231,7 @@ export function ExtensionsView({ onOpenChat }: { onOpenChat?: () => void }) {
           <Group label="Active" count={pActive.length}>{pActive.map(renderPluginRow)}</Group>
           <Group label="Off" count={pOff.length}>{pOff.map(renderPluginRow)}</Group>
           {!loading && shownCount === 0 && !error && (
-            <EmptyState label={search ? 'No plugins match your search' : 'No plugins configured'} />
+            <EmptyState icon={Puzzle} label={search ? 'No plugins match your search' : 'No plugins configured'} />
           )}
         </div>
       )}
@@ -382,15 +383,6 @@ function ExtMeta({ items }: { items: ({ k: string; v: string } | null)[] }) {
           <span className="font-mono truncate" title={r.v}>{r.v}</span>
         </div>
       ))}
-    </div>
-  )
-}
-
-function EmptyState({ label }: { label: string }) {
-  return (
-    <div className="flex flex-col items-center justify-center flex-1 gap-3 py-10" style={{ color: 'var(--text-secondary)' }}>
-      <Puzzle size={36} style={{ opacity: 0.3 }} />
-      <p className="text-sm">{label}</p>
     </div>
   )
 }

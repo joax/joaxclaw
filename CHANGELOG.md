@@ -7,6 +7,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Running chats are marked in the accent colour.** A chat that's working (the Active group in the chat list, its pulsing dot, and "running" in Sessions) used to be green, the colour the app otherwise uses for "done". Working is now the accent colour everywhere, and green means finished. Pulsing dots also stop pulsing if your system asks for reduced motion.
+- **Dialogs are easier to use from the keyboard.** The Channels dialogs keep focus inside while open and return it when closed, and screen readers announce them by their title. The phone bottom sheets (More, System monitor) close with Escape.
+
 ### Fixed
 
 - **Agents that start a long script now check back for the result.** Long scripts run as background jobs (`script_start`). Agents were told, by JoaxClaw's `script-runner` skill and by the tool's own reply, to end their turn because the session would be woken with the result when the script finished. That wake-up never happens for a plugin installed from npm, as joaxclaw-fs is. So an agent that followed the instructions simply stopped, and the result went unseen until someone asked again. (0.26.0 corrected the tool's description but missed these two.) Both now say the opposite: check on the job with `script_status` until it's done, and give the user the job id if it will run for a long time. The skill updates itself on the next connect. The plugin is 0.14.1; update it on the gateway with `openclaw plugins update joaxclaw-fs`.
