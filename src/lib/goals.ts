@@ -235,53 +235,149 @@ export function shouldApplyGoal(current: SessionGoal | null, incoming: SessionGo
 export type GoalErrorClass =
   | 'busy'        // the session has a run or queued work
   | 'ineligible'  // not an idle local session with recoverable history
-  | 'rebound'     // the goal or session changed elsewhere; re-read the row
+  | 'rebound'     // the goal or session changed elsewhere (or the change no longer applies); re-read the row
   | 'conflict'    // the operation id was used for another request; new id, retry once
   | 'admitting'   // the gateway is still admitting this exact request; resend it
   | 'network'     // never answered (disconnect, timeout); resend the same request
+  | 'expired'     // the operation is over 24 h old; the gateway won't apply it
+  | 'clock'       // issuedAtMs is ahead of the gateway's clock
+  | 'capacity'    // too many recent operations on this session
+  | 'scope'       // the token can't make this change
   | 'generic'
 
-function gatewayErrorOf(err: unknown): { message?: string; reason?: string } {
-  // A rejection from gatewayClient.request carries the gateway's error as `gatewayError`;
-  // a bare Error (timeout, disconnect) never reached the gateway.
-  const g = (err && typeof err === 'object' && 'gatewayError' in err ? (err as { gatewayError: unknown }).gatewayError
-    : err instanceof Error ? undefined : err) as { message?: unknown; details?: unknown } | null | undefined
-  if (!g || typeof g !== 'object') return {}
-  const details = g.details && typeof g.details === 'object' ? g.details as Record<string, unknown> : {}
-  return {
-    message: typeof g.message === 'string' ? g.message : undefined,
-    reason: typeof details.reason === 'string' ? details.reason : undefined,
-  }
+interface GatewayErrorParts {
+  /** The request reached the gateway and it answered with an error frame. */
+  fromGateway: boolean
+  code?: string
+  message: string
+  reason?: string
+  detailsCode?: string
+  retryable?: boolean
 }
 
-/** The human part of a goal error, without the gateway's JSON wrapping. */
-export function goalErrorMessage(err: unknown): string {
-  const { message } = gatewayErrorOf(err)
-  if (message) return message
-  if (err instanceof Error) return err.message
-  return typeof err === 'string' ? err : 'Unknown error'
+// A rejection from gatewayClient.request carries the gateway's error frame as
+// `gatewayError` (its message is the frame JSON-stringified); a bare Error (timeout,
+// disconnect) never reached the gateway. A plain error-frame object is accepted too.
+function errorParts(err: unknown): GatewayErrorParts {
+  const frame = err && typeof err === 'object' && 'gatewayError' in err ? (err as { gatewayError: unknown }).gatewayError
+    : err instanceof Error ? undefined : err
+  if (frame && typeof frame === 'object') {
+    const f = frame as { code?: unknown; message?: unknown; details?: unknown; retryable?: unknown }
+    const details = f.details && typeof f.details === 'object' ? f.details as Record<string, unknown> : {}
+    return {
+      fromGateway: true,
+      code: typeof f.code === 'string' ? f.code : undefined,
+      message: typeof f.message === 'string' ? f.message : '',
+      reason: typeof details.reason === 'string' ? details.reason : undefined,
+      detailsCode: typeof details.code === 'string' ? details.code : undefined,
+      retryable: f.retryable === true,
+    }
+  }
+  return { fromGateway: false, message: err instanceof Error ? err.message : typeof err === 'string' ? err : '' }
 }
+
+/** The human part of a goal error, without the gateway's JSON wrapping or the error class prefix. */
+export function goalErrorMessage(err: unknown): string {
+  const { message } = errorParts(err)
+  return message.replace(/^SessionGoalOperationError:\s*/, '') || 'Unknown error'
+}
+
+// The receipt codes (session-accessor). sessions.goal.* sends them bare in
+// details.reason with details.code GOAL_OPERATION_REJECTED; the chat.send path (start,
+// and resume, which the gateway runs as a chat turn) prefixes them "goal-" with no code.
+const RECEIPT_CODES = new Set(['operation-conflict', 'goal-rebound', 'session-rebound', 'invalid', 'expired', 'capacity'])
 
 /**
- * Sorts a goal error into what the UI does about it. Structured `details.reason` first;
- * the gateway rewords messages between releases. The same rejection arrives as
- * `goal-<code>` through chat.send (start, resume) and as a bare `<code>` through
- * sessions.goal.*, so both spellings are matched.
+ * Sorts a goal error into what the UI does about it. The gateway reports the same
+ * failure in four forms: a structured reason (with or without the "goal-" prefix), an
+ * UNAVAILABLE "SessionGoalOperationError: …" message with no details (a transition
+ * refused while the turn was being admitted), a bare message ("Session changed or was
+ * removed…"), or a missing-scope frame. Structured fields are read first, then the text.
  */
 export function classifyGoalError(err: unknown): GoalErrorClass {
-  const { message = '', reason = '' } = gatewayErrorOf(err)
-  const code = reason.replace(/^goal-(?=session-busy$|operation-conflict$|goal-rebound$|session-rebound$|capacity$|invalid$|expired$)/, '')
-  if (code === 'session-busy' || reason === 'goal-session-busy') return 'busy'
-  if (code === 'operation-conflict') return 'conflict'
-  if (code === 'goal-rebound' || code === 'session-rebound') return 'rebound'
-  if (code === 'capacity') return 'generic'
-  const text = message || (err instanceof Error ? err.message : typeof err === 'string' ? err : '')
+  const e = errorParts(err)
+  if (!e.fromGateway) {
+    return /^(Not connected|Disconnected|Connection closed)$|timed out/i.test(e.message) ? 'network' : 'generic'
+  }
+  if (e.detailsCode === 'MISSING_SCOPE') return 'scope'
+  const reason = e.reason?.startsWith('goal-') && RECEIPT_CODES.has(e.reason.slice(5)) ? e.reason.slice(5) : e.reason
+  const text = e.message.replace(/^SessionGoalOperationError:\s*/, '')
+  switch (reason) {
+    case 'goal-session-busy': return 'busy'
+    case 'operation-conflict': return 'conflict'
+    case 'goal-rebound':
+    case 'session-rebound': return 'rebound'
+    case 'expired': return 'expired'
+    case 'capacity': return 'capacity'
+    // `invalid` is either a clock problem or a transition the goal's current state refuses
+    // (e.g. "goal is already complete"): the latter means it changed underneath us.
+    case 'invalid': return /time is invalid/i.test(text) ? 'clock' : 'rebound'
+  }
   if (/still has active or queued work/i.test(text)) return 'busy'
   if (/requires an idle local session/i.test(text)) return 'ineligible'
   if (/being admitted; retry the same request/i.test(text)) return 'admitting'
-  if (/session changed|goal changed or was cleared|goal already exists|goal is already/i.test(text)) return 'rebound'
-  if (!message && /^(Not connected|Disconnected|Connection closed)$|timed out/i.test(text)) return 'network'
+  if (/operation id (was|is) already used/i.test(text)) return 'conflict'
+  if (/operation expired/i.test(text)) return 'expired'
+  if (/operation time is invalid/i.test(text)) return 'clock'
+  if (/too many recent goal operations/i.test(text)) return 'capacity'
+  if (/session changed|goal changed or was cleared|goal already exists|goal is already|goal not found/i.test(text)) return 'rebound'
   return 'generic'
+}
+
+export interface GoalErrorPolicy {
+  /** resend: the same request again; reissue: a new operation id and time; stop: show the error. */
+  next: 'resend' | 'reissue' | 'stop'
+  /** Re-read the session row: the goal changed somewhere else. */
+  refresh: boolean
+  /** Offer Retry, which resends the failed request byte for byte. */
+  retryable: boolean
+}
+
+/**
+ * What to do after a failed goal operation. Two failures retry once on their own: a
+ * request still being admitted is resent as is, and an id already used for a different
+ * request gets a new id and time (it's a new intent). A request that may never have
+ * reached the gateway, or that the gateway said to retry, is kept for Retry: resent
+ * unchanged, the gateway replays its receipt instead of applying it twice. A definite
+ * refusal drops it.
+ */
+export function goalErrorPolicy(err: unknown, retried: { admitting: boolean; conflict: boolean }): GoalErrorPolicy & { cls: GoalErrorClass } {
+  const cls = classifyGoalError(err)
+  if (cls === 'admitting' && !retried.admitting) return { cls, next: 'resend', refresh: false, retryable: true }
+  if (cls === 'conflict' && !retried.conflict) return { cls, next: 'reissue', refresh: false, retryable: false }
+  const { retryable: said, code } = errorParts(err)
+  return {
+    cls,
+    next: 'stop',
+    refresh: cls === 'rebound',
+    retryable: cls === 'network' || cls === 'admitting' || (cls === 'generic' && (said === true || code === 'UNAVAILABLE')),
+  }
+}
+
+/** The inline error line for a failed goal action. */
+export function goalErrorCopy(e: { cls: GoalErrorClass; message: string }): string {
+  switch (e.cls) {
+    case 'busy': return 'The chat is still working. Try again when the reply finishes.'
+    case 'ineligible': return 'Goals need an idle chat whose history the gateway can recover. Start a new chat to set a goal.'
+    case 'rebound': return "The goal changed somewhere else. Here's the latest."
+    case 'network': return "Couldn't reach the gateway, so the goal may not have changed. Retry sends the same request."
+    case 'expired': return "That change is more than a day old, so the gateway won't apply it. Check the goal and try again."
+    case 'clock': return "The gateway rejected this device's clock. Check the time and date, then try again."
+    case 'capacity': return 'This chat has had too many goal changes recently. Wait a while, then try again.'
+    case 'scope': return "This connection can't change goals."
+    default: return `Couldn't update the goal: ${e.message}`
+  }
+}
+
+/**
+ * Whether the goal's note is one this app sent. The gateway keeps one `lastStatusNote`:
+ * the agent's reason when it blocks or finishes, but also the operator's note on a
+ * Resume or Continue, which overwrites it and is never cleared. Only a note that isn't
+ * ours is the agent's.
+ */
+export function noteIsOurs(goal: SessionGoal, sentNotes: readonly string[] | undefined): boolean {
+  const note = goal.lastStatusNote?.trim()
+  return !!note && !!sentNotes?.includes(note)
 }
 
 /** Keys the gateway refuses goals on: sub-agents, cron runs, heartbeats, ACP and the global session. */

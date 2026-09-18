@@ -9,7 +9,7 @@ import { useIsNarrow } from '../../lib/useIsNarrow'
 import { useGatewaySupport } from '../../lib/useGatewaySupport'
 import {
   GOAL_START_CAPABILITY, OBJECTIVE_COUNTER_FROM, OBJECTIVE_MAX, availableActions, eligibleSessionKey,
-  formatElapsed, goalView, parseGoal, resumeActionFor, type GoalIcon, type SessionGoal,
+  formatElapsed, goalErrorCopy, goalView, noteIsOurs, parseGoal, resumeActionFor, type GoalIcon, type SessionGoal,
 } from '../../lib/goals'
 import { useChatStore } from '../../store/chat'
 import { useSessionsStore } from '../../store/sessions'
@@ -31,13 +31,19 @@ const HINT = {
   readOnly: "This connection can't change goals.",
 }
 
-function errorText(e: GoalError): string {
-  switch (e.cls) {
-    case 'busy': return 'The chat is still working. Try again when the reply finishes.'
-    case 'ineligible': return 'Goals need an idle chat whose history the gateway can recover. Start a new chat to set a goal.'
-    case 'rebound': return "The goal changed somewhere else. Here's the latest."
-    default: return `Couldn't update the goal: ${e.message}`
-  }
+const errorText = (e: GoalError) => goalErrorCopy(e)
+
+// The last answer while connected. useGatewaySupport can't tell while offline, and the
+// chip should keep showing its last known state then (and on a chat opened meanwhile)
+// rather than vanish until the reconnect.
+let lastKnownSupport = false
+
+/** Goals are on this gateway: the capability and both goal methods. */
+export function useGoalsSupported(): boolean {
+  const online = useConnectionStore(s => s.status === 'connected')
+  const { supported } = useGatewaySupport({ capabilities: [GOAL_START_CAPABILITY], methods: ['sessions.goal.update', 'sessions.goal.clear'] })
+  if (online) lastKnownSupport = supported
+  return online ? supported : lastKnownSupport
 }
 
 /** Re-render once a minute, for the Pursuing timer. */
@@ -61,20 +67,16 @@ export function GoalControl({ convId }: { convId: string }) {
   const goal = parseGoal(rawGoal)
   const online = useConnectionStore(s => s.status === 'connected')
   const scopes = useConnectionStore(s => s.grantedScopes)
+  // The gateway grants operator.admin every method, so admin counts as write.
   const canWrite = scopes.includes('operator.write') || scopes.includes('operator.admin')
-  const { supported } = useGatewaySupport({ capabilities: [GOAL_START_CAPABILITY], methods: ['sessions.goal.update', 'sessions.goal.clear'] })
+  const supported = useGoalsSupported()
   const inflight = useGoalsStore(s => s.inflight[convId])
   const error = useGoalsStore(s => s.errors[convId])
-
-  // Offline, useGatewaySupport can't tell; the chip keeps its last known state rather
-  // than vanishing and reappearing across a reconnect.
-  const [knownSupported, setKnownSupported] = useState(supported)
-  useEffect(() => { if (online) setKnownSupported(supported) }, [online, supported])
 
   const [open, setOpen] = useState(false)
   const now = useMinuteTick(goal?.status === 'active')
 
-  if (!(online ? supported : knownSupported) || !eligibleSessionKey(sessionKey)) return null
+  if (!supported || !eligibleSessionKey(sessionKey)) return null
 
   const view = goalView(goal, now)
   const Icon = ICONS[view.icon]
@@ -87,11 +89,11 @@ export function GoalControl({ convId }: { convId: string }) {
       onOpenChange={o => { setOpen(o); if (!o) useGoalsStore.getState().clearError(convId) }}
       align="right"
       title="Goal"
+      role="dialog"
       sheetOnNarrow
       trigger={props => (
         <button
           {...props}
-          aria-haspopup="dialog"
           aria-label={goal ? `Goal: ${view.statusLabel}` : 'Set goal'}
           title={goal ? `Goal: ${goal.objective}` : 'Set a goal for this chat'}
           style={{
@@ -225,6 +227,8 @@ function GoalDetails({ convId, sessionKey, goal, now, idle, online, canWrite, in
   const resumeAction = resumeActionFor(goal)
   const pending = !!inflight
   const act = useGoalsStore.getState().act
+  // The gateway keeps the operator's Resume note in the same field as the agent's reasons.
+  const ownNote = noteIsOurs(goal, useGoalsStore(s => s.sentNotes[sessionKey]))
 
   const pause = () => act(convId, sessionKey, goal, 'pause')
   const resume = async () => {
@@ -252,7 +256,7 @@ function GoalDetails({ convId, sessionKey, goal, now, idle, online, canWrite, in
           ? `${goal.tokensUsed.toLocaleString()} of ${goal.tokenBudget.toLocaleString()}`
           : goal.tokensUsed.toLocaleString()}
       </Stat>
-      {goal.lastStatusNote && <Stat label="Agent's note">{goal.lastStatusNote}</Stat>}
+      {goal.lastStatusNote && <Stat label={ownNote ? 'Your note' : "Agent's note"}>{goal.lastStatusNote}</Stat>}
 
       {mode === 'resume' && (
         <div style={{ marginTop: 8 }} onKeyDown={submitOnModEnter(resume)}>
