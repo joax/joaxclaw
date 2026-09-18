@@ -2,6 +2,7 @@ import { useEffect, useRef, type ReactNode, type Ref } from 'react'
 import { Check } from 'lucide-react'
 import { useIsNarrow } from '../../lib/useIsNarrow'
 import { BottomSheet } from './BottomSheet'
+import { trapTab } from './focusTrap'
 
 // Popover menus. The pieces here were private to the chat header (ChatHeaderControls)
 // and moved here unchanged, so every feature's menus look and behave the same. `Popover`
@@ -118,16 +119,18 @@ export function MenuDivider() {
 export interface PopoverTriggerProps {
   ref: Ref<HTMLButtonElement>
   onClick: () => void
-  'aria-haspopup': 'menu'
+  'aria-haspopup': 'menu' | 'dialog'
   'aria-expanded': boolean
 }
 
 /**
  * A menu under a trigger. It closes on an outside click or Escape (focus goes back to
  * the trigger), and Arrow Up/Down move between rows. With `sheetOnNarrow`, the menu
- * opens as a bottom sheet on a phone.
+ * opens as a bottom sheet on a phone. `role="dialog"` is for a panel that holds a form
+ * (the goal control): no arrow-key row navigation, Tab stays inside, and it may grow
+ * taller than a menu.
  */
-export function Popover({ trigger, open, onOpenChange, align = 'right', width, title, sheetOnNarrow, children }: {
+export function Popover({ trigger, open, onOpenChange, align = 'right', width, title, sheetOnNarrow, role = 'menu', children }: {
   trigger: (props: PopoverTriggerProps) => ReactNode
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -136,13 +139,16 @@ export function Popover({ trigger, open, onOpenChange, align = 'right', width, t
   /** Accessible name for the menu, and the sheet's title on a phone. */
   title?: string
   sheetOnNarrow?: boolean
+  role?: 'menu' | 'dialog'
   children: ReactNode
 }) {
   const narrow = useIsNarrow()
   const triggerRef = useRef<HTMLButtonElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
-  const wrapRef = useClickOutside(() => { if (open) onOpenChange(false) })
   const asSheet = open && sheetOnNarrow && narrow
+  // The sheet is portalled outside this wrapper, so a tap inside it would count as
+  // "outside". It has its own backdrop to close it.
+  const wrapRef = useClickOutside(() => { if (open && !asSheet) onOpenChange(false) })
 
   // Focus the menu when it opens, so the arrow keys work straight away.
   useEffect(() => { if (open && !asSheet) menuRef.current?.focus() }, [open, asSheet])
@@ -150,6 +156,7 @@ export function Popover({ trigger, open, onOpenChange, align = 'right', width, t
   const close = () => { onOpenChange(false); triggerRef.current?.focus() }
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Escape') { e.preventDefault(); close(); return }
+    if (role === 'dialog') { trapTab(e, menuRef.current); return }
     if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return
     e.preventDefault()
     const items = Array.from(menuRef.current?.querySelectorAll<HTMLElement>('[role^="menuitem"]:not([disabled])') ?? [])
@@ -161,12 +168,12 @@ export function Popover({ trigger, open, onOpenChange, align = 'right', width, t
 
   return (
     <div ref={wrapRef} style={{ position: 'relative' }}>
-      {trigger({ ref: triggerRef, onClick: () => onOpenChange(!open), 'aria-haspopup': 'menu', 'aria-expanded': open })}
+      {trigger({ ref: triggerRef, onClick: () => onOpenChange(!open), 'aria-haspopup': role, 'aria-expanded': open })}
       {asSheet && <BottomSheet title={title} onClose={() => onOpenChange(false)}>{children}</BottomSheet>}
       {open && !asSheet && (
         <div
           ref={menuRef}
-          role="menu"
+          role={role}
           aria-label={title}
           tabIndex={-1}
           onKeyDown={onKeyDown}
@@ -174,6 +181,7 @@ export function Popover({ trigger, open, onOpenChange, align = 'right', width, t
             ...menuStyle,
             ...(align === 'left' ? { left: 0, right: 'auto' } : {}),
             ...(width ? { minWidth: width } : {}),
+            ...(role === 'dialog' ? { maxHeight: 'min(70vh, 560px)' } : {}),
             outline: 'none',
           }}
         >
