@@ -172,39 +172,104 @@ export async function writePushPrefs(endpoint: string, preferences: PushPrefs): 
 
 // ── What the gateway actually pushes ────────────────────────────────────────────
 //
-// The payload is `{ title, body, tag, url?, renotify }`. `url` is present only for the
-// categories that have somewhere to land, and it is the gateway's own Control UI path
-// — RELATIVE (e.g. `automations?job=x&run=y`) when `gateway.publicOrigin` is unset, and
-// an absolute Control UI URL when it is set. Per category, from the gateway's own
-// event→notification map:
+// The payload is `{ title, body, tag, url?, renotify }`. `url` is the gateway's own
+// Control UI path — RELATIVE (e.g. `automations?job=x&run=y`) when
+// `gateway.publicOrigin` is unset, and an absolute Control UI URL (with the gateway in
+// its #hash) when it is set. Per category, from the gateway's own event→notification
+// map (OpenClaw 2026.9.4, `resolveEventWebPushNotification` and
+// `createEventWebPushDelivery`):
 //
 //   approval-requested      approve/<approvalId>
 //   agent-question          ask/<questionId>        -> chat
 //   scheduled-task-failed   automations?job=<jobId>&run=<runId> -> Automations
-//   agent-finished          (no url — nothing to select, so just focus the app)
-//   background-task-failed  (no url)
+//   agent-finished          chat/<agentId>/<session…>  -> that chat
+//   background-task-failed  chat/<agentId>/<session…>, or `tasks` when there's no
+//                           session, with the tag `openclaw-task-failed-<taskId>`
+//                           -> that chat, with the task drawer open on the task
+//
+// A session path is the requester session's key, built by `buildControlUiSessionPath`
+// with `exactKey`: `chat/<agent>` for the main session, `chat/<agent>/~key/<segment>`
+// for a single reserved segment, otherwise one path segment per key segment.
 //
 // We translate what we can onto our own sections and ignore the rest, rather than
 // opening the gateway's Control UI over the top of this app.
 
-export interface PushNavigate { section?: string; convId?: string }
+export interface PushNavigate {
+  section?: string
+  convId?: string
+  /** Open this gateway session as the chat. */
+  sessionKey?: string
+  /**
+   * Set when the path named an agent's MAIN session (`chat/<agent>`): the gateway's
+   * `session.mainKey` is configurable, so `sessionKey` assumed "main" and the caller
+   * should resolve the real key (agents.list → mainKey) before opening the chat.
+   */
+  mainOf?: string
+  /** Open the task drawer on this task. */
+  taskId?: string
+}
+
+const TASK_TAG = /^openclaw-task-failed-(.+)$/
+const CHAT_PATH = /(?:^|\/)chat\/([^/]+)((?:\/[^/]+)*)\/?$/
+
+// The inverse of the gateway's `encodePathSegment`: `.` and `..` travel as `~dot` and
+// `~dotdot`, and a segment that starts with `~` gets a second one.
+function decodeSegment(seg: string): string {
+  if (seg === '~dot') return '.'
+  if (seg === '~dotdot') return '..'
+  const raw = seg.startsWith('~~') ? seg.slice(1) : seg
+  try { return decodeURIComponent(raw) } catch { return raw }
+}
 
 /**
- * Map a gateway push `url` onto an in-app route. Returns undefined when the payload
- * points somewhere JoaxClaw has no view for — the caller should then just focus the
- * app, which is still the right outcome for a tapped notification.
- *
- * Accepts relative and absolute forms, since which one arrives depends on a gateway
- * config key we don't control.
+ * The session a Control UI chat path names: `chat/main/dashboard/4f1c` →
+ * `agent:main:dashboard:4f1c`, `chat/main/~key/x` → `agent:main:x`, and `chat/ops` → the
+ * agent's main session, `agent:ops:<mainKey>`. Undefined when it isn't a chat path.
  */
+export function sessionFromControlUiPath(path: string, mainKey = 'main'): { sessionKey: string; mainOf?: string } | undefined {
+  const m = CHAT_PATH.exec(path)
+  if (!m) return undefined
+  const agent = decodeSegment(m[1])
+  let segs = m[2].split('/').filter(Boolean)
+  if (segs[0] === '~key') segs = segs.slice(1)
+  if (!segs.length) return { sessionKey: `agent:${agent}:${mainKey}`, mainOf: agent }
+  return { sessionKey: `agent:${agent}:${segs.map(decodeSegment).join(':')}` }
+}
+
+export const sessionKeyFromControlUiPath = (path: string, mainKey = 'main') =>
+  sessionFromControlUiPath(path, mainKey)?.sessionKey
+
+/** The url-only form, for callers that have no tag. */
 export function pushUrlToNavigate(url: unknown): PushNavigate | undefined {
-  if (typeof url !== 'string' || !url.trim()) return undefined
-  let path: string
-  try {
-    // A relative path needs a base to parse against; the base is then discarded.
-    const parsed = new URL(url, 'https://placeholder.invalid/')
-    path = parsed.pathname.replace(/^\/+/, '')
-  } catch { return undefined }
+  return pushToNavigate({ url })
+}
+
+/**
+ * Map a tapped gateway push onto an in-app route, from its `url` and its `tag`. Returns
+ * undefined when the payload points somewhere JoaxClaw has no view for — the caller
+ * should then just focus the app, which is still the right outcome for a tapped
+ * notification.
+ *
+ * The gateway sends the url RELATIVE, without a leading `/` or the Control UI's base
+ * path, and with `#gatewayUrl=…` appended when `gateway.publicOrigin` is set. An
+ * absolute URL is accepted too.
+ */
+export function pushToNavigate({ url, tag }: { url?: unknown; tag?: unknown }): PushNavigate | undefined {
+  const taskId = typeof tag === 'string' ? TASK_TAG.exec(tag)?.[1] : undefined
+  let path: string | undefined
+  if (typeof url === 'string' && url.trim()) {
+    try {
+      // A relative path needs a base to parse against; the base is then discarded.
+      const parsed = new URL(url, 'https://placeholder.invalid/')
+      path = parsed.pathname.replace(/^\/+/, '')
+    } catch { /* an unusable url: the tag alone can still route */ }
+  }
+
+  const session = path ? sessionFromControlUiPath(path) : undefined
+  if (session) return { section: 'chat', ...session, ...(taskId ? { taskId } : {}) }
+  // A task with no chat to name (the url fell back to `tasks`): open the drawer where we are.
+  if (taskId) return { taskId }
+  if (!path) return undefined
 
   // The Control UI can live under a base path, so match the last segment group rather
   // than anchoring at the start.

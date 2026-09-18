@@ -12,7 +12,11 @@ function attachmentSrc(a: { url?: string; data?: string; mediaType?: string }): 
   return undefined
 }
 
-interface Props { message: ChatMessage }
+interface Props {
+  message: ChatMessage
+  /** Someone else's transcript (the task drawer's Output): no reactions. */
+  readOnly?: boolean
+}
 
 function renderInline(text: string): React.ReactNode {
   const parts = text.split(/(`[^`\n]+`)/)
@@ -36,7 +40,7 @@ function renderInline(text: string): React.ReactNode {
 
 const MEDIA_ONLY_PLACEHOLDER = '[User sent media without caption]'
 
-export function UserMessage({ message }: Props) {
+export function UserMessage({ message, readOnly = false }: Props) {
   const audioAttachments = message.attachments?.filter(a => a.type === 'audio') ?? []
   const imageAttachments = message.attachments?.filter(a => a.type === 'image') ?? []
   const videoAttachments = message.attachments?.filter(a => a.type === 'video') ?? []
@@ -113,7 +117,7 @@ export function UserMessage({ message }: Props) {
             ))}
           </div>
         )}
-        <MessageReactions message={message} align="right" />
+        {!readOnly && <MessageReactions message={message} align="right" />}
       </div>
     </div>
   )

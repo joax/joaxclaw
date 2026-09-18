@@ -15,9 +15,9 @@ const api = {
     openExternal: (url: string) => ipcRenderer.invoke('app:openExternal', url)
   },
 
-  // System tray: live run counts (agents / teams) shown in the tray menu + tooltip.
+  // System tray: live run counts (agents / teams / background tasks) shown in the tray menu + tooltip.
   tray: {
-    update: (counts: { agents: number; teams: number }) => ipcRenderer.invoke('tray:update', counts)
+    update: (counts: { agents: number; teams: number; tasks?: number; needsYou?: number }) => ipcRenderer.invoke('tray:update', counts)
   },
 
   // Auto-updater (GitHub Releases) — check / download / install per-OS

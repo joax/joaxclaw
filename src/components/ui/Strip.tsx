@@ -49,6 +49,17 @@ export function StripBar({ children }: { children: ReactNode }) {
   )
 }
 
+const noop = () => {}
+
+/**
+ * Close whichever strip in the enclosing StripBar is open (a no-op outside one). For a
+ * strip whose rows hand off to a full-screen panel: on a phone the body is a bottom
+ * sheet, which would otherwise stay open, and keep its Escape and focus trap, under it.
+ */
+export function useCloseStrips(): () => void {
+  return useContext(Ctx)?.close ?? noop
+}
+
 export function Strip({ id, visible, label, headline, tone = 'working', track, count, trailing, body, chipLabel }: {
   id: string
   visible: boolean
