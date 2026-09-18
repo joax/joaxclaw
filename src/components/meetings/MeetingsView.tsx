@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState, type KeyboardEvent, type ReactNode } from 'react'
-import { Search, Video } from 'lucide-react'
+import { useEffect, useMemo, useState, type KeyboardEvent } from 'react'
+import { createPortal } from 'react-dom'
+import { CircleDot, Search, Video } from 'lucide-react'
 import { useMeetingsStore } from '../../store/meetings'
 import { useConnectionStore } from '../../store/connection'
 import { useIsNarrow } from '../../lib/useIsNarrow'
@@ -11,19 +12,17 @@ import { Pill } from '../ui/Pill'
 import { FilterTab } from '../ui/FilterTab'
 import { EmptyState } from '../ui/EmptyState'
 import { MeetingReader } from './MeetingReader'
+import { SetupChecklist, useMeetingsSetup } from './SetupChecklist'
+import { PendingJoins } from './PendingJoins'
+import { RecordDialog } from './RecordDialog'
+import { ConsentDialog } from '../extensions/PluginBrowser'
 
 // Meetings: the gateway's meeting notes. A list column and a reader, the same split as
 // Processes and Teams; on a phone the list is the page and a row pushes the reader.
 //
 // "Notes", never "recordings": the gateway keeps caption text and a summary, not audio.
 
-export function MeetingsView({ onOpenChat, header, top }: {
-  onOpenChat?: () => void
-  /** Extra header actions (Record a meeting, in the recording PR). */
-  header?: ReactNode
-  /** Content above the list (the setup checklist, in the recording PR). */
-  top?: ReactNode
-}) {
+export function MeetingsView({ onOpenChat }: { onOpenChat?: () => void }) {
   const narrow = useIsNarrow()
   const seq = useConnectionStore(s => s.connectionSeq)
   const connected = useConnectionStore(s => s.status === 'connected')
@@ -33,6 +32,9 @@ export function MeetingsView({ onOpenChat, header, top }: {
     setVisible, load, loadMore, setQuery, setProvider, open, close,
   } = useMeetingsStore()
   const [draft, setDraft] = useState(query)
+  // The Record dialog, and the link to prefill it with (Try again on a failed join).
+  const [recording, setRecording] = useState<{ url: string } | null>(null)
+  const setup = useMeetingsSetup()
 
   // Poll while this view is on screen (and while a meeting is live, which the store
   // decides for itself). Reload everything on every new connection.
@@ -73,7 +75,11 @@ export function MeetingsView({ onOpenChat, header, top }: {
       <div className="flex flex-col gap-2 px-4 pt-4 pb-2 shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
         <div className="flex items-center justify-between gap-2">
           <h1 className="text-base font-semibold" style={{ color: 'var(--text-primary)' }}>Meetings</h1>
-          {header}
+          <Btn size="sm" icon={<CircleDot size={12} />} disabled={!setup.captureOn || !connected}
+            title={!setup.captureOn ? 'Turn on meeting notes first' : undefined}
+            onClick={() => setRecording({ url: '' })}>
+            {narrow ? 'Record' : 'Record a meeting'}
+          </Btn>
         </div>
         <div style={{ position: 'relative' }}>
           <Search size={13} style={{ position: 'absolute', left: 9, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-secondary)' }} />
@@ -91,7 +97,8 @@ export function MeetingsView({ onOpenChat, header, top }: {
       </div>
 
       <div className="flex-1 min-h-0 overflow-y-auto p-3 flex flex-col gap-2">
-        {top}
+        <SetupChecklist onOpenChat={onOpenChat} />
+        <PendingJoins onOpenChat={onOpenChat} onRetry={url => setRecording({ url })} />
         {listState === 'loading' && sessions.length === 0 && (
           <>
             <span className="sr-only" role="status">Loading meetings…</span>
@@ -147,12 +154,17 @@ export function MeetingsView({ onOpenChat, header, top }: {
           <EmptyState icon={Video} label="Pick a meeting to read its notes." />
         </div>
       )}
+      {recording && <RecordDialog initialUrl={recording.url} onClose={() => setRecording(null)} />}
+      {/* Plugin consent / review for an install started here, above the Record dialog. */}
+      {createPortal(<ConsentDialog />, document.body)}
     </div>
   )
 }
 
 function MeetingRow({ session: s, selected, onOpen }: { session: TranscriptSession; selected: boolean; onOpen: () => void }) {
-  const pill = meetingPill(s)
+  const stop = useMeetingsStore(st => st.stop)
+  const stopping = useMeetingsStore(st => st.stopping.includes(s.selector) || st.pending.some(p => p.selector === s.selector && p.stoppingAt))
+  const pill = stopping ? { tone: 'working' as const, text: 'Stopping…' } : meetingPill(s)
   return (
     <div
       role="option"
@@ -172,7 +184,14 @@ function MeetingRow({ session: s, selected, onOpen }: { session: TranscriptSessi
         <span className="text-sm font-medium truncate" style={{ color: 'var(--text-primary)', flex: 1 }}>{meetingTitle(s)}</span>
         {pill && <Pill tone={pill.tone}>{pill.text}</Pill>}
       </div>
-      <span className="text-xs truncate" style={{ color: 'var(--text-secondary)' }}>{meetingMeta(s)}</span>
+      <div className="flex items-center gap-2">
+        <span className="text-xs truncate" style={{ color: 'var(--text-secondary)', flex: 1 }}>{meetingMeta(s)}</span>
+        {s.active && !stopping && (
+          <span onClick={e => e.stopPropagation()}>
+            <Btn size="sm" variant="outline" onClick={() => stop({ selector: s.selector })}>Stop</Btn>
+          </span>
+        )}
+      </div>
     </div>
   )
 }
