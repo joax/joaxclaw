@@ -3,7 +3,7 @@ import {
   parseTask, parseTaskList, taskState, isNeedsYou, kindInfo, orderItems, orderTasks, stripItems,
   dashboardItems, summaryLine, chipLabel, worstTone, taskMatchesSession, fromTask, fromScriptJob,
   scriptState, metaLine, readGatewayError, isStaleCursor, isTaskGone, addHidden, canManageTasks,
-  mergeTask, STRIP_DONE_MS, STRIP_FAILED_MS, type TaskSummary,
+  mergeTask, canRecover, cancelMessage, recoveryMessage, STRIP_DONE_MS, STRIP_FAILED_MS, type TaskSummary,
 } from '../tasks'
 import type { ScriptJob } from '../scriptJobs'
 
@@ -85,6 +85,16 @@ describe('isNeedsYou', () => {
       expect(isNeedsYou({ terminalOutcome: 'blocked', deliveryStatus: d })).toBe(false)
     }
     expect(isNeedsYou({ terminalOutcome: 'succeeded', deliveryStatus: 'failed' })).toBe(false)
+  })
+})
+
+describe('canRecover', () => {
+  it('offers Retry and Dismiss only for a needs-you subagent', () => {
+    const blocked = { terminalOutcome: 'blocked', deliveryStatus: 'failed' }
+    expect(canRecover({ ...blocked, runtime: 'subagent' })).toBe(true)
+    // The gateway can't re-drive anything else ("task has no recoverable subagent completion").
+    expect(canRecover({ ...blocked, runtime: 'cli' })).toBe(false)
+    expect(canRecover({ terminalOutcome: 'blocked', deliveryStatus: 'dismissed', runtime: 'subagent' })).toBe(false)
   })
 })
 
@@ -279,6 +289,19 @@ describe('errors and scopes', () => {
     expect(isStaleCursor({ code: 'UNAVAILABLE', message: 'x' })).toBe(false)
     expect(isTaskGone({ message: 'task not found: abc' })).toBe(true)
     expect(isTaskGone({ message: 'Task not found.' })).toBe(true)
+  })
+  it('explains a stop that did not happen', () => {
+    expect(cancelMessage({ found: true, cancelled: true })).toBeNull()
+    expect(cancelMessage({ found: true, cancelled: false, reason: 'Task is already terminal.' })).toBe("Couldn't stop it: Task is already terminal.")
+    // Access denied: {found:false, cancelled:false} and no reason (tasks.cancel handler).
+    expect(cancelMessage({ found: false, cancelled: false })).toMatch(/^Couldn't stop it: this connection can't find it/)
+    expect(cancelMessage(undefined)).toBe("Couldn't stop it: the gateway gave no reason")
+  })
+  it('explains a refused retry or dismiss', () => {
+    expect(recoveryMessage('retry', { ok: true })).toBeNull()
+    expect(recoveryMessage('retry', { ok: false, reason: 'completion delivery is not blocked' })).toBe("Couldn't retry: completion delivery is not blocked")
+    expect(recoveryMessage('dismiss', { ok: false })).toBe("Couldn't dismiss: the gateway gave no reason")
+    expect(recoveryMessage('retry', undefined)).toBe("Couldn't retry: the gateway gave no reason")
   })
   it('needs write or admin to manage tasks', () => {
     expect(canManageTasks(['operator.read'])).toBe(false)
