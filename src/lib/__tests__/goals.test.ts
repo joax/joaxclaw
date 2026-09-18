@@ -2,8 +2,16 @@ import { describe, it, expect } from 'vitest'
 import {
   parseGoal, goalView, formatElapsed, availableActions, buildStartParams, buildUpdateParams,
   buildClearParams, classifyGoalError, validateObjective, eligibleSessionKey, shouldApplyGoal,
-  resumeActionFor, isOpenGoal, goalErrorPolicy, goalRefreshNeeded, type SessionGoal,
+  resumeActionFor, isOpenGoal, goalErrorPolicy, goalErrorCopy, goalErrorMessage, noteIsOurs, goalRefreshNeeded, type SessionGoal,
 } from '../goals'
+import {
+  goalErrors, asAppGatewayError, APP_NETWORK_ERROR_MESSAGES, NOW, SESSION_KEY, OP_START, OP_PAUSE, OP_RESUME, OP_EDIT, OP_CLEAR,
+  goalActive, goalMinimal, goalPaused, goalBlocked, goalBudgetLimited, goalUsageLimited, goalComplete, looseGoalInputs,
+  startParams, pauseParams, continueParams, editParams, clearParams, continueAck, pauseResultReplayed,
+  OBJECTIVE_NFD, OBJECTIVE_NFC, OBJECTIVE_WITH_CONTROL_CHAR, OBJECTIVE_16000, OBJECTIVE_16001,
+  rowSubagentWithGoal, rowCronKey, rowHeartbeatKey, rowWithGoal,
+  sessionsChangedRunEndBlocked, sessionsChangedGoalCleared, sessionsChangedGlobalNoGoal, sessionsChangedCoalesced,
+} from './fixtures/sprint/chatGoals'
 
 // A chat's goal lives on the gateway session row; lib/goals reads it loosely and builds
 // the exact request shapes the gateway validates (OpenClaw 2026.9.4, closed schemas).
@@ -11,10 +19,6 @@ import {
 const goal = (over: Partial<SessionGoal> = {}): SessionGoal => ({
   id: 'g1', objective: 'Ship v2', status: 'active', createdAt: 1_000, updatedAt: 1_000, tokensUsed: 0, ...over,
 })
-
-// A gateway rejection as gatewayClient.request throws it.
-const rejection = (message: string, details?: Record<string, unknown>, code = 'INVALID_REQUEST') =>
-  Object.assign(new Error(JSON.stringify({ code, message, details })), { gatewayError: { code, message, ...(details ? { details } : {}) } })
 
 describe('parseGoal', () => {
   it('reads a full record', () => {
@@ -194,36 +198,167 @@ describe('buildUpdateParams', () => {
   })
 })
 
-describe('classifyGoalError', () => {
-  it('reads the structured reason first', () => {
-    expect(classifyGoalError(rejection('This session still has active or queued work…', { reason: 'goal-session-busy' }, 'UNAVAILABLE'))).toBe('busy')
-    // chat.send prefixes the operation code with "goal-"; sessions.goal.* doesn't.
-    expect(classifyGoalError(rejection('x', { reason: 'goal-goal-rebound' }))).toBe('rebound')
-    expect(classifyGoalError(rejection('x', { code: 'GOAL_OPERATION_REJECTED', reason: 'goal-rebound' }))).toBe('rebound')
-    expect(classifyGoalError(rejection('x', { code: 'GOAL_OPERATION_REJECTED', reason: 'session-rebound' }))).toBe('rebound')
-    expect(classifyGoalError(rejection('x', { code: 'GOAL_OPERATION_REJECTED', reason: 'operation-conflict' }))).toBe('conflict')
-    expect(classifyGoalError(rejection('x', { reason: 'goal-operation-conflict' }))).toBe('conflict')
-    expect(classifyGoalError(rejection('Too many recent Goal operations', { reason: 'capacity' }))).toBe('generic')
+describe('classifyGoalError (2026.9.4 error frames)', () => {
+  const cls = (e: Parameters<typeof asAppGatewayError>[0]) => classifyGoalError(asAppGatewayError(e))
+
+  it('busy, ineligible and admitting', () => {
+    expect(cls(goalErrors.busy)).toBe('busy')
+    expect(cls(goalErrors.ineligible)).toBe('ineligible')
+    expect(cls(goalErrors.admitting)).toBe('admitting')
   })
 
-  it('falls back to the message text', () => {
-    expect(classifyGoalError(rejection('Goal start or resume requires an idle local session with recoverable history. Finish current work…'))).toBe('ineligible')
-    expect(classifyGoalError(rejection('Session changed or was removed; refresh its Goal.'))).toBe('rebound')
-    expect(classifyGoalError(rejection('Session changed before its Goal update; retry.'))).toBe('rebound')
-    expect(classifyGoalError(rejection('Goal is being admitted; retry the same request.', undefined, 'UNAVAILABLE'))).toBe('admitting')
-    expect(classifyGoalError(rejection('goal already exists'))).toBe('rebound')
+  it('every form of "the goal or session changed" is a rebound', () => {
+    for (const e of [
+      goalErrors.goalRebound,              // sessions.goal.*: details.code + bare reason
+      goalErrors.sessionRebound,
+      goalErrors.chatPathSessionRebound,   // chat.send path: "goal-" prefix, no details.code
+      goalErrors.sessionRemoved,           // message only
+      goalErrors.sessionChangedBeforeUpdate,
+      goalErrors.resumeGoalReboundViaTurn, // UNAVAILABLE "SessionGoalOperationError: …"
+      goalErrors.startGoalAlreadyExists,
+      goalErrors.invalidTransition,        // "goal is already complete"
+    ]) expect(cls(e)).toBe('rebound')
+  })
+
+  it('an operation id reused for another request is a conflict, on both paths', () => {
+    expect(cls(goalErrors.operationConflict)).toBe('conflict')
+    expect(cls(goalErrors.chatPathOperationConflict)).toBe('conflict')
+  })
+
+  it('expired, clock skew, capacity and missing scope each have their own class', () => {
+    expect(cls(goalErrors.expired)).toBe('expired')
+    expect(cls(goalErrors.invalidTime)).toBe('clock')
+    expect(cls(goalErrors.capacity)).toBe('capacity')
+    expect(cls(goalErrors.missingWriteScope)).toBe('scope')
+  })
+
+  it('anything else is generic, and never throws', () => {
+    for (const e of [goalErrors.unexpected, goalErrors.startOverride, goalErrors.startInvalid, goalErrors.invalidParamsNoteTooLong, goalErrors.unknownMethod_2026_6_5, goalErrors.intentUnsupported_2026_6_5]) {
+      expect(cls(e)).toBe('generic')
+    }
+    expect(classifyGoalError('boom')).toBe('generic')
+    expect(classifyGoalError(undefined)).toBe('generic')
+  })
+
+  it('reads a plain error-frame object as well as the app Error', () => {
+    expect(classifyGoalError({ gatewayError: goalErrors.goalRebound })).toBe('rebound')
+    expect(classifyGoalError(goalErrors.busy)).toBe('busy')
   })
 
   it('treats a request that never got an answer as a network error', () => {
-    expect(classifyGoalError(new Error('Request sessions.goal.update timed out'))).toBe('network')
-    expect(classifyGoalError(new Error('Disconnected'))).toBe('network')
-    expect(classifyGoalError(new Error('Not connected'))).toBe('network')
+    for (const m of APP_NETWORK_ERROR_MESSAGES) expect(classifyGoalError(new Error(m))).toBe('network')
   })
 
-  it('anything else is generic', () => {
-    expect(classifyGoalError(rejection('Goal operation time is invalid; refresh and try again.', { reason: 'invalid' }))).toBe('generic')
-    expect(classifyGoalError('boom')).toBe('generic')
-    expect(classifyGoalError(undefined)).toBe('generic')
+  it('reports the message without the JSON wrapping or the error-class prefix', () => {
+    expect(goalErrorMessage(asAppGatewayError(goalErrors.unexpected))).toBe('Unable to update the Goal; retry the request.')
+    expect(goalErrorMessage(asAppGatewayError(goalErrors.resumeGoalReboundViaTurn))).toBe('Goal changed or was cleared; refresh before trying again.')
+  })
+})
+
+describe('goalErrorPolicy', () => {
+  const fresh = { admitting: false, conflict: false }
+  const app = asAppGatewayError
+
+  it('resends a request the gateway is still admitting, once', () => {
+    expect(goalErrorPolicy(app(goalErrors.admitting), fresh).next).toBe('resend')
+    expect(goalErrorPolicy(app(goalErrors.admitting), { ...fresh, admitting: true })).toMatchObject({ next: 'stop', retryable: true })
+  })
+
+  it('gives a conflicting operation a new id, once', () => {
+    expect(goalErrorPolicy(app(goalErrors.operationConflict), fresh).next).toBe('reissue')
+    expect(goalErrorPolicy(app(goalErrors.chatPathOperationConflict), { ...fresh, conflict: true })).toMatchObject({ next: 'stop', retryable: false })
+  })
+
+  it('keeps an unanswered or retry-me request for an unchanged Retry', () => {
+    expect(goalErrorPolicy(new Error('Disconnected'), fresh)).toMatchObject({ next: 'stop', retryable: true, cls: 'network' })
+    expect(goalErrorPolicy(app(goalErrors.unexpected), fresh).retryable).toBe(true)
+  })
+
+  it('drops a definite refusal, and re-reads the row when the goal changed elsewhere', () => {
+    expect(goalErrorPolicy(app(goalErrors.busy), fresh)).toMatchObject({ next: 'stop', refresh: false, retryable: false })
+    expect(goalErrorPolicy(app(goalErrors.ineligible), fresh).retryable).toBe(false)
+    expect(goalErrorPolicy(app(goalErrors.expired), fresh).retryable).toBe(false)
+    expect(goalErrorPolicy(app(goalErrors.capacity), fresh).retryable).toBe(false)
+    expect(goalErrorPolicy(app(goalErrors.startInvalid), fresh).retryable).toBe(false)
+    expect(goalErrorPolicy(app(goalErrors.sessionRemoved), fresh)).toMatchObject({ refresh: true, retryable: false })
+  })
+})
+
+describe('goalErrorCopy', () => {
+  it('has plain copy for every class', () => {
+    const copy = (cls: Parameters<typeof goalErrorCopy>[0]['cls']) => goalErrorCopy({ cls, message: 'x' })
+    expect(copy('busy')).toBe('The chat is still working. Try again when the reply finishes.')
+    expect(copy('ineligible')).toBe('Goals need an idle chat whose history the gateway can recover. Start a new chat to set a goal.')
+    expect(copy('rebound')).toBe("The goal changed somewhere else. Here's the latest.")
+    expect(copy('generic')).toBe("Couldn't update the goal: x")
+    for (const c of ['network', 'expired', 'clock', 'capacity', 'scope'] as const) {
+      expect(copy(c)).not.toContain('x')
+      expect(copy(c).length).toBeGreaterThan(10)
+    }
+  })
+})
+
+describe('noteIsOurs', () => {
+  it("tells the operator's own Continue note from the agent's", () => {
+    const g = parseGoal(continueAck.goal)!
+    expect(noteIsOurs(g, ['The key is in the vault now.'])).toBe(true)
+    expect(noteIsOurs(parseGoal(goalBlocked)!, ['The key is in the vault now.'])).toBe(false)
+    expect(noteIsOurs(parseGoal(goalBlocked)!, undefined)).toBe(false)
+  })
+})
+
+describe('fixtures: goal shapes from 2026.9.4', () => {
+  it('parses every status and tolerates the loose inputs', () => {
+    for (const g of [goalActive, goalMinimal, goalPaused, goalBlocked, goalBudgetLimited, goalUsageLimited, goalComplete]) {
+      expect(parseGoal(g)?.id).toBe(g.id)
+    }
+    expect(parseGoal(looseGoalInputs.nullValue)).toBeNull()
+    expect(parseGoal(looseGoalInputs.string)).toBeNull()
+    expect(parseGoal(looseGoalInputs.array)).toBeNull()
+    expect(parseGoal(looseGoalInputs.missingId)).toBeNull()
+    expect(goalView(parseGoal(looseGoalInputs.unknownStatus), NOW).tone).toBe('idle')
+    expect(parseGoal(looseGoalInputs.numericStringTimestamps)?.createdAt).toBe(goalActive.createdAt)
+    expect(parseGoal(looseGoalInputs.futureSchemaVersion)?.status).toBe('active')
+  })
+
+  it('builds the exact params the gateway expects', () => {
+    expect(buildStartParams(SESSION_KEY, 'Ship v2', OP_START, NOW)).toEqual(startParams)
+    const g = parseGoal(goalActive)!
+    expect(buildUpdateParams(g, SESSION_KEY, 'pause', {}, OP_PAUSE, NOW)).toEqual(pauseParams)
+    expect(buildUpdateParams(g, SESSION_KEY, 'continue', { note: 'The key is in the vault now.' }, OP_RESUME, NOW)).toEqual(continueParams)
+    expect(buildUpdateParams(g, SESSION_KEY, 'edit', { objective: editParams.action === 'edit' ? editParams.objective : '' }, OP_EDIT, NOW)).toEqual(editParams)
+    expect(buildClearParams(g, SESSION_KEY, OP_CLEAR, NOW)).toEqual(clearParams)
+  })
+
+  it('a retry rebuilds byte-identical start params', () => {
+    const a = JSON.stringify(buildStartParams(SESSION_KEY, 'Ship v2', OP_START, NOW))
+    const b = JSON.stringify(buildStartParams(SESSION_KEY, 'Ship v2', OP_START, NOW))
+    expect(a).toBe(b)
+  })
+
+  it('normalises the NFD objective and strips the control character', () => {
+    expect(validateObjective(OBJECTIVE_NFD)).toEqual({ ok: true, value: OBJECTIVE_NFC })
+    expect(validateObjective(OBJECTIVE_WITH_CONTROL_CHAR)).toEqual({ ok: true, value: 'Ship v2now' })
+    expect(validateObjective(OBJECTIVE_16000).ok).toBe(true)
+    expect(validateObjective(OBJECTIVE_16001).ok).toBe(false)
+  })
+
+  it('refuses the fixture sub-agent, cron and heartbeat keys', () => {
+    expect(eligibleSessionKey(rowSubagentWithGoal.key)).toBe(false)
+    expect(eligibleSessionKey(rowCronKey.key)).toBe(false)
+    expect(eligibleSessionKey(rowHeartbeatKey.key)).toBe(false)
+    expect(eligibleSessionKey(rowWithGoal.key)).toBe(true)
+  })
+
+  it('a replayed or late result never overwrites a newer row goal', () => {
+    const newer = parseGoal({ ...goalActive, status: 'blocked', updatedAt: NOW + 10_000 })
+    expect(shouldApplyGoal(newer, parseGoal(pauseResultReplayed.goal)!)).toBe(false)
+  })
+
+  it('the Done summary numbers come from the goal', () => {
+    const g = parseGoal(goalComplete)!
+    expect(formatElapsed((g.completedAt ?? g.updatedAt) - g.createdAt)).toBe('2h 10m')
+    expect(g.tokensUsed.toLocaleString('en-US')).toBe('188,400')
   })
 })
 
@@ -263,44 +398,41 @@ describe('isOpenGoal', () => {
   })
 })
 
-describe('goalErrorPolicy', () => {
-  const fresh = { admitting: false, conflict: false }
-
-  it('resends a request the gateway is still admitting, once', () => {
-    expect(goalErrorPolicy('admitting', fresh).next).toBe('resend')
-    expect(goalErrorPolicy('admitting', { ...fresh, admitting: true })).toMatchObject({ next: 'stop', retryable: true })
+describe('goalRefreshNeeded', () => {
+  it('re-reads once when no run-end snapshot came and the goal has not moved', () => {
+    expect(goalRefreshNeeded(goal({ updatedAt: 5 }), goal({ updatedAt: 5 }), false)).toBe(true)
+    // The agent may have created a goal on a chat that had none.
+    expect(goalRefreshNeeded(null, null, false)).toBe(true)
   })
 
-  it('gives a conflicting operation a new id, once', () => {
-    expect(goalErrorPolicy('conflict', fresh).next).toBe('reissue')
-    expect(goalErrorPolicy('conflict', { ...fresh, conflict: true })).toMatchObject({ next: 'stop', retryable: false })
+  it('does nothing once the run-end snapshot or a newer goal arrived', () => {
+    expect(goalRefreshNeeded(goal({ updatedAt: 5 }), goal({ updatedAt: 5 }), true)).toBe(false)
+    expect(goalRefreshNeeded(goal({ updatedAt: 5 }), goal({ updatedAt: 9, status: 'complete' }), false)).toBe(false)
+    expect(goalRefreshNeeded(goal(), null, false)).toBe(false)
+    expect(goalRefreshNeeded(null, goal(), false)).toBe(false)
+    expect(goalRefreshNeeded(goal(), goal({ id: 'g2' }), false)).toBe(false)
   })
 
-  it('keeps a request that may never have arrived for an unchanged Retry', () => {
-    expect(goalErrorPolicy('network', fresh)).toEqual({ next: 'stop', refresh: false, retryable: true })
-    expect(goalErrorPolicy('generic', fresh).retryable).toBe(true)
-  })
-
-  it('drops a definite refusal, and re-reads the row when the goal changed elsewhere', () => {
-    expect(goalErrorPolicy('busy', fresh)).toEqual({ next: 'stop', refresh: false, retryable: false })
-    expect(goalErrorPolicy('ineligible', fresh).retryable).toBe(false)
-    expect(goalErrorPolicy('rebound', fresh)).toEqual({ next: 'stop', refresh: true, retryable: false })
+  it('leaves a done goal alone', () => {
+    expect(goalRefreshNeeded(goal({ status: 'complete' }), goal({ status: 'complete' }), false)).toBe(false)
   })
 })
 
-describe('goalRefreshNeeded', () => {
-  it('re-reads an active goal that has not moved since the run ended', () => {
-    expect(goalRefreshNeeded(goal({ updatedAt: 5 }), goal({ updatedAt: 5 }))).toBe(true)
+describe('fixtures: sessions.changed carries the goal', () => {
+  // store/sessions merges payloads whole ({...row, ...payload}); these check what that merge sees.
+  const merge = (row: Record<string, unknown>, p: Record<string, unknown>) => ({ ...row, ...p })
+  const row = { key: SESSION_KEY, goal: goalActive }
+
+  it("the run-end snapshot brings the agent's blocked goal", () => {
+    expect(parseGoal(merge(row, sessionsChangedRunEndBlocked as unknown as Record<string, unknown>).goal)?.status).toBe('blocked')
   })
 
-  it('does nothing once a newer state arrived, or the goal was cleared', () => {
-    expect(goalRefreshNeeded(goal({ updatedAt: 5 }), goal({ updatedAt: 9, status: 'complete' }))).toBe(false)
-    expect(goalRefreshNeeded(goal(), null)).toBe(false)
-    expect(goalRefreshNeeded(goal(), goal({ id: 'g2' }))).toBe(false)
+  it('goal:null clears it, and a payload without a goal key leaves it', () => {
+    expect(parseGoal(merge(row, sessionsChangedGoalCleared as unknown as Record<string, unknown>).goal)).toBeNull()
+    expect(parseGoal(merge(row, sessionsChangedGlobalNoGoal as unknown as Record<string, unknown>).goal)?.id).toBe(goalActive.id)
   })
 
-  it('ignores goals that were not active at the end of the run', () => {
-    expect(goalRefreshNeeded(goal({ status: 'paused' }), goal({ status: 'paused' }))).toBe(false)
-    expect(goalRefreshNeeded(null, null)).toBe(false)
+  it('applies whatever the reason', () => {
+    expect(parseGoal(merge({ key: SESSION_KEY }, sessionsChangedCoalesced as unknown as Record<string, unknown>).goal)?.status).toBe('active')
   })
 })

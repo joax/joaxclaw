@@ -1,18 +1,15 @@
 import { Target } from 'lucide-react'
 import { Pill } from '../ui/Pill'
 import { toneColor } from '../../lib/stateTone'
-import { useGatewaySupport } from '../../lib/useGatewaySupport'
-import { GOAL_START_CAPABILITY, goalView, isOpenGoal, parseGoal } from '../../lib/goals'
+import { goalView, isOpenGoal, parseGoal } from '../../lib/goals'
 import { useSessionsStore } from '../../store/sessions'
+import { useGoalsSupported } from './GoalControl'
+
+export { useGoalsSupported }
 
 // Where a chat's goal shows outside the header (PRD 04-c): a Target marker on chat-list
 // rows and a Goal column in Sessions. Both only for a goal that isn't done, and only on
 // a gateway that has goals, like the header control.
-
-/** Goals are on this gateway (the same gate as the header control). */
-export function useGoalsSupported(): boolean {
-  return useGatewaySupport({ capabilities: [GOAL_START_CAPABILITY], methods: ['sessions.goal.update', 'sessions.goal.clear'] }).supported
-}
 
 /** The chat-list marker: a Target icon in the goal's tone, for a row whose session has an open goal. */
 export function GoalMarker({ sessionKey, size = 11 }: { sessionKey?: string; size?: number }) {

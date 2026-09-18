@@ -3,7 +3,7 @@ import { nanoid } from '../lib/nanoid'
 import { gatewayClient } from '../lib/gateway'
 import type { Session } from '../lib/types'
 import {
-  actionRunsTurn, buildClearParams, buildUpdateParams, classifyGoalError, goalErrorMessage, goalErrorPolicy, goalRefreshNeeded, parseGoal,
+  actionRunsTurn, buildClearParams, buildUpdateParams, eligibleSessionKey, goalErrorMessage, goalErrorPolicy, goalRefreshNeeded, parseGoal,
   shouldApplyGoal, validateObjective, type GoalAction, type GoalErrorClass, type SessionGoal,
 } from '../lib/goals'
 import { useSessionsStore } from './sessions'
@@ -46,6 +46,12 @@ interface GoalsState {
   /** The last operation that failed without an answer, kept so Retry resends it as is. */
   failed: Record<string, GoalOp>
   errors: Record<string, GoalError>
+  /**
+   * Notes this app sent with Resume/Continue, per session. The gateway stores them in the
+   * same `lastStatusNote` the agent writes its reasons to, so this is how the popover
+   * tells "Your note" from the agent's.
+   */
+  sentNotes: Record<string, string[]>
   start: (convId: string, objective: string) => Promise<boolean>
   act: (convId: string, sessionKey: string, goal: SessionGoal, action: Exclude<GoalAction, 'startNew'>, extra?: { note?: string; objective?: string }) => Promise<boolean>
   retry: (convId: string) => Promise<boolean>
@@ -55,12 +61,16 @@ interface GoalsState {
 // A goal ack or update result, as far as the store needs it.
 interface GoalResult { goal?: unknown; replayed?: boolean; status?: string }
 
-/** Write a goal (or none) onto its session row, unless the row already has something newer. */
-function writeRowGoal(sessionKey: string, goal: SessionGoal | null) {
+/**
+ * Write a goal (or none) onto its session row, unless the row already has something
+ * newer. A start always writes: the gateway only starts a goal when there is none, so
+ * whatever the row still shows is stale.
+ */
+function writeRowGoal(sessionKey: string, goal: SessionGoal | null, isStart = false) {
   useSessionsStore.setState(s => {
     const row = s.sessions.find(x => x.key === sessionKey)
     if (!row) return { sessions: [{ key: sessionKey, goal } as Session, ...s.sessions] }
-    if (goal && !shouldApplyGoal(parseGoal(row.goal), goal)) return {}
+    if (goal && !isStart && !shouldApplyGoal(parseGoal(row.goal), goal)) return {}
     return { sessions: s.sessions.map(x => x.key === sessionKey ? { ...x, goal } : x) }
   })
 }
@@ -108,7 +118,8 @@ export const useGoalsStore = create<GoalsState>((set, get) => {
     try {
       return await gatewayClient.request<GoalResult>(op.method!, op.params!)
     } catch (err) {
-      undoTurn()
+      // A gateway refusal means no turn; an unanswered request may still have started one.
+      undoTurn(!!(err && typeof err === 'object' && 'gatewayError' in err))
       throw err
     }
   }
@@ -124,13 +135,14 @@ export const useGoalsStore = create<GoalsState>((set, get) => {
         // than trusting the stored goal.
         await refreshGoalRows()
       } else if (sessionKey) {
-        writeRowGoal(sessionKey, res?.status === 'cleared' ? null : parseGoal(res?.goal))
+        writeRowGoal(sessionKey, res?.status === 'cleared' ? null : parseGoal(res?.goal), op.action === 'start')
       }
+      const note = typeof op.params?.note === 'string' ? op.params.note : undefined
+      if (note && sessionKey) set(s => ({ sentNotes: { ...s.sentNotes, [sessionKey]: [...(s.sentNotes[sessionKey] ?? []), note].slice(-20) } }))
       finish(convId)
       return true
     } catch (err) {
-      const cls = classifyGoalError(err)
-      const policy = goalErrorPolicy(cls, retried)
+      const policy = goalErrorPolicy(err, retried)
       if (policy.next === 'resend') {
         // The gateway is still admitting this exact request; the same one again resolves it.
         await new Promise(r => setTimeout(r, RETRY_ADMITTING_MS))
@@ -138,8 +150,9 @@ export const useGoalsStore = create<GoalsState>((set, get) => {
       }
       if (policy.next === 'reissue') return run(convId, reissue(op), { ...retried, conflict: true })
       if (policy.refresh) void refreshGoalRows()
-      const retryable = policy.retryable
-      finish(convId, { cls, message: goalErrorMessage(err), retryable }, retryable ? op : undefined)
+      // Kept only for an unchanged resend: the gateway fingerprints every param, so a
+      // Retry must send exactly these bytes to get the receipt instead of a conflict.
+      finish(convId, { cls: policy.cls, message: goalErrorMessage(err), retryable: policy.retryable }, policy.retryable ? op : undefined)
       return false
     }
   }
@@ -156,6 +169,7 @@ export const useGoalsStore = create<GoalsState>((set, get) => {
     inflight: {},
     failed: {},
     errors: {},
+    sentNotes: {},
 
     async start(convId, objective) {
       if (busy(convId)) return false
@@ -201,22 +215,27 @@ export const useGoalsStore = create<GoalsState>((set, get) => {
   }
 })
 
-// The run-end fallback (FR-10): a goal that was active when a run finished and hasn't
-// changed 2 s later gets its row re-read once, in case the agent marked it done or
-// blocked and the gateway hasn't broadcast that yet.
+// The run-end fallback (FR-10). The agent's update_goal and create_goal send no
+// sessions.changed of their own: the new goal rides on the run-end sessions.changed
+// snapshot, which the sessions store merges. If that snapshot hasn't come 2 s after the
+// final frame and the row's goal hasn't moved, the recent rows are re-read once, so an
+// agent marking a goal done or blocked (or creating one) still reaches the chip.
 const GOAL_SETTLE_MS = 2_000
 const settling = new Set<string>()
+const lastChangedAt = new Map<string, number>()
 gatewayClient.on(frame => {
-  if (frame.event !== 'chat') return
   const p = frame.payload as { sessionKey?: unknown; state?: unknown } | undefined
   const key = typeof p?.sessionKey === 'string' ? p.sessionKey : ''
-  if (p?.state !== 'final' || !key || settling.has(key)) return
+  if (!key) return
+  if (frame.event === 'sessions.changed') { lastChangedAt.set(key, Date.now()); return }
+  if (frame.event !== 'chat' || p?.state !== 'final' || settling.has(key)) return
+  if (!eligibleSessionKey(key) || !gatewayClient.hasMethod('sessions.goal.update')) return
   const goalOf = () => parseGoal(useSessionsStore.getState().sessions.find(s => s.key === key)?.goal)
   const atFinal = goalOf()
-  if (atFinal?.status !== 'active') return
+  const finalAt = Date.now()
   settling.add(key)
   setTimeout(() => {
     settling.delete(key)
-    if (goalRefreshNeeded(atFinal, goalOf())) void refreshGoalRows()
+    if (goalRefreshNeeded(atFinal, goalOf(), (lastChangedAt.get(key) ?? 0) >= finalAt)) void refreshGoalRows()
   }, GOAL_SETTLE_MS)
 })
