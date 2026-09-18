@@ -155,7 +155,9 @@ export function buildBrowserApi() {
     localstore,
     system: { homedir: '' },
     metrics: { get: () => Promise.resolve({ ok: false, cpu: 0, ramUsed: 0, ramTotal: 0, gpu: [] }) },
-    ollama: { watch: noop, probe: () => Promise.resolve({ ok: false }), fetch: () => Promise.resolve({ ok: false }), onProgress: (_cb: unknown): Unsub => noop },
+    // `watch` must return a promise: the progress store chains `.catch` on it, and an
+    // undefined here threw inside a render effect and blanked the page mid-reply.
+    ollama: { watch: () => Promise.resolve({ ok: false }), probe: () => Promise.resolve({ ok: false }), fetch: () => Promise.resolve({ ok: false }), onProgress: (_cb: unknown): Unsub => noop },
     ws,
     deviceAuth,
   }
