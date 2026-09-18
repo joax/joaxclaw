@@ -1,8 +1,10 @@
 // One install flow for every place that installs a plugin: the Browse modal, the channel
 // form and Meetings setup.
 //
-// `plugins.install` never restarts the gateway. It always answers `restartRequired: true`
-// and leaves the restart to the client, which is how OpenClaw's own Control UI does it:
+// `plugins.install` answers `restartRequired: true`. On 2026.9.4 the gateway usually
+// restarts on its own right after, because the install changed a plugin source in the
+// config (seen live), but the client asks for the restart anyway, as OpenClaw's own
+// Control UI does:
 // install → `gateway.restart.request` → wait for a hello-ok with a NEW `server.bootId` →
 // re-read `plugins.list` to see what the plugin actually came up as. Before this, the app
 // stopped after the first step and told you to restart the gateway yourself, which on a
