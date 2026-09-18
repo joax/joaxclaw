@@ -11,6 +11,7 @@
 import { gatewayClient } from './gateway'
 import { isRemoteGatewayState } from '../store/connection'
 import { isTextual, extOf } from './artifacts'
+import { bytesToB64, saveBytesAs } from './saveFile'
 
 /** Bytes we're willing to pull for a preview. Bigger files are read truncated. */
 export const PREVIEW_MAX_BYTES = 1024 * 1024
@@ -54,15 +55,8 @@ export function b64ToBytes(b64: string): Uint8Array {
   return out
 }
 
-export function bytesToB64(bytes: Uint8Array): string {
-  let bin = ''
-  // Chunked so a multi-MB file doesn't blow the argument limit of String.fromCharCode.
-  const CHUNK = 0x8000
-  for (let i = 0; i < bytes.length; i += CHUNK) {
-    bin += String.fromCharCode(...bytes.subarray(i, i + CHUNK))
-  }
-  return btoa(bin)
-}
+// Moved to saveFile with the save half of Save As; re-exported for existing callers.
+export { bytesToB64 }
 
 /** UTF-8 aware — the workspace markdown these agents write is full of emoji. */
 const decodeUtf8 = (bytes: Uint8Array): string => new TextDecoder().decode(bytes)
@@ -193,10 +187,6 @@ export async function readHostFile(path: string, opts?: { maxBytes?: number }): 
 
 // ── export ────────────────────────────────────────────────────────────────────
 
-interface SaveApi { saveAs?: (name: string, base64: string) => Promise<{ ok: boolean; path?: string; canceled?: boolean; error?: string }> }
-const saveApi = (): SaveApi | undefined =>
-  (window as unknown as { api?: { file?: SaveApi } }).api?.file
-
 export interface SaveResult { ok: boolean; canceled?: boolean; path?: string; error?: string }
 
 /**
@@ -210,24 +200,6 @@ export async function saveHostFileAs(path: string, name?: string): Promise<SaveR
   const bytes = file.bytes ?? new TextEncoder().encode(file.text ?? '')
   const filename = name || (file.path.split('/').pop() ?? 'download')
 
-  const native = saveApi()?.saveAs
-  if (native) {
-    const res = await native(filename, bytesToB64(bytes))
-    return { ok: !!res?.ok, canceled: res?.canceled, path: res?.path, error: res?.error }
-  }
-
-  // Browser / PWA: synthesize a download. Copy into a fresh ArrayBuffer so the Blob
-  // never sees a view over a larger buffer.
-  const copy = new Uint8Array(bytes.length)
-  copy.set(bytes)
-  const blob = new Blob([copy.buffer], { type: file.mediaType ?? guessMediaType(path) })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = filename
-  document.body.appendChild(a)
-  a.click()
-  a.remove()
-  setTimeout(() => URL.revokeObjectURL(url), 10_000)
-  return { ok: true }
+  const res = await saveBytesAs(filename, bytes, file.mediaType ?? guessMediaType(path))
+  return { ok: res.ok, canceled: res.canceled, path: res.path, error: res.error }
 }
