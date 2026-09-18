@@ -146,7 +146,8 @@ export interface Refusal {
 }
 
 export type RunResponse =
-  | { kind: 'started'; runId: string }
+  /** No runId before 2026.9: the run can't be followed, only judged after the restart. */
+  | { kind: 'started'; runId?: string }
   | { kind: 'already-current'; runId?: string }
   | { kind: 'refused'; runId?: string; refusal: Refusal }
 
@@ -154,7 +155,9 @@ export type RunResponse =
  * Read an `update.run` reply. It is a *successful* RPC either way: `ok:false` with
  * `result.reason` is a refusal (restarts off, an outside supervisor, another update
  * running…), and `already-current` is a no-op, not a failure. For a managed service,
- * `ok:true` means the detached updater took over and the run carries on without us.
+ * `ok:true` means the detached updater took over and the run carries on without us,
+ * even though `result.status` says "skipped". Every call, refusals included, creates a
+ * run in the gateway's ledger and returns its runId (2026.9; 2026.6.5 sends none).
  */
 export function parseRunResponse(raw: unknown): RunResponse {
   const r = obj(raw) ?? {}
@@ -163,7 +166,7 @@ export function parseRunResponse(raw: unknown): RunResponse {
   const handoff = obj(r.handoff)
   const reason = str(result?.reason) ?? str(r.code)
   if (reason === 'already-current') return { kind: 'already-current', ...(runId ? { runId } : {}) }
-  if (r.ok === true && runId) return { kind: 'started', runId }
+  if (r.ok === true) return { kind: 'started', ...(runId ? { runId } : {}) }
   const message = str(r.message) ?? str(handoff?.message)
   const command = str(handoff?.command)
   return {
@@ -181,6 +184,10 @@ export function parseRunResponse(raw: unknown): RunResponse {
 export function rpcErrorRefusal(err: unknown): Refusal {
   const ge = obj((err as { gatewayError?: unknown } | null)?.gatewayError)
   const retryAfterMs = num(ge?.retryAfterMs)
+  // The drain before a restart also answers UNAVAILABLE + retryAfterMs; that isn't "busy".
+  if (obj(ge?.details)?.reason === 'gateway-restarting') {
+    return { reason: 'rpc-error', message: 'The gateway is restarting. Try again in a moment.' }
+  }
   if (ge?.code === 'UNAVAILABLE' && retryAfterMs !== undefined) {
     return { reason: 'rate-limited', message: String(Math.max(1, Math.ceil(retryAfterMs / 1000))) }
   }
@@ -209,6 +216,16 @@ export function refusalCopy(refusal: Refusal): RefusalCopy {
       return { text: 'Another update is already running. Wait for it to finish.', action: 'none' }
     case 'update-campaign-applying':
       return { text: 'An automatic update is already being applied.', action: 'none' }
+    // Reasons the 2026.9.4 source can return that the PRD's list doesn't name.
+    case 'managed-service-handoff-failed':
+      return { text: "The gateway couldn't start its service's updater. Run this on the gateway host instead:", action: 'command', command: refusal.command ?? 'openclaw update' }
+    case 'owner_required':
+      return { text: "Only the gateway's owner can start an update.", action: 'none' }
+    case 'invalid-update-target':
+    case 'unsupported-update-target':
+      return { text: "The gateway can't install the version it was asked for. Run this on the gateway host instead:", action: 'command', command: 'openclaw update' }
+    case 'update-target-upstream-mismatch':
+      return { text: 'The version it was asked for comes from a different branch than the gateway follows.', action: 'viaAgent' }
     case 'rate-limited':
       return { text: `The gateway is busy. Try again in ${refusal.message ?? '60'}s.`, action: 'none' }
     case 'rpc-error':
