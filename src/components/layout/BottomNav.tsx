@@ -1,13 +1,14 @@
 import { useState } from 'react'
 import {
   LayoutDashboard, MessageSquare, Bot, Mic, MoreHorizontal,
-  Brain, GitBranch, UsersRound, Timer, Server, Palette, Settings, HelpCircle, Wallet,
+  Brain, GitBranch, UsersRound, Timer, Server, Palette, Settings, HelpCircle, Wallet, Video,
   type LucideIcon,
 } from 'lucide-react'
 import type { NavSection } from '../../App'
 import { HelpModal } from '../help/HelpModal'
 import { useHelpStore } from '../../store/help'
 import { BottomSheet } from '../ui/BottomSheet'
+import { useHiddenNavSections } from '../meetings/navGate'
 
 // Mobile primary navigation: a fixed bottom tab bar (thumb zone) with the four
 // day-to-day surfaces + a "More" tab that opens a bottom sheet with everything
@@ -31,6 +32,7 @@ const MORE_GROUPS: { heading: string; items: NavItem[] }[] = [
     { id: 'crons',     Icon: Timer,      label: 'Automations' },
   ] },
   { heading: 'Workspace', items: [
+    { id: 'meetings',  Icon: Video,      label: 'Meetings' },
     { id: 'obsidian',  Icon: Brain,      label: 'Memory' },
   ] },
   { heading: 'Configuration', items: [
@@ -48,6 +50,7 @@ interface Props { section: NavSection; onNavigate: (s: NavSection) => void; disa
 export function BottomNav({ section, onNavigate, disabledSections = [] }: Props) {
   const [moreOpen, setMoreOpen] = useState(false)
   const { open: helpOpen, tab: helpTab, openHelp, closeHelp } = useHelpStore()
+  const hidden = useHiddenNavSections()
   // "More" reads as active whenever the current section lives inside the sheet.
   const moreActive = MORE_IDS.has(section)
 
@@ -84,7 +87,7 @@ export function BottomNav({ section, onNavigate, disabledSections = [] }: Props)
                 <p style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-secondary)', padding: '6px 8px' }}>
                   {g.heading}
                 </p>
-                {g.items.map(it => (
+                {g.items.filter(it => !hidden.has(it.id)).map(it => (
                   <MoreRow
                     key={it.id} Icon={it.Icon} label={it.label}
                     active={section === it.id} disabled={disabledSections.includes(it.id)}

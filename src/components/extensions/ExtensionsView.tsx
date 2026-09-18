@@ -8,6 +8,7 @@ import { useSkillsStore } from '../../store/skills'
 import { useHelpStore } from '../../store/help'
 import { Btn } from '../ui/Btn'
 import { PluginBrowser } from './PluginBrowser'
+import { usePluginCatalogStore } from '../../store/pluginCatalog'
 import { SkillBrowser } from './SkillBrowser'
 import { Input } from '../ui/Input'
 import { PluginConfigModal } from './PluginConfigModal'
@@ -36,7 +37,9 @@ export function ExtensionsView({ onOpenChat }: { onOpenChat?: () => void }) {
       : undefined
   const onUpdatePlugin = async () => { setUpdating(true); await startPluginUpdate(onOpenChat); setUpdating(false) }
 
-  const [tab, setTab] = useState<Tab>('skills')
+  // A plugin install restarts the gateway, which unmounts this view. Browse reopens on the
+  // Plugins tab afterwards, so the install's outcome shows where it was started.
+  const [tab, setTab] = useState<Tab>(() => usePluginCatalogStore.getState().browserOpen ? 'plugins' : 'skills')
   const [search, setSearch] = useState('')
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const toggleExpanded = (id: string) => setExpanded(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
@@ -44,11 +47,26 @@ export function ExtensionsView({ onOpenChat }: { onOpenChat?: () => void }) {
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
   const [showAddSkill, setShowAddSkill] = useState(false)
   const [showAddPlugin, setShowAddPlugin] = useState(false)
-  const [browsing, setBrowsing] = useState(false)
+  const [browsing, setBrowsingState] = useState(() => usePluginCatalogStore.getState().browserOpen)
+  const setBrowsing = (v: boolean) => { setBrowsingState(v); usePluginCatalogStore.getState().setBrowserOpen(v && tab === 'plugins') }
   const [mdModal, setMdModal] = useState<{ skill: Skill } | null>(null)
   const [configPlugin, setConfigPlugin] = useState<Plugin | null>(null)
 
   useEffect(() => { load() }, [])
+
+  // openPluginBrowser() from elsewhere (Meetings) while this view is already mounted.
+  const browserRequested = usePluginCatalogStore(s => s.browserOpen)
+  useEffect(() => { if (browserRequested) { setTab('plugins'); setBrowsingState(true) } }, [browserRequested])
+
+  // Manage / Configure from the catalog: the Configure modal needs the extensions-store
+  // row, which a just-installed plugin may not have yet.
+  const openPluginConfig = async (pluginId: string) => {
+    let row = useExtensionsStore.getState().plugins.find(p => p.id === pluginId)
+    if (!row) { await load(); row = useExtensionsStore.getState().plugins.find(p => p.id === pluginId) }
+    if (!row) return
+    setBrowsing(false)
+    setConfigPlugin(row)
+  }
 
   async function handleSave() {
     try {
@@ -246,6 +264,8 @@ export function ExtensionsView({ onOpenChat }: { onOpenChat?: () => void }) {
         <PluginBrowser
           onClose={() => setBrowsing(false)}
           installedIds={new Set(plugins.map(p => p.id))}
+          onManage={openPluginConfig}
+          onOpenChat={onOpenChat}
         />
       )}
       {browsing && tab === 'skills' && (
