@@ -7,6 +7,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+---
+
+## [0.27.0] - 2026-09-18
+
 ### Added
 
 - **Gateway updates from the app, for every connection.** The update notice used to reach only connections with admin rights; now every connection sees it as soon as it connects. On an admin connection, **Update gateway** asks once, then has the gateway update itself directly, with no agent chat in between. The banner follows each phase (staging, validating, activating, restarting, verifying), the reconnect screen says the gateway is updating and keeps trying for as long as an update can take, and afterwards you're told once whether it worked, failed or was rolled back. If the gateway refuses (restarts turned off, an outside supervisor, a package install it can't update itself), the banner says why and what to do instead. Without admin, **Update via agent** works as before, and a read-only connection gets the command to run on the host.
