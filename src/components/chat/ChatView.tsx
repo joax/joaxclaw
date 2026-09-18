@@ -15,7 +15,7 @@ import { PendingQuestionDock } from './PendingQuestionDock'
 import { ProgressCardDock } from './ProgressCardDock'
 import { StripBar } from '../ui/Strip'
 import { ProgressTrack } from '../ui/ProgressTrack'
-import { ScriptJobDock } from './ScriptJobDock'
+import { BackgroundStrip } from './BackgroundStrip'
 import { MobileChatList } from './MobileChatList'
 import { ThemeBackground } from '../theme/ThemeBackground'
 import { MessageInput } from './MessageInput'
@@ -638,13 +638,12 @@ export function ChatView({ solo }: { solo?: string } = {}) {
               <ContextBar sessionKey={activeConv.sessionKey} />
             )}
             {/* What the agent says it's working through (the gateway's progress_card tool),
-                pinned under the context bar with the same bar so the two read alike. */}
+                pinned under the context bar with the same bar so the two read alike. Then
+                its background work (tasks and scripts), reachable however far you scroll. */}
             <StripBar key={`strips:${activeConv.id}`}>
               <ProgressCardDock sessionKey={activeConv.sessionKey || undefined} />
+              <BackgroundStrip sessionKey={activeConv.sessionKey || undefined} messages={activeConv.messages} />
             </StripBar>
-            {/* Scripts this chat has running — pinned above the thread so progress and
-                output stay reachable however far the user has scrolled. */}
-            <ScriptJobDock key={activeConv.id} messages={activeConv.messages} sessionKey={activeConv.sessionKey} />
             <MessageThread conv={activeConv} showTools={showTools} showReasoning={showReasoning} />
             {/* A gateway-held question for this session, pinned above the composer: the
                 run is parked on the answer, so it must not be scrolled past. */}
