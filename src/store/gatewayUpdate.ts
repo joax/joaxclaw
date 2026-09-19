@@ -3,7 +3,7 @@ import { gatewayClient } from '../lib/gateway'
 import { useConnectionStore } from './connection'
 import {
   availableKey, buildGatewayUpdatePrompt, inferOutcome, isTerminal, mergeRunChanged, outcomeFromRun, outcomeText,
-  isRunId, parseRun, parseRunChanged, parseRunResponse, parseSchedule, parseUpdateAvailable, phaseLabel, refusalFromRun, rememberSeen, rpcErrorRefusal, runTarget,
+  isClientTimeout, isRunId, parseRun, runStartedSince, parseRunChanged, parseRunResponse, parseSchedule, parseUpdateAvailable, phaseLabel, refusalFromRun, rememberSeen, rpcErrorRefusal, runTarget,
   parseReportPreview, parseReportResult,
   type Outcome, type Refusal, type ReportPreview, type ReportResult, type UpdateAvailable, type UpdateRun, type UpdateSchedule,
 } from '../lib/gatewayUpdate'
@@ -51,6 +51,8 @@ export interface FollowedRun {
   startedAtMs: number
   /** False for a run started elsewhere (the CLI, the Control UI) that we only watch. */
   own: boolean
+  /** update.run's reply timed out: the run is followed from the ledger ("still updating"). */
+  slow?: boolean
 }
 
 interface GatewayUpdateState {
@@ -288,6 +290,53 @@ export const useGatewayUpdateStore = create<GatewayUpdateState>((set, get) => {
     return true
   }
 
+  // update.run's reply didn't come within RUN_TIMEOUT_MS. That's our timer, not the
+  // gateway's answer: a blocking git update can still be staging or validating, and will
+  // restart the gateway when it's done. So keep showing "running" and find the run in the
+  // ledger (update.runs.list), then follow it like any other: update.run.changed plus the
+  // 2 s poll, until the gateway itself reports how it ended. Without a ledger (before
+  // 2026.9) there's nothing to follow: say it may still be running, and let the next
+  // reconnect report the version it comes back on.
+  const unconfirmed = (f: FollowedRun) => {
+    stopPolling()
+    setFollowed(null)
+    const target = f.target ? { target: f.target } : {}
+    set({
+      run: null, resultRun: null, refusal: null, dismissedKey: null,
+      outcome: { kind: 'unconfirmed', ...target },
+      // If it was still going, its restart is reported by the version it comes back on.
+      expectingBack: { ...target, atMs: Date.now() },
+    })
+  }
+
+  const followAfterTimeout = async () => {
+    const f = get().followed
+    set({ pending: false })
+    if (!f) return
+    // The first expectation has run out by now; the restart may still be ahead of us.
+    useConnectionStore.getState().expectRestart({
+      reason: 'Gateway is updating',
+      detail: `Updating to ${f.target ?? 'the latest version'}. It's taking a while; JoaxClaw reconnects on its own.`,
+      windowMs: 10 * 60_000,
+      untilMs: Date.now() + 15 * 60_000,
+    })
+    if (!gatewayClient.hasMethod('update.runs.list')) { unconfirmed(f); return }
+    setFollowed({ ...f, slow: true })
+    try {
+      const res = await gatewayClient.request<{ runs?: unknown[] }>('update.runs.list', { limit: 5 })
+      const runs = (Array.isArray(res?.runs) ? res.runs : []).map(parseRun).filter((r): r is UpdateRun => !!r)
+      const mine = runStartedSince(runs, f.startedAtMs)
+      if (mine) { applyRun(mine); return }
+      // The ledger answered and has no run from our click: there's nothing to follow.
+      unconfirmed(f)
+      return
+    } catch {
+      // A transient failure (the drain before a restart, a dropped socket): the poll, or
+      // the reconnect, looks again through update.status.
+    }
+    ensurePolling()
+  }
+
   function ensurePolling() {
     if (pollTimer) return
     if (!pollStartedAtMs) pollStartedAtMs = Date.now()
@@ -506,6 +555,8 @@ export const useGatewayUpdateStore = create<GatewayUpdateState>((set, get) => {
         // The socket dropped before the reply: expected while the gateway restarts. The run
         // is found again after the reconnect (see ingestStatusRuns).
         if (isDropped(e) && useConnectionStore.getState().restartExpectation) set({ pending: false })
+        // We stopped waiting; the gateway didn't say no. Follow the run instead (QA A8).
+        else if (isClientTimeout(e, 'update.run')) await followAfterTimeout()
         else giveUp({ refusal: rpcErrorRefusal(e) })
       }
     },

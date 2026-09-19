@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import {
   helloSnapshotReadNoCampaign, helloSnapshotReadCampaign, helloSnapshotNoRead, helloSnapshot2026_6_5, availableFull, scheduleCountdown,
   evAvailableDetailed, evAvailableCleared, evAvailableClearedLegacy, evAvailableLegacy, evCampaignCountdown,
@@ -8,7 +8,7 @@ import {
   runValidating, runSucceeded, runRefusedRestartDisabled, runsGetRunning, runsGetRolledBack, runsGetNull, errRestartDraining, errInvalidRunId,
   holdOk, holdRefusedAlreadyHeld, holdRefusedNoCampaign, holdRefusedNoSchedule, errHoldUnavailable, evCampaignApplying, evCampaignCleared,
   scheduleHeld, runsListFull, runsListEmpty, errUnknownRunsList, reportPreviewReady, reportSubmitCreated, errReportForbidden, errReportStale,
-  helloSnapshotReadCampaign as helloCampaign,
+  helloSnapshotReadCampaign as helloCampaign, NOW_MS, runsListWithActive, runAbandoned, runRolledBack, runsGetSucceeded, errStartupUnavailable,
 } from './fixtures/sprint/gatewayUpdates'
 
 // The gateway-update store against the real payload shapes (QA fixtures, OpenClaw
@@ -53,7 +53,7 @@ vi.mock('../notifications', () => ({ notify: h.notify }))
 
 const { useGatewayUpdateStore } = await import('../../store/gatewayUpdate')
 const { useConnectionStore } = await import('../../store/connection')
-const { bannerState, refusalCopy, phaseProgress, parseRun } = await import('../gatewayUpdate')
+const { bannerState, bannerTone, outcomeText, refusalCopy, phaseProgress, parseRun } = await import('../gatewayUpdate')
 
 const ADMIN = ['operator.read', 'operator.write', 'operator.admin']
 const realExpectRestart = useConnectionStore.getState().expectRestart
@@ -243,10 +243,10 @@ describe('update.run', () => {
     expect(view().kind).toBe('running')
   })
 
-  it('a timeout is an error, and stops expecting a restart', async () => {
-    h.client.handlers['update.run'] = () => { throw new Error('Request update.run timed out') }
+  it("a gateway error reply is still a refusal (only our own timeout isn't)", async () => {
+    h.client.handlers['update.run'] = fail(errStartupUnavailable)
     await useGatewayUpdateStore.getState().runUpdate()
-    expect(useGatewayUpdateStore.getState().refusal).toEqual({ reason: 'rpc-error', message: 'Request update.run timed out' })
+    expect(useGatewayUpdateStore.getState().refusal).toMatchObject({ reason: 'rate-limited' })
     expect(useConnectionStore.getState().restartExpectation).toBeNull()
   })
 
@@ -256,6 +256,111 @@ describe('update.run', () => {
     expect(useGatewayUpdateStore.getState().followed).toMatchObject({ target: '2026.9.5' })
     expect(useGatewayUpdateStore.getState().followed?.runId).toBeUndefined()
     expect(view().kind).toBe('running')
+  })
+})
+
+// QA A8: update.run is sent with a 15 min request timeout, and a blocking update from a
+// source checkout can take longer. Our timer running out isn't the gateway refusing:
+// follow the run instead.
+describe('update.run times out on our side (QA A8)', () => {
+  const TIMEOUT = () => { throw new Error('Request update.run timed out') }
+  // The fixtures' runs were created at T0 (NOW_MS - 60 s); the click happens then too.
+  const T0 = NOW_MS - 60_000
+  beforeEach(async () => {
+    vi.useFakeTimers({ now: T0 })
+    connect(ADMIN, { updateAvailable: availableFull })
+    useGatewayUpdateStore.getState().ingestHello()
+    h.client.methods = new Set(['update.run', 'update.status', 'update.runs.get', 'update.runs.list'])
+    h.client.handlers['update.status'] = () => statusNothing
+    h.client.handlers['update.run'] = TIMEOUT
+    h.notify.mockClear()
+    // A fresh start: no poll timer left over from an earlier test.
+    await useGatewayUpdateStore.getState().start()
+    h.client.calls.length = 0
+    // statusNothing cleared the notice; the click is on 2026.9.5.
+    useGatewayUpdateStore.setState({ available: availableFull })
+  })
+  afterEach(() => { vi.useRealTimers() })
+
+  it('shows "still updating", finds the run in update.runs.list and follows it', async () => {
+    h.client.handlers['update.runs.list'] = () => runsListWithActive
+    h.client.handlers['update.runs.get'] = () => ({ run: runValidating })
+    await useGatewayUpdateStore.getState().runUpdate()
+    const s = useGatewayUpdateStore.getState()
+    expect(s.refusal).toBeNull()
+    expect(s.outcome).toBeNull()
+    expect(s.pending).toBe(false)
+    expect(s.followed).toMatchObject({ runId: RUN_IDS.ours, target: '2026.9.5', slow: true, own: true })
+    expect(s.run?.phase).toBe('validating')
+    expect(h.client.calls.find(c => c.method === 'update.runs.list')?.params).toEqual({ limit: 5 })
+    // The restart may still be ahead: the overlay is told to wait for it again.
+    expect(useConnectionStore.getState().restartExpectation).not.toBeNull()
+    expect(view().kind).toBe('running')
+    expect(bannerState({ available: null, running: { slow: s.followed?.slow, run: s.run }, refusal: null, outcome: null, skipped: null, dismissedKey: null })).toMatchObject({ kind: 'running', slow: true })
+    expect(s.ownRunIds).toContain(RUN_IDS.ours)
+  })
+
+  it('concludes only when the gateway reports the run finished', async () => {
+    h.client.handlers['update.runs.list'] = () => runsListWithActive
+    let answer: () => unknown = () => ({ run: runValidating })
+    h.client.handlers['update.runs.get'] = () => answer()
+    await useGatewayUpdateStore.getState().runUpdate()
+    await vi.advanceTimersByTimeAsync(2000)
+    answer = fail(errRestartDraining)
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(view().kind).toBe('running')
+    expect(useGatewayUpdateStore.getState().refusal).toBeNull()
+    answer = () => ({ run: runSucceeded })
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(view()).toMatchObject({ kind: 'result', outcome: { kind: 'ok', version: '2026.9.5' } })
+    expect(useGatewayUpdateStore.getState().followed).toBeNull()
+  })
+
+  it('a run that already ended by then is reported by its record', async () => {
+    h.client.handlers['update.runs.list'] = () => ({ runs: [runSucceeded, runRolledBack] })
+    await useGatewayUpdateStore.getState().runUpdate()
+    expect(view()).toMatchObject({ kind: 'result', outcome: { kind: 'ok', runId: RUN_IDS.ours } })
+  })
+
+  it('when the ledger read fails too, keeps following and picks the run up from update.run.changed', async () => {
+    h.client.handlers['update.runs.list'] = fail(errRestartDraining)
+    h.client.handlers['update.runs.get'] = () => runsGetSucceeded
+    await useGatewayUpdateStore.getState().runUpdate()
+    expect(useGatewayUpdateStore.getState().refusal).toBeNull()
+    expect(useGatewayUpdateStore.getState().followed).toMatchObject({ slow: true })
+    expect(view().kind).toBe('running')
+    h.client.emit('update.run.changed', evRunChangedValidating)
+    expect(useGatewayUpdateStore.getState().followed?.runId).toBe(RUN_IDS.ours)
+    expect(view().kind).toBe('running')
+    h.client.emit('update.run.changed', { runId: RUN_IDS.ours, phase: 'finished', status: 'succeeded', updatedAtMs: T0 + 132_000 })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(view()).toMatchObject({ kind: 'result', outcome: { kind: 'ok' } })
+  })
+
+  it('a ledger with no run from our click is "may still be running", not a refusal', async () => {
+    h.client.handlers['update.runs.list'] = () => ({ runs: [runAbandoned, runRolledBack] })
+    await useGatewayUpdateStore.getState().runUpdate()
+    const s = useGatewayUpdateStore.getState()
+    expect(s.refusal).toBeNull()
+    expect(s.followed).toBeNull()
+    expect(s.outcome).toEqual({ kind: 'unconfirmed', target: '2026.9.5' })
+  })
+
+  it('an older gateway without update.runs.* gets the neutral "check the Gateway tab" line', async () => {
+    h.client.methods = new Set(['update.run', 'update.status'])
+    await useGatewayUpdateStore.getState().runUpdate()
+    const s = useGatewayUpdateStore.getState()
+    expect(s.refusal).toBeNull()
+    expect(s.followed).toBeNull()
+    const v = view()
+    expect(v).toMatchObject({ kind: 'result', outcome: { kind: 'unconfirmed' } })
+    expect(bannerTone(v)).toBe('idle')
+    expect(outcomeText(s.outcome!)).toBe('The update may still be running — check the Gateway tab.')
+    expect(h.client.calls.some(c => c.method === 'update.runs.list')).toBe(false)
+    // If it was still going, the reconnect after its restart says which version it's on.
+    h.client.serverVersion = '2026.9.5'
+    await useGatewayUpdateStore.getState().start()
+    expect(useGatewayUpdateStore.getState().outcome).toEqual({ kind: 'ok', version: '2026.9.5' })
   })
 })
 
