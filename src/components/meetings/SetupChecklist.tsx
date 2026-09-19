@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { CheckCircle2, Circle, AlertCircle, ChevronRight, Bot } from 'lucide-react'
+import { CheckCircle2, Circle, AlertCircle, ChevronRight, Bot, Loader2 } from 'lucide-react'
 import { useMeetingsStore, focusChat } from '../../store/meetings'
 import { usePluginCatalogStore } from '../../store/pluginCatalog'
 import { useConnectionStore, useIsRemoteGateway } from '../../store/connection'
@@ -7,7 +7,7 @@ import { gatewayClient } from '../../lib/gateway'
 import { gatewayHost } from '../../lib/ollamaHealth'
 import { sendViaAgent } from '../../lib/agentPrompt'
 import { officialTarget } from '../../lib/pluginInstall'
-import { checklistState, pluginReadiness, PLATFORM_LIST, type Platform, type PlatformId, type PluginReadiness } from '../../lib/meetings'
+import { captureState, checklistState, pluginReadiness, PLATFORM_LIST, type Platform, type PlatformId, type PluginReadiness } from '../../lib/meetings'
 import { toneColor } from '../../lib/stateTone'
 import { Card } from '../ui/Card'
 import { Btn } from '../ui/Btn'
@@ -24,8 +24,18 @@ import { InstallStatus } from '../extensions/InstallStatus'
 export function useMeetingsSetup() {
   const status = useMeetingsStore(s => s.status)
   const plugins = useMeetingsStore(s => s.plugins)
+  const statusRead = useMeetingsStore(s => s.statusRead)
   const captureFallback = useMeetingsStore(s => s.captureFallback)
-  const capture = status ? status.enabled : captureFallback
+  const setupRead = useMeetingsStore(s => s.setupRead)
+  const requested = useMeetingsStore(s => s.captureRequested)
+  const connectionSeq = useConnectionStore(s => s.connectionSeq)
+  // null while checking: a read from before the last reconnect is never shown.
+  const capture = captureState({
+    status: status && statusRead ? { value: status.enabled, ...statusRead } : null,
+    config: captureFallback !== null && setupRead ? { value: captureFallback, ...setupRead } : null,
+    connectionSeq,
+    requested,
+  })
   const readiness = {} as Record<PlatformId, PluginReadiness>
   const errors = {} as Partial<Record<PlatformId, string>>
   for (const p of PLATFORM_LIST) {
@@ -87,6 +97,17 @@ function CaptureItem({ capture }: { capture: boolean | null }) {
   const admin = useConnectionStore(s => s.grantedScopes.includes('operator.admin'))
   const { captureSaving, captureError, setCaptureOn } = useMeetingsStore()
   if (capture) return <Item state="done"><span>Meeting notes are on</span></Item>
+  // Neutral until this connection has read it (never the previous connection's answer),
+  // and while the change is being saved.
+  if (capture === null || captureSaving) {
+    return (
+      <Item state="todo">
+        <span className="flex items-center gap-1.5" style={{ color: 'var(--text-secondary)' }} role="status">
+          <Loader2 size={12} className="animate-spin" /> {captureSaving ? 'Turning on meeting notes…' : 'Checking meeting notes…'}
+        </span>
+      </Item>
+    )
+  }
   return (
     <Item state="todo">
       <span>Meeting notes are off</span>
