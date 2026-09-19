@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   base64ToBytes, buildDiscussMessage, buildSummarizePrompt, canonicalProvider, durationLabel, meetingMeta, meetingPill,
   meetingTitle, providerFilters, providerLabel, readTranscriptError, recentMeetings, summaryHasStructure, tooLargeCommand,
+  captureState, checklistState,
   type TranscriptSession,
 } from '../meetings'
 import * as F from './fixtures/sprint/meetings'
@@ -108,5 +109,63 @@ describe('prompts', () => {
     const bare = buildDiscussMessage(S(F.SESSION_IMPORTED_NO_SUMMARY), undefined)
     expect(bare).not.toMatch(/undefined/)
     expect(bare.endsWith('if you need it.')).toBe(true)
+  })
+})
+
+// QA: after turning notes on, the gateway restarts, and for ~2 s after the reconnect the
+// checklist still said "Meeting notes are off" (the previous connection's status).
+describe('captureState', () => {
+  const read = (value: boolean, seq: number, atMs: number) => ({ value, seq, atMs })
+  const none = { status: null, config: null, requested: null }
+
+  it('is "checking" (null) until this connection has read it', () => {
+    expect(captureState({ ...none, connectionSeq: 1 })).toBeNull()
+  })
+
+  it('shows a read from this connection', () => {
+    expect(captureState({ ...none, status: read(false, 1, 100), connectionSeq: 1 })).toBe(false)
+    expect(captureState({ ...none, status: read(true, 1, 100), connectionSeq: 1 })).toBe(true)
+  })
+
+  it("never shows the previous connection's read after a reconnect", () => {
+    expect(captureState({ ...none, status: read(false, 1, 100), connectionSeq: 2 })).toBeNull()
+    expect(captureState({ ...none, status: read(true, 1, 100), connectionSeq: 2 })).toBeNull()
+    expect(captureState({ ...none, config: read(false, 1, 100), connectionSeq: 2 })).toBeNull()
+  })
+
+  it('prefers transcripts.status, falling back to config (2026.8)', () => {
+    expect(captureState({ ...none, status: read(true, 1, 100), config: read(false, 1, 100), connectionSeq: 1 })).toBe(true)
+    expect(captureState({ ...none, config: read(false, 1, 100), connectionSeq: 1 })).toBe(false)
+    // A stale status doesn't hide a fresh config read.
+    expect(captureState({ ...none, status: read(true, 1, 100), config: read(false, 2, 200), connectionSeq: 2 })).toBe(false)
+  })
+
+  describe('after turning notes on here', () => {
+    const requested = { seq: 1, atMs: 1_000 }
+
+    it('shows the intended state through the restart, not the stale "off"', () => {
+      // Before the restart: the old process still says off.
+      expect(captureState({ ...none, status: read(false, 1, 1_500), connectionSeq: 1, requested })).toBe(true)
+      // Reconnected, nothing read yet on the new connection (the QA case).
+      expect(captureState({ ...none, status: read(false, 1, 1_500), connectionSeq: 2, requested })).toBe(true)
+      // A read sent before the change was accepted can't confirm or contradict it.
+      expect(captureState({ ...none, status: read(false, 1, 900), connectionSeq: 1, requested })).toBe(true)
+    })
+
+    it("then takes the gateway's word from the first fresh read, either way", () => {
+      expect(captureState({ ...none, status: read(true, 2, 3_000), connectionSeq: 2, requested })).toBe(true)
+      expect(captureState({ ...none, status: read(false, 2, 3_000), connectionSeq: 2, requested })).toBe(false)
+      expect(captureState({ ...none, config: read(false, 2, 3_000), connectionSeq: 2, requested })).toBe(false)
+    })
+
+    it('an "on" read on the same connection counts (no restart needed)', () => {
+      expect(captureState({ ...none, status: read(true, 1, 1_500), connectionSeq: 1, requested })).toBe(true)
+    })
+
+    it('drives the checklist: notes count as on while checking only because we asked', () => {
+      const plugins = { meet: 'ready', teams: 'missing', zoom: 'missing' } as const
+      expect(checklistState(captureState({ ...none, connectionSeq: 2, requested }), plugins).captureOn).toBe(true)
+      expect(checklistState(captureState({ ...none, connectionSeq: 2 }), plugins).captureOn).toBe(false)
+    })
   })
 })
