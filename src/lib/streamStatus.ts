@@ -84,3 +84,30 @@ export function hasProduced(m: ChatMessage | undefined): boolean {
   const threads = m.threads?.reduce((n, t) => n + t.content.length + (t.reasoning?.length ?? 0) + (t.toolCalls?.length ?? 0), 0) ?? 0
   return m.content.length > 0 || (m.reasoning?.length ?? 0) > 0 || (m.toolCalls?.length ?? 0) > 0 || threads > 0 || !!m.waitingForSession
 }
+
+/**
+ * An assistant turn that finished without anything to show: no text, reasoning, tool
+ * calls, attachments, sub-agent threads or overflow notice. It renders as a bare
+ * "Assistant" bubble, so it's dropped once its run is over. The usual source is a
+ * placeholder for a run that had already ended: the gateway's terminal `sessions.changed`
+ * still says running, and the pane re-attaches to it (see sessionChangePatch). A turn
+ * cut off by a dropped connection is kept: its `interrupted` notice is the content, and
+ * watchSession reuses it when the run comes back.
+ */
+export function isEmptyFinishedTurn(m: ChatMessage): boolean {
+  return m.role === 'assistant'
+    && !m.streaming
+    && !m.interrupted
+    && !m.waitingForSession
+    && !m.content.trim()
+    && !m.reasoning?.trim()
+    && !m.toolCalls?.length
+    && !m.attachments?.length
+    && !m.threads?.length
+    && !m.contextOverflow
+}
+
+/** The messages without empty finished turns; the same array when there are none. */
+export function dropEmptyFinishedTurns(messages: ChatMessage[]): ChatMessage[] {
+  return messages.some(isEmptyFinishedTurn) ? messages.filter(m => !isEmptyFinishedTurn(m)) : messages
+}
