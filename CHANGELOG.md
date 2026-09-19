@@ -9,6 +9,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.27.1] - 2026-09-19
+
+### Fixed
+
+- **Screen readers now announce disabled buttons as unavailable.** App-wide, buttons that can't be used yet, such as **Join and take notes** in Meetings or a button that is busy saving, were announced as ordinary working buttons. They're now marked as unavailable (and busy while working), still ignore clicks and Enter or Space, and stay focusable so their tooltip explaining why still shows.
+- **You can export a chat while it's still running.** Exporting or copying a running chat longer than one page always failed with "This chat changed while it was being read", because the reply kept adding messages during the read. The export now saves the chat as it was when the read started and marks it as still running.
+- **No more empty "Assistant" bubble under a reply.** After a normal send, an empty reply bubble could stay under the answer. The gateway briefly reports a finished run as still running, and the chat attached to it again. The chat now ignores that report, and a reply bubble that ends with nothing in it is removed.
+- **The plugin list and the plugin's details agree on what it needs.** After installing DuckDuckGo, Extensions said "Needs key" while its detail pane said "Nothing to configure". DuckDuckGo needs no key. The list guessed from a built-in table, and on OpenClaw 2026.9.4 it now uses the gateway's own word on whether a plugin needs setup, the same one the catalog shows. A plugin the gateway says still needs configuring is marked **Needs setup**. Older gateways keep the previous check, with DuckDuckGo corrected.
+- **Meetings no longer says notes are off right after you turn them on.** Turning meeting notes on restarts the gateway, and for a couple of seconds after it came back the setup checklist showed the old "Meeting notes are off". It now says "Turning on meeting notes…" and then "Meeting notes are on" through the restart, and after any reconnect it shows "Checking meeting notes…" until the gateway has answered, never an out-of-date answer.
+- **A slow gateway update is no longer reported as refused.** An update from a source checkout that took longer than 15 minutes showed "The gateway didn't update" even though it was still running. JoaxClaw now keeps showing **Still updating**, finds the update in the gateway's history, follows it to the end, and tells you how it ended. On gateways older than 2026.9, which keep no update history, it says the update may still be running and to check the Gateway tab, and reports the version the gateway comes back on.
+
+---
+
 ## [0.27.0] - 2026-09-18
 
 ### Added
