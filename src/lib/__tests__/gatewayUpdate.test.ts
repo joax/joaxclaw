@@ -1,9 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import {
   buildGatewayUpdatePrompt, parseUpdateAvailable, parseSchedule, parseRunResponse, rpcErrorRefusal, refusalCopy,
-  inferOutcome, bannerState, bannerTone, showChannel, runningChatsLine, type BannerInputs,
+  inferOutcome, bannerState, bannerTone, showChannel, runningChatsLine, isClientTimeout, runStartedSince, parseRun, outcomeText, type BannerInputs,
 } from '../gatewayUpdate'
-import { REFUSAL_REASONS, runResponse2026_6_5, errRestartDraining } from './fixtures/sprint/gatewayUpdates'
+import {
+  REFUSAL_REASONS, runResponse2026_6_5, errRestartDraining, errRateLimitedRun, NOW_MS, RUN_IDS, runValidating, runSucceeded, runRolledBack, runAbandoned,
+} from './fixtures/sprint/gatewayUpdates'
 
 describe('buildGatewayUpdatePrompt', () => {
   it('emits the hardened update script', async () => {
@@ -116,6 +118,53 @@ describe('rpcErrorRefusal', () => {
   it("doesn't call the restart drain a rate limit", () => {
     const err = Object.assign(new Error('x'), { gatewayError: errRestartDraining.error })
     expect(rpcErrorRefusal(err)).toEqual({ reason: 'rpc-error', message: 'The gateway is restarting. Try again in a moment.' })
+  })
+})
+
+// QA A8: our 15 min timer running out is not the gateway's verdict on the run.
+describe('isClientTimeout', () => {
+  it("is our own timer on update.run, not the gateway's reply", () => {
+    expect(isClientTimeout(new Error('Request update.run timed out'))).toBe(true)
+    expect(isClientTimeout('Request update.run timed out')).toBe(true)
+  })
+
+  it('a gateway error reply, a drop, or another call timing out is not', () => {
+    expect(isClientTimeout(Object.assign(new Error('Request update.run timed out'), { gatewayError: errRestartDraining.error }))).toBe(false)
+    expect(isClientTimeout(Object.assign(new Error('x'), { gatewayError: errRateLimitedRun.error }))).toBe(false)
+    expect(isClientTimeout(new Error('Connection closed'))).toBe(false)
+    expect(isClientTimeout(new Error('Request update.status timed out'))).toBe(false)
+    expect(isClientTimeout(new Error('Request update.status timed out'), 'update.status')).toBe(true)
+    expect(isClientTimeout(null)).toBe(false)
+  })
+})
+
+describe('runStartedSince', () => {
+  const runs = [runValidating, runSucceeded, runRolledBack, runAbandoned].map(r => parseRun(r)!)
+  const T0 = NOW_MS - 60_000
+
+  it('picks the newest run created since the click (a minute of clock slack)', () => {
+    expect(runStartedSince(runs, T0)?.runId).toBe(RUN_IDS.ours)
+    expect(runStartedSince(runs, T0 + 45_000)?.runId).toBe(RUN_IDS.ours)
+  })
+
+  it('is null when the ledger has nothing that new', () => {
+    expect(runStartedSince(runs, T0 + 5 * 60_000)).toBeNull()
+    expect(runStartedSince([], T0)).toBeNull()
+  })
+
+  it("doesn't depend on the list's order", () => {
+    const older = { ...runs[0], runId: RUN_IDS.cli, createdAtMs: T0 - 30_000 }
+    expect(runStartedSince([older, runs[0]], T0)?.runId).toBe(RUN_IDS.ours)
+    expect(runStartedSince([runs[0], older], T0)?.runId).toBe(RUN_IDS.ours)
+  })
+})
+
+describe('the unconfirmed outcome', () => {
+  it('is neutral, not a failure', () => {
+    const s = bannerState({ available: null, running: null, refusal: null, outcome: { kind: 'unconfirmed', target: '2026.9.5' }, skipped: null, dismissedKey: null })
+    expect(s).toMatchObject({ kind: 'result', key: 'result:unconfirmed:2026.9.5' })
+    expect(bannerTone(s)).toBe('idle')
+    expect(outcomeText({ kind: 'unconfirmed' })).toBe('The update may still be running — check the Gateway tab.')
   })
 })
 

@@ -533,6 +533,46 @@ export function checklistState(capture: boolean | null, plugins: Record<Platform
   return { captureOn, ready, complete: captureOn && ready.length > 0 }
 }
 
+/** When a read was sent, and on which connection (gatewayClient.connectionSeq). */
+export interface ReadStamp { seq: number; atMs: number }
+
+export interface CaptureInputs {
+  /** `transcripts.status`'s `enabled`, and when it was read. */
+  status: ({ value: boolean } & ReadStamp) | null
+  /** `transcripts.enabled` from config.get (2026.8 has no status), and when it was read. */
+  config: ({ value: boolean } & ReadStamp) | null
+  /** The connection now showing. */
+  connectionSeq: number
+  /** Notes were turned on from here: when the change was accepted, and on which connection. */
+  requested: ReadStamp | null
+}
+
+/**
+ * Whether meeting notes are on, for the checklist: true, false, or null for "checking".
+ *
+ * Only a read taken on the current connection counts. Turning notes on restarts the
+ * gateway, and for the moment between the reconnect and the first fresh read, the
+ * previous connection's status still said "off" (QA: the checklist flashed "Meeting notes
+ * are off" for ~2 s after turning them on). A read from an earlier connection is stale by
+ * definition, so it is never shown: the answer is "checking" until a fresh one arrives.
+ *
+ * Once turned on from here, the intended state (on) shows until a read confirms or
+ * contradicts it. A read taken before the change was accepted can't; nor can an "off"
+ * from the same connection, since the old process keeps saying off until its restart.
+ * A fresh read after the restart is the gateway's word, whichever way it goes.
+ */
+export function captureState(i: CaptureInputs): boolean | null {
+  const counts = (r: CaptureInputs['status']): r is NonNullable<CaptureInputs['status']> => {
+    if (!r || r.seq !== i.connectionSeq) return false
+    const req = i.requested
+    if (!req) return true
+    return r.atMs >= req.atMs && (r.seq > req.seq || r.value)
+  }
+  if (counts(i.status)) return i.status.value
+  if (counts(i.config)) return i.config.value
+  return i.requested ? true : null
+}
+
 /** `transcripts.enabled` from a config snapshot. Absent means on (the default). */
 export function captureFromConfig(config: unknown): boolean {
   const t = (config as { transcripts?: { enabled?: unknown } } | null)?.transcripts

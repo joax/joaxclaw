@@ -9,7 +9,7 @@ import {
   captureFromConfig, guestNameFromConfig, meetingTitle, parseMeetingToolResult, pendingPhase, readTranscriptError, toolAction,
   PLATFORMS, PLATFORM_LIST,
   type ChromeCheck, type JoinMode, type JoinOutcome, type PendingJoin, type PendingPhase, type PlatformId,
-  type StoredSummary, type TranscriptErrorKind, type TranscriptSession, type TranscriptStatus, type Utterance,
+  type ReadStamp, type StoredSummary, type TranscriptErrorKind, type TranscriptSession, type TranscriptStatus, type Utterance,
 } from '../lib/meetings'
 
 // The gateway's meeting notes: the transcript library (`transcripts.list` / `get` /
@@ -51,8 +51,14 @@ interface MeetingsState {
   status: TranscriptStatus | null
   /** plugins.list, for the checklist's plugin rows. Null until read (or when it failed). */
   plugins: unknown
+  /** When `status` was read, and on which connection: a read from before a reconnect is stale. */
+  statusRead: ReadStamp | null
   /** 2026.8 has no status: capture comes from config.get instead. */
   captureFallback: boolean | null
+  /** When `captureFallback` (config.get) was read. */
+  setupRead: ReadStamp | null
+  /** Notes were turned on from here and the change accepted; see captureState. */
+  captureRequested: ReadStamp | null
   /** The name each platform joins under (Teams, Zoom, and Meet when signed out). */
   guestNames: Partial<Record<PlatformId, string>>
   captureSaving: boolean
@@ -154,6 +160,11 @@ function writeChromeCheck(c: ChromeCheck) {
   try { localStorage.setItem(chromeKey(), JSON.stringify(c)) } catch { /* storage unavailable */ }
 }
 
+/** Stamp a read as it's sent: the connection it goes out on, and when. */
+const stamp = (): ReadStamp => ({ seq: gatewayClient.connectionSeq, atMs: Date.now() })
+// A drop while the patch is in flight: the gateway may have taken it and be restarting.
+const isDrop = (e: unknown) => /Connection closed|Disconnected|Not connected/i.test(errText(e))
+
 const activeKey = (s: TranscriptStatus | null) => (s?.active ?? []).map(a => a.selector).sort().join('|')
 
 export const useMeetingsStore = create<MeetingsState>((set, get) => {
@@ -205,8 +216,11 @@ export const useMeetingsStore = create<MeetingsState>((set, get) => {
 
   return {
     status: null,
+    statusRead: null,
     plugins: null,
     captureFallback: null,
+    setupRead: null,
+    captureRequested: null,
     guestNames: {},
     captureSaving: false,
     captureError: null,
@@ -266,10 +280,11 @@ export const useMeetingsStore = create<MeetingsState>((set, get) => {
 
     async loadStatus() {
       // 2026.8 has the library but not `status`; the view falls back without it.
-      if (!gatewayClient.hasMethod('transcripts.status')) { set({ status: null }); return }
+      if (!gatewayClient.hasMethod('transcripts.status')) { set({ status: null, statusRead: null }); return }
+      const at = stamp()
       try {
         const res = await gatewayClient.request<TranscriptStatus>('transcripts.status', {})
-        set({ status: res })
+        set({ status: res, statusRead: at })
       } catch { /* keep the last status */ }
     },
 
@@ -419,6 +434,7 @@ export const useMeetingsStore = create<MeetingsState>((set, get) => {
     },
 
     async loadSetup() {
+      const at = stamp()
       const [list, snap] = await Promise.all([
         gatewayClient.hasMethod('plugins.list') ? gatewayClient.request<unknown>('plugins.list', {}).catch(() => null) : Promise.resolve(null),
         gatewayClient.request<{ parsed?: unknown; config?: unknown }>('config.get', {}).catch(() => null),
@@ -426,7 +442,7 @@ export const useMeetingsStore = create<MeetingsState>((set, get) => {
       const config = snap?.parsed ?? snap?.config ?? null
       const guestNames: Partial<Record<PlatformId, string>> = {}
       for (const p of PLATFORM_LIST) guestNames[p.id] = guestNameFromConfig(config, p)
-      set({ plugins: list, guestNames, captureFallback: config ? captureFromConfig(config) : null })
+      set({ plugins: list, guestNames, captureFallback: config ? captureFromConfig(config) : null, setupRead: config ? at : null })
     },
 
     async setCaptureOn() {
@@ -451,8 +467,16 @@ export const useMeetingsStore = create<MeetingsState>((set, get) => {
           if (!/config changed since last load/i.test(errText(e))) throw e
           await patch()
         }
-        set({ captureSaving: false, captureFallback: true })
+        // Not a read: what we asked for. It shows until a read after the restart has the
+        // gateway's word (captureState), instead of the old process's "off".
+        set({ captureSaving: false, captureRequested: stamp() })
       } catch (e) {
+        // The socket went with the patch in flight: likely the restart it causes. Show the
+        // intended state; the first read on the new connection settles it either way.
+        if (isDrop(e) && useConnectionStore.getState().restartExpectation) {
+          set({ captureSaving: false, captureRequested: stamp() })
+          return
+        }
         useConnectionStore.getState().clearRestartExpectation()
         set({ captureSaving: false, captureError: errText(e) })
       }

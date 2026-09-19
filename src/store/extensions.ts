@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { gatewayClient } from '../lib/gateway'
-import { pluginKeyStatus, type PluginKeyStatus } from '../lib/pluginConfig'
+import { resolvePluginKeyStatus, type PluginKeyStatus } from '../lib/pluginConfig'
 import { isRemoteGatewayState } from './connection'
 import { useAgentsStore } from './agents'
 
@@ -241,8 +241,14 @@ export const useExtensionsStore = create<ExtensionsState>((set, get) => ({
         }
       } catch { /* non-critical */ }
 
+      // The gateway's own setup verdict per plugin (plugins.list `state`), read from the
+      // gateway's rows only: the local CLI's rows describe this machine, not the gateway.
+      const gwState = new Map<string, unknown>(gwPlugins.filter(p => p.id).map(p => [p.id, (p as { state?: unknown }).state]))
+      const setupAware = gatewayClient.hasMethod('plugins.catalog.browse')
+      const keyStatusOf = (id: string) => resolvePluginKeyStatus({ pluginId: id, config: fullCfg, gatewayState: gwState.get(id), setupAware })
+
       const configPlugins = normalizePlugins(pluginEntries).map(p => {
-        const keyStatus = pluginKeyStatus(fullCfg, p.id)
+        const keyStatus = keyStatusOf(p.id)
         const meta = pluginMetaMap[p.id]
         if (!meta) return { ...p, keyStatus }
         return {
@@ -275,7 +281,7 @@ export const useExtensionsStore = create<ExtensionsState>((set, get) => ({
           origin: m.origin,
           source: m.source,
           configSchema: m.configSchema,
-          keyStatus: pluginKeyStatus(fullCfg, m.id),
+          keyStatus: keyStatusOf(m.id),
           discovered: true,
         }))
 

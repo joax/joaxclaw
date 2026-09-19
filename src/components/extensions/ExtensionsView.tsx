@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react'
 import { Puzzle, RefreshCw, Plus, Trash2, Check, Loader2, Search, FileText, X, ChevronRight, SlidersHorizontal, CheckCircle2, XCircle, HelpCircle, KeyRound, Download } from 'lucide-react'
 import { useExtensionsStore } from '../../store/extensions'
 import type { Plugin, Skill } from '../../store/extensions'
-import type { PluginKeyStatus } from '../../lib/pluginConfig'
+import { keyStatusNeedsAttention, type PluginKeyStatus } from '../../lib/pluginConfig'
+import { Pill } from '../ui/Pill'
 import { useConnectionStore } from '../../store/connection'
 import { useSkillsStore } from '../../store/skills'
 import { useHelpStore } from '../../store/help'
@@ -80,11 +81,11 @@ export function ExtensionsView({ onOpenChat }: { onOpenChat?: () => void }) {
   const matches = (i: { id: string; name?: string; description?: string }) =>
     !q || i.id.toLowerCase().includes(q) || (i.name ?? '').toLowerCase().includes(q) || (i.description ?? '').toLowerCase().includes(q)
 
-  // Group by attention: needs-setup (enabled but missing an API key) → active → off.
+  // Group by attention: needs setup (enabled but missing a key or required config) → active → off.
   const sActive = skills.filter(s => s.enabled && matches(s))
   const sOff = skills.filter(s => !s.enabled && matches(s))
-  const pNeedsSetup = plugins.filter(p => p.enabled && p.keyStatus === 'missing' && matches(p))
-  const pActive = plugins.filter(p => p.enabled && p.keyStatus !== 'missing' && matches(p))
+  const pNeedsSetup = plugins.filter(p => p.enabled && keyStatusNeedsAttention(p.keyStatus) && matches(p))
+  const pActive = plugins.filter(p => p.enabled && !keyStatusNeedsAttention(p.keyStatus) && matches(p))
   const pOff = plugins.filter(p => !p.enabled && matches(p))
   const shownCount = tab === 'skills' ? sActive.length + sOff.length : pNeedsSetup.length + pActive.length + pOff.length
 
@@ -472,21 +473,14 @@ function SkillMdModal({ skill, onClose }: { skill: Skill; onClose: () => void })
 
 // ── Plugin API-key status badge ───────────────────────────────────────────────
 
+// 'needs-setup' is the gateway's own verdict (2026.9.4), the same one the catalog's detail
+// pane shows as "Needs setup"; 'missing' is the curated key check older gateways fall back on.
 function KeyStatusBadge({ status }: { status?: PluginKeyStatus }) {
-  if (status === 'set') {
-    return (
-      <span title="API key configured" className="flex items-center gap-1 shrink-0" style={{ fontSize: 10, fontWeight: 600, color: 'var(--success)', background: 'color-mix(in srgb, var(--success) 13%, transparent)', padding: '1px 6px', borderRadius: 999 }}>
-        <CheckCircle2 size={11} /> Configured
-      </span>
-    )
+  if (status === 'set') return <Pill tone="done" title="API key configured" icon={<CheckCircle2 size={11} />}>Configured</Pill>
+  if (status === 'needs-setup') {
+    return <Pill tone="needsYou" title="The gateway says this plugin needs configuring before it can run" icon={<SlidersHorizontal size={10} />}>Needs setup</Pill>
   }
-  if (status === 'missing') {
-    return (
-      <span title="This plugin needs an API key" className="flex items-center gap-1 shrink-0" style={{ fontSize: 10, fontWeight: 600, color: 'var(--warning)', background: 'color-mix(in srgb, var(--warning) 13%, transparent)', padding: '1px 6px', borderRadius: 999 }}>
-        <KeyRound size={10} /> Needs key
-      </span>
-    )
-  }
+  if (status === 'missing') return <Pill tone="needsYou" title="This plugin needs an API key" icon={<KeyRound size={10} />}>Needs key</Pill>
   return null
 }
 

@@ -195,6 +195,35 @@ export function rpcErrorRefusal(err: unknown): Refusal {
   return { reason: 'rpc-error', ...(message ? { message } : {}) }
 }
 
+/**
+ * Whether a failed `update.run` is this client giving up on the reply (gateway.ts's own
+ * timer: "Request update.run timed out"), rather than the gateway answering with an
+ * error. The two mean opposite things. A reply the gateway sent is its verdict; a reply we
+ * stopped waiting for says nothing about the run. An unsupervised git update holds its
+ * reply through staging and validation, so a slow one can outlast the 15 minutes we wait
+ * while it carries on, and finishes, on the gateway.
+ */
+export function isClientTimeout(err: unknown, method = 'update.run'): boolean {
+  if (obj((err as { gatewayError?: unknown } | null)?.gatewayError)) return false
+  const message = err instanceof Error ? err.message : typeof err === 'string' ? err : ''
+  return message === `Request ${method} timed out`
+}
+
+/**
+ * The run our timed-out `update.run` created, from `update.runs.list` (newest first).
+ * Every call makes a ledger run as it starts (2026.9), so it's the newest one created
+ * since the click; a minute of slack covers a remote host's clock. Null when the ledger
+ * has nothing that new, which means there's no run of ours to follow.
+ */
+export function runStartedSince(runs: readonly UpdateRun[], startedAtMs: number): UpdateRun | null {
+  let best: UpdateRun | null = null
+  for (const r of runs) {
+    if (r.createdAtMs < startedAtMs - 60_000) continue
+    if (!best || r.createdAtMs > best.createdAtMs) best = r
+  }
+  return best
+}
+
 export interface RefusalCopy {
   text: string
   /** The way round it: hand it to an agent, show the command, or nothing (wait, or fix the config). */
@@ -532,6 +561,7 @@ export function outcomeText(o: Outcome): string {
     case 'back-on': return `The gateway is back on ${o.version}.`
     case 'failed': return `The update to ${o.target} failed.${o.before ? ` The gateway is still on ${o.before}.` : ''}`
     case 'rolled-back': return `The update to ${o.target} didn't pass its checks and was rolled back${o.before ? ` to ${o.before}` : ''}.`
+    case 'unconfirmed': return 'The update may still be running — check the Gateway tab.'
   }
 }
 
@@ -548,6 +578,12 @@ export type Outcome =
   | { kind: 'back-on'; version: string }
   | { kind: 'failed'; target: string; before?: string; runId?: string }
   | { kind: 'rolled-back'; target: string; before?: string; runId?: string }
+  /**
+   * We stopped waiting for update.run's reply and this gateway has no run ledger to ask
+   * (before 2026.9): the update may well still be going, so this is neither a result nor
+   * a refusal.
+   */
+  | { kind: 'unconfirmed'; target?: string }
 
 /**
  * The result after a reconnect when there's no run record to read. If the gateway came
@@ -565,6 +601,8 @@ export interface RunningInput {
   /** The run's record, once known; the phase line is drawn from it. */
   run?: UpdateRun | null
   own?: boolean
+  /** update.run's reply timed out, and the run is followed from the gateway's ledger instead. */
+  slow?: boolean
 }
 
 export interface BannerInputs {
@@ -612,7 +650,7 @@ export function bannerState(i: BannerInputs): BannerState {
 }
 
 function outcomeKey(o: Outcome): string {
-  const id = 'runId' in o && o.runId ? o.runId : 'version' in o ? o.version : o.target
+  const id = 'runId' in o && o.runId ? o.runId : 'version' in o ? o.version : o.target ?? ''
   return `result:${o.kind}:${id}`
 }
 
@@ -646,7 +684,7 @@ export function bannerTone(s: BannerState): StateTone {
     case 'refused': return 'failed'
     case 'campaign': return s.countdown.kind === 'held' ? 'idle' : 'needsYou'
     case 'result':
-      if (s.outcome.kind === 'back-on') return 'idle'
+      if (s.outcome.kind === 'back-on' || s.outcome.kind === 'unconfirmed') return 'idle'
       return s.outcome.kind === 'failed' || s.outcome.kind === 'rolled-back' ? 'failed' : 'done'
     default: return 'working'
   }

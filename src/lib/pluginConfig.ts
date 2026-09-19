@@ -44,7 +44,9 @@ const MODEL_PROVIDERS = [
   'novita', 'sambanova', 'github-copilot', 'azure', 'azure-openai', 'minimax', 'venice',
 ]
 const TTS_PROVIDERS = ['elevenlabs', 'deepgram', 'azure-speech', 'sherpa-onnx-tts', 'openai-whisper', 'openai-whisper-api']
-const WEB_SEARCH = ['exa', 'firecrawl', 'tavily', 'brave', 'duckduckgo', 'serpapi', 'bing']
+// Not DuckDuckGo: it's the key-free search provider (its manifest says
+// `requiresCredential: false`, "no API key required"), so it never has a key to ask for.
+const WEB_SEARCH = ['exa', 'firecrawl', 'tavily', 'brave', 'serpapi', 'bing']
 
 export function pluginConfigSpec(pluginId: string): PluginConfigSpec | null {
   if (MODEL_PROVIDERS.includes(pluginId)) return { apiKey: 'provider', providerBaseUrl: true }
@@ -54,10 +56,54 @@ export function pluginConfigSpec(pluginId: string): PluginConfigSpec | null {
 }
 
 // Whether a plugin's required API key is set in the config.
-//   'set'     — a literal key or a SecretRef is present
-//   'missing' — the plugin needs a key but none is configured
-//   'n/a'     — the plugin doesn't take a curated API key (nothing to complete)
-export type PluginKeyStatus = 'set' | 'missing' | 'n/a'
+//   'set'         — a literal key or a SecretRef is present
+//   'missing'     — the plugin needs a key but none is configured (the curated heuristic)
+//   'needs-setup' — the gateway itself says the plugin's required config is missing
+//   'n/a'         — nothing to complete
+export type PluginKeyStatus = 'set' | 'missing' | 'needs-setup' | 'n/a'
+
+/** Whether the status asks the user to do something (the list's "Needs setup" group). */
+export function keyStatusNeedsAttention(status: PluginKeyStatus | undefined): boolean {
+  return status === 'missing' || status === 'needs-setup'
+}
+
+// ── The gateway's word on setup (plugins.list `state`, OpenClaw 2026.9.4) ────────
+//
+// The list's badge used to come only from the curated catalog above: "this id takes a key
+// at this path; is anything there?" That guesses, and the guess drifted from the gateway.
+// DuckDuckGo was listed as a web-search plugin needing a key, so after installing it the
+// list said "Needs key" while the catalog detail pane, which reads the plugin's declared
+// configuration, said "Nothing to configure". And on 2026.9 web-search keys moved under
+// plugins.entries.<id>.config.webSearch, so the path it checked is the legacy one anyway.
+//
+// 2026.9.4's plugins.list says it directly. Each row's `state` is "needs-setup" when the
+// plugin's manifest configSchema doesn't validate against its (missing) entry config, the
+// same rule the gateway uses to decide whether it can enable the plugin
+// (resolvePluginConfigEnablement), and the same `state` the catalog's `local.state`
+// carries, so the detail pane's "Needs setup" pill and this badge agree. Neither
+// plugins.list nor plugins.inspect describes secrets beyond that, so on such a gateway
+// anything short of "needs-setup" is not a request for a key: at most a key we can see is
+// set, shown as Configured.
+//
+// That `state` arrived with the catalog (plugins.catalog.*, 2026.9.4); 2026.9.3's rows
+// have a `state` without the setup check, and 2026.8's have none. So the heuristic stays,
+// only for gateways without the catalog.
+
+export interface KeyStatusInput {
+  pluginId: string
+  config: Record<string, unknown> | undefined
+  /** The plugin's plugins.list `state` from this gateway, when it has a row for it. */
+  gatewayState?: unknown
+  /** The gateway's plugins.list checks setup (it has plugins.catalog.browse: 2026.9.4+). */
+  setupAware: boolean
+}
+
+export function resolvePluginKeyStatus(i: KeyStatusInput): PluginKeyStatus {
+  const heuristic = pluginKeyStatus(i.config, i.pluginId)
+  if (!i.setupAware || typeof i.gatewayState !== 'string') return heuristic
+  if (i.gatewayState === 'needs-setup') return 'needs-setup'
+  return heuristic === 'set' ? 'set' : 'n/a'
+}
 
 export function pluginKeyStatus(config: Record<string, unknown> | undefined, pluginId: string): PluginKeyStatus {
   const spec = pluginConfigSpec(pluginId)
