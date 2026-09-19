@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest'
 import {
-  pluginConfigSpec, apiKeyPath, readPath, nestedPatch, mergeDeep, pluginKeyStatus,
+  pluginConfigSpec, apiKeyPath, readPath, nestedPatch, mergeDeep, pluginKeyStatus, resolvePluginKeyStatus, keyStatusNeedsAttention,
   curatedFields, fieldsFor, jsonSchemaToFields, type JsonSchema,
 } from '../pluginConfig'
+import { LIST_ROW_ISSUE_TRACKER_INSTALLED, LIST_ROW_VAULT_NOTES } from './fixtures/sprint/pluginCatalog'
 
 describe('pluginConfigSpec / apiKeyPath', () => {
   it('routes model providers to models.providers.<id>.apiKey', () => {
@@ -122,5 +123,52 @@ describe('fieldsFor', () => {
   })
   it('falls back to curated fields when there is no schema', () => {
     expect(fieldsFor({ id: 'openai' })[0].path).toBe('models.providers.openai.apiKey')
+  })
+})
+
+// QA: after installing DuckDuckGo, Extensions said "Needs key" while the catalog's detail
+// pane said "Nothing to configure". The badge now takes the gateway's plugins.list `state`
+// (2026.9.4) wherever it has one, and the curated key check only on older gateways.
+describe('resolvePluginKeyStatus', () => {
+  // A plugins.list row after installing DuckDuckGo on 2026.9.4: installed, enabled, and
+  // nothing required.
+  const ddgRow = { id: 'duckduckgo', installed: true, enabled: true, state: 'enabled' }
+  const noKeys = { tools: { web: { search: {} } } }
+
+  it('DuckDuckGo needs no key, on any gateway', () => {
+    expect(pluginConfigSpec('duckduckgo')).toBeNull()
+    expect(resolvePluginKeyStatus({ pluginId: 'duckduckgo', config: noKeys, gatewayState: ddgRow.state, setupAware: true })).toBe('n/a')
+    expect(resolvePluginKeyStatus({ pluginId: 'duckduckgo', config: noKeys, setupAware: false })).toBe('n/a')
+  })
+
+  it("the gateway's needs-setup wins over the curated check", () => {
+    expect(resolvePluginKeyStatus({ pluginId: 'issue-tracker', config: {}, gatewayState: LIST_ROW_ISSUE_TRACKER_INSTALLED.state, setupAware: true })).toBe('needs-setup')
+    // Even for a plugin the curated catalog thinks has its key.
+    expect(resolvePluginKeyStatus({ pluginId: 'openai', config: { models: { providers: { openai: { apiKey: 'sk' } } } }, gatewayState: 'needs-setup', setupAware: true })).toBe('needs-setup')
+  })
+
+  it("on a setup-aware gateway, anything short of needs-setup isn't a request for a key", () => {
+    for (const state of ['enabled', 'disabled', 'error']) {
+      expect(resolvePluginKeyStatus({ pluginId: 'brave', config: noKeys, gatewayState: state, setupAware: true })).toBe('n/a')
+    }
+    expect(resolvePluginKeyStatus({ pluginId: 'vault-notes', config: {}, gatewayState: LIST_ROW_VAULT_NOTES.state, setupAware: true })).toBe('n/a')
+    // A key we can see is still shown as configured.
+    expect(resolvePluginKeyStatus({ pluginId: 'openai', config: { models: { providers: { openai: { apiKey: 'sk' } } } }, gatewayState: 'enabled', setupAware: true })).toBe('set')
+  })
+
+  it('falls back to the curated check without the data: an older gateway, or no row for the plugin', () => {
+    // 2026.9.3 rows carry a `state` with no setup check: not trusted.
+    expect(resolvePluginKeyStatus({ pluginId: 'brave', config: noKeys, gatewayState: 'enabled', setupAware: false })).toBe('missing')
+    expect(resolvePluginKeyStatus({ pluginId: 'brave', config: noKeys, setupAware: true })).toBe('missing')
+    expect(resolvePluginKeyStatus({ pluginId: 'brave', config: { tools: { web: { search: { apiKey: 'k' } } } }, setupAware: false })).toBe('set')
+    expect(resolvePluginKeyStatus({ pluginId: 'joaxclaw-fs', config: {}, setupAware: false })).toBe('n/a')
+  })
+
+  it('both kinds of "needs" ask for attention', () => {
+    expect(keyStatusNeedsAttention('missing')).toBe(true)
+    expect(keyStatusNeedsAttention('needs-setup')).toBe(true)
+    expect(keyStatusNeedsAttention('set')).toBe(false)
+    expect(keyStatusNeedsAttention('n/a')).toBe(false)
+    expect(keyStatusNeedsAttention(undefined)).toBe(false)
   })
 })
