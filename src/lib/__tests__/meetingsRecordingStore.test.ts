@@ -15,6 +15,7 @@ const expectations: unknown[] = []
 vi.mock('../gateway', () => ({
   gatewayClient: {
     connected: true,
+    connectionSeq: 1,
     hasMethod: () => true,
     async request(method: string, params: Record<string, unknown> = {}) {
       calls.push({ method, params })
@@ -50,6 +51,9 @@ vi.mock('../../store/connection', async () => {
 
 const { useMeetingsStore } = await import('../../store/meetings')
 const { useChatStore } = await import('../../store/chat')
+const { useConnectionStore } = await import('../../store/connection')
+const { gatewayClient } = await import('../gateway')
+const { captureState } = await import('../meetings')
 const { notify } = await import('../notifications')
 
 const gwError = (message: string) => Object.assign(new Error(JSON.stringify({ code: 'INVALID_REQUEST', message })), { gatewayError: { code: 'INVALID_REQUEST', message } })
@@ -60,7 +64,9 @@ beforeEach(() => {
   for (const k of Object.keys(handlers)) delete handlers[k]
   calls.length = 0; sent.length = 0; chatSends.length = 0; expectations.length = 0
   useChatStore.setState({ conversations: [] } as never)
-  useMeetingsStore.setState({ pending: [], pendingViews: {}, stopping: [], status: F.STATUS_FRESH as never })
+  useMeetingsStore.setState({ pending: [], pendingViews: {}, stopping: [], status: F.STATUS_FRESH as never, statusRead: null, captureRequested: null, captureError: null })
+  useConnectionStore.setState({ restartExpectation: null } as never)
+  ;(gatewayClient as { connectionSeq: number }).connectionSeq = 1
   vi.mocked(notify).mockClear()
 })
 
@@ -130,6 +136,40 @@ describe('capture', () => {
     expect(expectations[0]).toMatchObject({ reason: 'Turning on meeting notes' })
     expect(useMeetingsStore.getState().captureError).toBeNull()
   })
+  // QA: ~2 s of "Meeting notes are off" after the restart it causes.
+  it('records the request instead of faking a read, and reads after the restart settle it', async () => {
+    handlers['config.get'] = () => ({ hash: 'h' })
+    handlers['config.patch'] = () => ({ ok: true })
+    handlers['transcripts.status'] = () => ({ ...F.STATUS_FRESH, enabled: false })
+    await useMeetingsStore.getState().loadStatus()
+    await useMeetingsStore.getState().setCaptureOn()
+    const cur = () => {
+      const s = useMeetingsStore.getState()
+      return captureState({
+        status: s.status && s.statusRead ? { value: s.status.enabled, ...s.statusRead } : null,
+        config: null, connectionSeq: (gatewayClient as { connectionSeq: number }).connectionSeq, requested: s.captureRequested,
+      })
+    }
+    expect(useMeetingsStore.getState().captureRequested).toMatchObject({ seq: 1 })
+    expect(cur()).toBe(true)
+    // The restart: a new connection, its first status not in yet. The stale "off" stays hidden.
+    ;(gatewayClient as { connectionSeq: number }).connectionSeq = 2
+    expect(cur()).toBe(true)
+    handlers['transcripts.status'] = () => ({ ...F.STATUS_FRESH, enabled: true })
+    await useMeetingsStore.getState().loadStatus()
+    expect(useMeetingsStore.getState().statusRead).toMatchObject({ seq: 2 })
+    expect(cur()).toBe(true)
+  })
+
+  it('a drop with the patch in flight is the restart: the intended state, no error', async () => {
+    handlers['config.get'] = () => { useConnectionStore.setState({ restartExpectation: { reason: 'x' } } as never); return { hash: 'h' } }
+    handlers['config.patch'] = () => { throw new Error('Connection closed') }
+    await useMeetingsStore.getState().setCaptureOn()
+    expect(useMeetingsStore.getState().captureError).toBeNull()
+    expect(useMeetingsStore.getState().captureRequested).not.toBeNull()
+    expect(useMeetingsStore.getState().captureSaving).toBe(false)
+  })
+
   it('clears the expectation when the patch fails', async () => {
     handlers['config.get'] = () => ({ hash: 'h' })
     handlers['config.patch'] = () => { throw gwError('missing scope: operator.admin') }

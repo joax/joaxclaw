@@ -342,15 +342,20 @@ export function hostInstallCommand(entry: DiscoveryEntry): string {
  * "Needs" lines for the detail pane, from the plugin's declared configuration. A local
  * detail never carries configuration (the gateway only reads it from ClawHub), so for
  * one of those an empty list says nothing, and "Nothing to configure" would be a guess.
+ *
+ * `localState` is the gateway's own verdict for an installed plugin (plugins.list's
+ * `state`, which the Extensions list badge reads too). When it says "needs-setup" the pane
+ * never says "Nothing to configure", whatever ClawHub's listing declares.
  */
-export function needsSummary(detail: Pick<DiscoveryDetail, 'configuration' | 'skills' | 'mcpServers'> & { origin?: DiscoveryDetail['origin'] }): string[] {
+export function needsSummary(detail: Pick<DiscoveryDetail, 'configuration' | 'skills' | 'mcpServers'> & { origin?: DiscoveryDetail['origin'] }, localState?: LocalState): string[] {
   const required = detail.configuration.filter(f => f.required)
   const keys = required.filter(f => f.sensitive)
   const settings = required.filter(f => !f.sensitive)
   const out: string[] = []
   if (keys.length) out.push(`${keys.length} API key${keys.length === 1 ? '' : 's'} (${keys.map(f => f.name).join(', ')})`)
   if (settings.length) out.push(`${settings.length} required setting${settings.length === 1 ? '' : 's'}`)
-  if (!out.length && detail.origin !== 'local') out.push('Nothing to configure')
+  if (!out.length && localState === 'needs-setup') out.push('Required settings before it can run')
+  else if (!out.length && detail.origin !== 'local') out.push('Nothing to configure')
   if (detail.skills.length) out.push(`Adds skills: ${detail.skills.map(s => s.name).join(', ')}`)
   if (detail.mcpServers.length) out.push(`Starts MCP servers: ${detail.mcpServers.join(', ')}`)
   return out

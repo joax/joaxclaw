@@ -57,6 +57,7 @@ export function PluginDetailPane({ entry, admin, connected, onBack, onManage, on
   const tooNew = needsNewerGateway(detail?.compatibility?.minGatewayVersion, gatewayClient.serverVersion)
   const versions = detail?.origin === 'clawhub' ? detail.versions : []
   const command = hostInstallCommand(live)
+  const needs = detail ? needsSummary(detail, live.local.installed ? live.local.state : undefined) : []
 
   const install = () => {
     const target = installTargetForEntry(live, { version: version || undefined, origin })
@@ -118,10 +119,10 @@ export function PluginDetailPane({ entry, admin, connected, onBack, onManage, on
 
         {detail && (
           <>
-            {needsSummary(detail).length > 0 && (
+            {needs.length > 0 && (
               <Row label="Needs">
                 <ul style={{ margin: 0, paddingLeft: 14 }}>
-                  {needsSummary(detail).map(line => <li key={line}>{line}</li>)}
+                  {needs.map(line => <li key={line}>{line}</li>)}
                 </ul>
               </Row>
             )}
