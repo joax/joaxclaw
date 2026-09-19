@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { Server, X, Loader2, ArrowUpCircle, AlertTriangle, CheckCircle2, Terminal, XCircle, Undo2, Clock, PauseCircle } from 'lucide-react'
+import { Server, X, Loader2, ArrowUpCircle, AlertTriangle, CheckCircle2, Terminal, XCircle, Undo2, Clock, PauseCircle, HelpCircle } from 'lucide-react'
 import { useConnectionStore } from '../../store/connection'
 import { useGatewayUpdateStore } from '../../store/gatewayUpdate'
 import { bannerState, bannerTone, formatClock, formatDowntime, formatHm, isFailedRun, phaseProgress, refusalCopy, runTarget, showChannel, type BannerState } from '../../lib/gatewayUpdate'
@@ -48,7 +48,7 @@ export function GatewayUpdateBanner({ onOpenChat }: { onOpenChat?: () => void })
   const view = bannerState({
     available: st.available,
     running: st.pending || st.followed
-      ? { target: st.followed?.target ?? (st.run ? runTarget(st.run) : undefined), run: st.run, own: st.followed?.own ?? true }
+      ? { target: st.followed?.target ?? (st.run ? runTarget(st.run) : undefined), run: st.run, own: st.followed?.own ?? true, slow: st.followed?.slow }
       : null,
     refusal: st.refusal,
     outcome: st.outcome,
@@ -187,6 +187,7 @@ function BannerIcon({ view, color }: { view: BannerState; color: string }) {
     case 'result':
       switch (view.outcome.kind) {
         case 'back-on': return <Server size={14} style={style} />
+        case 'unconfirmed': return <HelpCircle size={14} style={style} />
         case 'failed': return <XCircle size={14} style={style} />
         case 'rolled-back': return <Undo2 size={14} style={style} />
         default: return <CheckCircle2 size={14} style={style} />
@@ -217,6 +218,10 @@ function BannerMessage({ view, narrow }: { view: BannerState; narrow?: boolean }
         return <>The gateway is applying an update{view.target ? <> to <b>{view.target}</b></> : null}.<span style={dim}> JoaxClaw reconnects on its own.</span></>
       }
       const phase = phaseProgress(view.run ?? null).currentLabel
+      // update.run's reply timed out: still going as far as the gateway's ledger says.
+      if (view.slow) {
+        return <>Still updating{view.target ? <> to <b>{view.target}</b></> : null} · {phase}.<span style={dim}> It's taking longer than usual. JoaxClaw keeps following it.</span></>
+      }
       return view.target
         ? <>Updating to <b>{view.target}</b> · {phase}.<span style={dim}> JoaxClaw reconnects on its own.</span></>
         : <>The gateway is updating · {phase}.<span style={dim}> JoaxClaw reconnects on its own.</span></>
@@ -234,6 +239,7 @@ function BannerMessage({ view, narrow }: { view: BannerState; narrow?: boolean }
       const o = view.outcome
       if (o.kind === 'already-current') return <>The gateway is already on {o.version}.</>
       if (o.kind === 'back-on') return <>The gateway is back on {o.version}.</>
+      if (o.kind === 'unconfirmed') return <>The update may still be running — <span style={dim}>check the Gateway tab.</span></>
       if (o.kind === 'failed') {
         return <>The update to <b>{o.target}</b> failed.{o.before ? <span style={dim}> The gateway is still on {o.before}.</span> : null}</>
       }
