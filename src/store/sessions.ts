@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import type { Session } from '../lib/types'
 import { gatewayClient } from '../lib/gateway'
+import { sessionChangePatch } from '../lib/sessionRunning'
 
 const CUSTOM_LABELS_KEY = 'joaxclaw-session-labels'
 // App-derived friendly names for sessions the gateway only knows by an opaque key —
@@ -114,9 +115,11 @@ export const useSessionsStore = create<SessionsState>((set, get) => ({
     gatewayClient.on((frame) => {
       // sessions.changed: update if known, add if new (e.g. created by an agent skill)
       if (frame.event === 'sessions.changed') {
-        const p = frame.payload as Partial<Session> & { sessionKey?: string }
-        const key = p.sessionKey ?? (p as Session).key
+        const payload = frame.payload as Partial<Session> & { sessionKey?: string }
+        const key = payload.sessionKey ?? (payload as Session).key
         if (!key) return
+        // A run's terminal row still says running; see sessionChangePatch.
+        const p = sessionChangePatch(payload)
         set(s => {
           const exists = s.sessions.some(sess => sess.key === key)
           if (exists) {

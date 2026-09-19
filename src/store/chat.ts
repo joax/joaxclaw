@@ -6,7 +6,7 @@ import { decideIngest } from '../lib/sessionMessageIngest'
 import { extractToolCalls, toolResultUpdate, applyToolResults, mergeFinalToolCalls } from '../lib/historyMessages'
 import { describeRunFailure } from '../lib/gatewayPolicy'
 import { agentIdFromSessionKey as agentIdFromKey } from '../lib/sessionName'
-import { hasProduced } from '../lib/streamStatus'
+import { hasProduced, dropEmptyFinishedTurns } from '../lib/streamStatus'
 import { reconcileStreams } from '../lib/stuckStream'
 import { useSessionsStore } from './sessions'
 import { useGatewayModelsStore } from './gatewayModels'
@@ -386,6 +386,7 @@ function attachChatStream(
       }
       activeStreams.delete(convId)
       unsub()
+      pruneEmptyTurns(convId)
     } else if (p.state === 'error' || p.state === 'incomplete') {
       // Resolve error text from errorMessage, or fall back to p.message text (gateway may use either).
       // The embedded-run lifecycle path emits a bare `{ state: 'error' }` with neither field
@@ -427,6 +428,7 @@ function attachChatStream(
       finalizeThreads(update)
       activeStreams.delete(convId)
       unsub()
+      pruneEmptyTurns(convId)
     }
   })
   activeStreams.set(convId, { unsub, sessionKey })
@@ -746,7 +748,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       conversations: s.conversations.map(c =>
         c.id !== convId ? c : {
           ...c,
-          messages: c.messages.map(m => m.streaming ? { ...m, streaming: false, reasoningStreaming: false } : m)
+          messages: dropEmptyFinishedTurns(c.messages.map(m => m.streaming ? { ...m, streaming: false, reasoningStreaming: false } : m))
         }
       )
     }))
@@ -785,7 +787,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set(s => ({
       conversations: s.conversations.map(c => !settle.includes(c.id) ? c : {
         ...c,
-        messages: c.messages.map(m => !m.streaming ? m : {
+        messages: dropEmptyFinishedTurns(c.messages.map(m => !m.streaming ? m : {
           ...m,
           streaming: false,
           reasoningStreaming: false,
@@ -796,7 +798,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             t.status === 'spawning' || t.status === 'running'
               ? { ...t, status: 'done' as const, finishedAt: t.finishedAt ?? new Date().toISOString() }
               : t),
-        }),
+        })),
       }),
     }))
   },
@@ -1263,6 +1265,16 @@ gatewayClient.on(frame => {
     if (typeof p?.sessionKey === 'string' && (p.state === 'final' || p.state === 'aborted' || p.state === 'error')) settleRunningCalls(p.sessionKey)
   }
 })
+
+// A turn whose run ended without showing anything is removed rather than left as a bare
+// "Assistant" bubble (lib/streamStatus isEmptyFinishedTurn says which).
+function pruneEmptyTurns(convId: string): void {
+  const { conversations } = useChatStore.getState()
+  const conv = conversations.find(c => c.id === convId)
+  if (!conv) return
+  const messages = dropEmptyFinishedTurns(conv.messages)
+  if (messages !== conv.messages) useChatStore.setState({ conversations: conversations.map(c => c.id === convId ? { ...c, messages } : c) })
+}
 
 function settleRunningCalls(sessionKey: string): void {
   const { conversations } = useChatStore.getState()
