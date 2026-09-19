@@ -115,6 +115,12 @@ describe('needsSummary', () => {
   it('says there is nothing to configure', () => {
     expect(needsSummary(d([{ name: 'opt', required: false, sensitive: true }]))).toEqual(['Nothing to configure'])
   })
+  it("never says nothing to configure when the gateway says the installed plugin needs setup", () => {
+    expect(needsSummary(d([]), 'needs-setup')).toEqual(['Required settings before it can run'])
+    expect(needsSummary(d([]), 'enabled')).toEqual(['Nothing to configure'])
+    // Declared requirements are listed as before.
+    expect(needsSummary(d([{ name: 'ISSUE_TOKEN', required: true, sensitive: true }]), 'needs-setup')).toEqual(['1 API key (ISSUE_TOKEN)'])
+  })
   it('lists skills and MCP servers', () => {
     expect(needsSummary(d([], { skills: [{ name: 'triage' }], mcpServers: ['tracker'] })))
       .toEqual(['Nothing to configure', 'Adds skills: triage', 'Starts MCP servers: tracker'])
