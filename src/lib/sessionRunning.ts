@@ -22,3 +22,25 @@ export function isSessionRunning(session: Session | undefined | null): boolean {
   if (session.status === 'running') return true
   return session.hasActiveRun ?? false
 }
+
+/**
+ * A `sessions.changed` payload as a patch for the session's row.
+ *
+ * When a run ends, the gateway broadcasts the row with `phase: 'end'` (or 'error') from
+ * a snapshot taken before that run is settled, so it still says `status: 'running'`,
+ * `hasActiveRun: true`; the settled row ('chat.run.settled') follows a moment later.
+ * Applied as is, it undid the idle state the chat's `final` had just set, and the open
+ * pane, seeing a running session with no stream, attached to the finished run and left
+ * an empty "Assistant" bubble under the reply. So a terminal payload's running claims
+ * are left out; the rest of it, and every other payload, applies unchanged.
+ */
+export function sessionChangePatch<T extends object>(payload: T): Partial<T> {
+  const p = payload as Record<string, unknown>
+  if (p.phase !== 'end' && p.phase !== 'error') return payload
+  const { hasActiveRun, status, ...rest } = p
+  return {
+    ...rest,
+    ...(hasActiveRun === false ? { hasActiveRun } : {}),
+    ...(status !== undefined && status !== 'running' ? { status } : {}),
+  } as Partial<T>
+}

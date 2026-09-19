@@ -14,8 +14,15 @@ import { countTruncated, isUnavailableSentinel } from './chatExport'
 // When a page's byte cap cut its oldest record part-way, the gateway repeats that whole
 // record at the start of the next (older) page. One record can also project to two rows
 // sharing an id, so de-duplication is per page boundary, by record, not a Set of ids.
-// Like the Control UI's copy-as-Markdown, the read checks that the session didn't
-// change between pages.
+//
+// A chat that is still running grows while it's read: every record the run appends
+// raises `totalMessages`, and since offsets count back from the newest record, the same
+// offset now lands that many records newer. Growth at the tail is not a change: the read
+// keeps to the records that existed when its first page came back (the snapshot) and
+// shifts each later offset by the growth, so the pages still meet. Record `seq`s count
+// from the oldest record and don't move when the tail grows, so where pages overlap, a
+// record with a different id under the same seq means history was rewritten (a branch
+// switched, say): that, a new sessionId or a shrinking total restarts the read.
 
 export const EXPORT_PAGE_LIMIT = 1000
 /** Text blocks are cut at 8000 characters by default; export asks for the gateway's maximum. */
@@ -56,24 +63,59 @@ function seqOf(m: unknown): number | undefined {
   return typeof meta?.seq === 'number' ? meta.seq : undefined
 }
 
+function idOf(m: unknown): string | undefined {
+  const meta = m && typeof m === 'object' ? (m as { __openclaw?: { id?: unknown } }).__openclaw : undefined
+  return typeof meta?.id === 'string' ? meta.id : undefined
+}
+
 /**
  * Pages as read (newest first) into one list, oldest first. Where an older page repeats
  * the record a newer page started with, the older page's copy is the whole record, so
- * the newer page's rows for it are dropped.
+ * the newer page's rows for it are dropped. Rows of records newer than that (an older
+ * page read while the chat grew overlaps further) are already in, and are skipped.
  */
 export function assemblePages(pages: unknown[][]): unknown[] {
   let out: unknown[] = []
   for (const page of pages) {
     const oldest = out.map(seqOf).find(s => s !== undefined)
-    if (oldest !== undefined && page.some(m => seqOf(m) === oldest)) out = out.filter(m => seqOf(m) !== oldest)
-    out = [...page, ...out]
+    let older = page
+    if (oldest !== undefined) {
+      older = page.filter(m => { const s = seqOf(m); return s === undefined || s <= oldest })
+      if (older.some(m => seqOf(m) === oldest)) out = out.filter(m => seqOf(m) !== oldest)
+    }
+    out = [...older, ...out]
   }
   return out
 }
 
-/** Whether a later page is from the same transcript the first page was. */
-export function samePagedSession(first: HistoryPage, page: HistoryPage): boolean {
-  return first.sessionId === page.sessionId && first.totalMessages === page.totalMessages
+/** Each record's id by seq, from pages already read. */
+export function recordIds(pages: unknown[][]): Map<number, string> {
+  const ids = new Map<number, string>()
+  for (const page of pages) for (const m of page) {
+    const s = seqOf(m), id = idOf(m)
+    if (s !== undefined && id !== undefined) ids.set(s, id)
+  }
+  return ids
+}
+
+/** Whether a page puts a different record under a seq already read: history was rewritten. */
+export function pageConflicts(known: Map<number, string>, page: unknown[]): boolean {
+  return page.some(m => {
+    const s = seqOf(m), id = idOf(m)
+    return s !== undefined && id !== undefined && known.has(s) && known.get(s) !== id
+  })
+}
+
+/**
+ * How many records a later page's transcript has gained since the first page, or null
+ * when it isn't the same transcript any more (another sessionId, or fewer records).
+ */
+export function pageGrowth(first: HistoryPage, page: HistoryPage): number | null {
+  if (first.sessionId !== page.sessionId) return null
+  if (first.totalMessages === page.totalMessages) return 0
+  if (typeof first.totalMessages !== 'number' || typeof page.totalMessages !== 'number') return null
+  const grown = page.totalMessages - first.totalMessages
+  return grown > 0 ? grown : null
 }
 
 /** How far through the records the read is, from the offsets (records, not rows). */
@@ -132,10 +174,12 @@ const sleep = (ms: number, signal?: AbortSignal) => new Promise<void>((resolve, 
 })
 
 /**
- * Read every page. `onProgress(read, total?)` after each page, in records. Aborting
- * rejects with an AbortError and sends nothing more. If the session changes between
- * pages the read starts over once; if it changes again it fails with ChatChangedError,
- * rather than saving a chat stitched together from two states.
+ * Read every page. `onProgress(read, total?)` after each page, in records of the
+ * snapshot. Aborting rejects with an AbortError and sends nothing more. Records a
+ * running chat appends while it's read are left out: the file is the chat as of the
+ * first page, marked as still running. If the history changes between pages the read
+ * starts over once; if it changes again it fails with ChatChangedError, rather than
+ * saving a chat stitched together from two states.
  */
 export async function readFullHistory(
   sessionKey: string,
@@ -162,16 +206,34 @@ export async function readFullHistory(
     const pages: unknown[][] = []
     let first: HistoryPage | undefined
     let changed = false
+    // Records appended since the first page. Offsets sent are the snapshot's plus this.
+    let grown = 0
     try {
       let params = nextPageParams(sessionKey, undefined, 0, opts.limit)
+      let snapOffset = 0
       while (params) {
         const page = await fetchPage(params)
-        if (first && !samePagedSession(first, page)) { changed = true; break }
+        const messages = Array.isArray(page.messages) ? page.messages : []
+        if (first) {
+          const g = pageGrowth(first, page)
+          if (g === null || g < grown || pageConflicts(recordIds(pages), messages)) { changed = true; break }
+          grown = g
+        }
         first ??= page
-        pages.push(Array.isArray(page.messages) ? page.messages : [])
-        const { read, total } = pagedProgress(page)
-        opts.onProgress?.(read || pages.reduce((n, p) => n + p.length, 0), total)
-        params = nextPageParams(sessionKey, page, typeof params.offset === 'number' ? params.offset : 0, opts.limit)
+        pages.push(messages)
+        const sent = typeof params.offset === 'number' ? params.offset : 0
+        const next = nextPageParams(sessionKey, page, sent, opts.limit)
+        // The gateway's nextOffset counts from this page's (grown) total; take the growth
+        // back out for the snapshot's, which has to move on from the last one.
+        const nextSnap = next ? (next.offset as number) - grown : undefined
+        if (nextSnap !== undefined && nextSnap <= snapOffset) throw new Error("The gateway's history pages didn't line up.")
+        const total = first.totalMessages
+        opts.onProgress?.(typeof total === 'number' ? nextSnap ?? total : pages.reduce((n, p) => n + p.length, 0), total)
+        if (!next || nextSnap === undefined) break
+        snapOffset = nextSnap
+        // Once the chat has grown, ask for one record more on the newer side, so the
+        // page overlaps what's read and a rewritten record can't slip in unseen.
+        params = { ...next, offset: nextSnap + grown - (grown > 0 ? 1 : 0) }
       }
     } catch (err) {
       if (!(err instanceof ChatChangedError)) throw err
@@ -183,7 +245,8 @@ export async function readFullHistory(
       raw,
       total: first?.totalMessages ?? raw.length,
       truncatedCount: countTruncated(raw),
-      activeRun: first?.sessionInfo?.hasActiveRun === true,
+      // A chat that grew while it was read was running, even if it wasn't at the start.
+      activeRun: first?.sessionInfo?.hasActiveRun === true || grown > 0,
       unavailable: raw.some(isUnavailableSentinel),
       pagingSupported: first?.hasMore !== undefined,
       sessionInfo: first?.sessionInfo,
