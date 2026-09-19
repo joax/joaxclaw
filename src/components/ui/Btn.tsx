@@ -1,5 +1,6 @@
 import { Loader2 } from 'lucide-react'
 import type { CSSProperties, ReactNode } from 'react'
+import { buttonAriaState, guardedClick, isButtonInert } from '../../lib/buttonState'
 
 interface BtnProps {
   // Optional: an icon-only button is a deliberate, widely used shape here (toolbars,
@@ -10,6 +11,7 @@ interface BtnProps {
   size?: 'sm' | 'md'
   icon?: ReactNode
   loading?: boolean
+  /** Announced as unavailable (aria-disabled) but kept focusable, so a `title` saying why still shows. */
   disabled?: boolean
   className?: string
   style?: CSSProperties
@@ -19,17 +21,18 @@ interface BtnProps {
 }
 
 export function Btn({ children, onClick, variant = 'primary', size = 'md', icon, loading, disabled, className = '', style, type = 'button', title }: BtnProps) {
+  const inert = isButtonInert({ disabled, loading })
   const base: CSSProperties = {
     display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 6,
     borderRadius: 'var(--radius)',
-    cursor: disabled || loading ? 'not-allowed' : 'pointer',
+    cursor: inert ? 'not-allowed' : 'pointer',
     fontWeight: 500,
     border: '1px solid transparent',
     transition: 'background 0.15s, border-color 0.15s, color 0.15s',
-    opacity: disabled || loading ? 0.6 : 1,
+    opacity: inert ? 0.6 : 1,
     fontSize: size === 'sm' ? 12 : 14,
     padding: size === 'sm' ? '4px 10px' : '7px 14px'
   }
@@ -44,12 +47,13 @@ export function Btn({ children, onClick, variant = 'primary', size = 'md', icon,
   return (
     <button
       type={type}
-      onClick={disabled || loading ? undefined : onClick}
+      onClick={guardedClick({ disabled, loading }, onClick)}
+      {...buttonAriaState({ disabled, loading })}
       className={className}
       {...(title ? { title, 'aria-label': children ? undefined : title } : {})}
       style={{ ...base, ...variants[variant], ...style }}
       onMouseEnter={e => {
-        if (disabled || loading) return
+        if (inert) return
         const el = e.currentTarget as HTMLButtonElement
         if (variant === 'primary') el.style.filter = 'brightness(1.1)'
         else if (variant === 'ghost') el.style.background = 'var(--bg-elevated)'
