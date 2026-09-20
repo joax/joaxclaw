@@ -8,6 +8,7 @@ import { Btn } from '../ui/Btn'
 import { Input } from '../ui/Input'
 import { formatBytes } from '../../lib/ollama'
 import { gatewayClient } from '../../lib/gateway'
+import { buildMergePatch, patchChangedNothing, type ConfigPatchResult } from '../../lib/configPatch'
 import { gatewayHost } from '../../lib/ollamaHealth'
 import { ChannelsPanel } from './ChannelsPanel'
 import { ConnectionLogPanel } from './ConnectionLogPanel'
@@ -73,8 +74,10 @@ export function GatewayView({ onOpenChat }: { onOpenChat?: () => void } = {}) {
   const showRail = !narrow || !mobileTabOpen
   const showContent = !narrow || mobileTabOpen
   const currentTabLabel = SETTINGS_TABS.find(t => t.id === tab)?.label ?? 'Gateway'
-  // Top-level config sections last loaded (remote), so removals become deletes on save.
-  const loadedKeysRef = useRef<string[]>([])
+  // The config as loaded (remote), so a save can send the DIFF: absent keys mean "leave
+  // alone" in a merge patch, so removals only apply when sent as explicit nulls.
+  const loadedConfigRef = useRef<Record<string, unknown>>({})
+  const loadedHashRef = useRef<string | undefined>(undefined)
 
   // Load the gateway config. On a remote gateway the local ~/.openclaw file is the
   // WRONG machine's config, so read it over the WS via config.get instead (the same
@@ -85,7 +88,8 @@ export function GatewayView({ onOpenChat }: { onOpenChat?: () => void } = {}) {
       if (remote) {
         const snap = await gatewayClient.request<ConfigSnapshot>('config.get', {})
         const cfg = (snap.parsed ?? snap.config ?? {}) as Record<string, unknown>
-        loadedKeysRef.current = Object.keys(cfg)
+        loadedConfigRef.current = cfg
+        loadedHashRef.current = snap.hash
         setConfigText(JSON.stringify(cfg, null, 2))
         setConfigPath(`${gatewayHost(connection?.url) ?? 'remote'} · ~/.openclaw/openclaw.json (via gateway)`)
         setConfigError('')
@@ -153,15 +157,30 @@ export function GatewayView({ onOpenChat }: { onOpenChat?: () => void } = {}) {
         return
       }
       try {
-        const patchObj: Record<string, unknown> = { ...parsed }
-        for (const k of loadedKeysRef.current) if (!(k in parsed)) patchObj[k] = null
-        // Re-read for a fresh hash to avoid stale-hash conflicts.
-        const snap = await gatewayClient.request<ConfigSnapshot>('config.get', {})
-        await gatewayClient.request('config.patch', {
-          raw: JSON.stringify(patchObj),
-          ...(snap.hash ? { baseHash: snap.hash } : {}),
-          replacePaths: Object.keys(parsed),
+        // Send what CHANGED against the config this editor loaded. `replacePaths` only
+        // governs arrays (an object path there does nothing), so it carries the array
+        // paths the diff touched — otherwise the gateway merges arrays by id and refuses
+        // to drop entries. The hash is the loaded one: if the config changed underneath,
+        // the gateway says so instead of this save quietly clobbering it.
+        const { patch, replacePaths } = buildMergePatch(loadedConfigRef.current, parsed)
+        if (!patch) {
+          setSaveStatus('idle')
+          setConfigDirty(false)
+          setConfigError('')
+          return
+        }
+        const res = await gatewayClient.request<ConfigPatchResult>('config.patch', {
+          raw: JSON.stringify(patch),
+          ...(loadedHashRef.current ? { baseHash: loadedHashRef.current } : {}),
+          ...(replacePaths.length ? { replacePaths } : {}),
         })
+        // "Accepted, changed nothing" must not read as saved — that is how an edit used
+        // to vanish on the next reload.
+        if (patchChangedNothing(res)) {
+          setSaveStatus('error')
+          setConfigError('The gateway accepted the save but reported no change — nothing was written. Reload the config and try again.')
+          return
+        }
         setSaveStatus('saved')
         setConfigDirty(false)
         setConfigError('')
