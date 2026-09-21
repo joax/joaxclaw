@@ -2,26 +2,9 @@ import { create } from 'zustand'
 import { gatewayClient } from '../lib/gateway'
 import { readLocalStore, patchLocalStore } from '../lib/localStore'
 import type { GwModelProvider, GwModelDef } from '../lib/types'
+import { collectArrayPaths, patchChangedNothing, type ConfigPatchResult } from '../lib/configPatch'
 
-// Collect every array path inside a config-patch payload, in the gateway's dotted
-// notation with `[]` for arrays nested inside array elements (e.g.
-// `models.providers.google.models[].input`). A config.patch is an RFC-7396 merge and
-// the gateway refuses to SHRINK any array unless its exact path is named in
-// `replacePaths` — and naming a parent array is NOT enough: each nested array (an
-// `input`/`output` modality list on a model, etc.) must be listed independently.
-// Model objects round-trip through the app, so a save replaces these arrays wholesale;
-// listing them all marks every replacement as intentional. Paths are de-duplicated by
-// the caller (many array elements yield the same `...models[].input` path).
-export function collectArrayPaths(obj: unknown, prefix: string, out: string[]): void {
-  if (Array.isArray(obj)) {
-    out.push(prefix)
-    for (const item of obj) collectArrayPaths(item, `${prefix}[]`, out)
-  } else if (obj && typeof obj === 'object') {
-    for (const [k, v] of Object.entries(obj)) {
-      collectArrayPaths(v, prefix ? `${prefix}.${k}` : k, out)
-    }
-  }
-}
+export { collectArrayPaths }
 
 interface ModelsState {
   providers: Record<string, GwModelProvider>
@@ -31,6 +14,18 @@ interface ModelsState {
   _parsedProviderIds: Set<string>
   // provider IDs the user explicitly added this session (not yet in the persisted config)
   _userAddedProviderIds: Set<string>
+  // provider IDs the user DELETED this session. A merge patch keeps what it doesn't
+  // mention, so a deletion only happens if the id is sent as null.
+  _deletedProviderIds: Set<string>
+  // plugin ids whose enabled state the user changed this session. Only these travel:
+  // writing every resolved plugin back used to bloat the config file with entries the
+  // user never set.
+  _toggledPluginIds: Set<string>
+  // provider IDs the user EDITED this session. A plugin-managed provider is left out of
+  // the payload by default (see save()), but once it's edited it has to travel, or the
+  // patch carries no change at all and the gateway answers "noop" — which looked like a
+  // successful save that reverted on reload.
+  _editedProviderIds: Set<string>
   // "pid/mid" keys for models added as stubs from plugin discovery (no user config yet)
   _stubModelKeys: Set<string>
   pluginEnabled: Record<string, boolean>
@@ -61,6 +56,9 @@ export const useModelsStore = create<ModelsState>((set, get) => ({
   pluginProviderIds: new Set(),
   _parsedProviderIds: new Set(),
   _userAddedProviderIds: new Set(),
+  _editedProviderIds: new Set(),
+  _deletedProviderIds: new Set(),
+  _toggledPluginIds: new Set(),
   _stubModelKeys: new Set(),
   pluginEnabled: {},
   selectedId: null,
@@ -142,7 +140,7 @@ export const useModelsStore = create<ModelsState>((set, get) => ({
 
       const selectedId = get().selectedId ?? Object.keys(providers)[0] ?? null
 
-      set({ providers, pluginProviderIds, _parsedProviderIds, _userAddedProviderIds: new Set(), _stubModelKeys, pluginEnabled, selectedId, loading: false, dirty: false, error: null, _baseHash: snapshot.hash ?? null })
+      set({ providers, pluginProviderIds, _parsedProviderIds, _userAddedProviderIds: new Set(), _editedProviderIds: new Set(), _deletedProviderIds: new Set(), _toggledPluginIds: new Set(), _stubModelKeys, pluginEnabled, selectedId, loading: false, dirty: false, error: null, _baseHash: snapshot.hash ?? null })
     } catch (e) {
       set({ loading: false, error: String(e) })
     }
@@ -153,12 +151,13 @@ export const useModelsStore = create<ModelsState>((set, get) => ({
   },
 
   setProviderEnabled(id, enabled) {
-    set(s => ({ pluginEnabled: { ...s.pluginEnabled, [id]: enabled }, dirty: true }))
+    set(s => ({ pluginEnabled: { ...s.pluginEnabled, [id]: enabled }, _toggledPluginIds: new Set([...s._toggledPluginIds, id]), dirty: true }))
   },
 
   updateProviderConfig(id, patch) {
     set(s => ({
       providers: { ...s.providers, [id]: { ...s.providers[id], ...patch } },
+      _editedProviderIds: new Set([...s._editedProviderIds, id]),
       dirty: true,
     }))
   },
@@ -168,6 +167,7 @@ export const useModelsStore = create<ModelsState>((set, get) => ({
       providers: { ...s.providers, [id]: provider },
       pluginEnabled: { ...s.pluginEnabled, [id]: true },
       _userAddedProviderIds: new Set([...s._userAddedProviderIds, id]),
+      _toggledPluginIds: new Set([...s._toggledPluginIds, id]),
       selectedId: id,
       dirty: true,
     }))
@@ -182,7 +182,10 @@ export const useModelsStore = create<ModelsState>((set, get) => ({
       const pluginProviderIds = new Set(s.pluginProviderIds)
       pluginProviderIds.delete(id)
       const selectedId = s.selectedId === id ? (Object.keys(providers)[0] ?? null) : s.selectedId
-      return { providers, pluginEnabled, pluginProviderIds, selectedId, dirty: true }
+      return {
+        providers, pluginEnabled, pluginProviderIds, selectedId, dirty: true,
+        _deletedProviderIds: new Set([...s._deletedProviderIds, id]),
+      }
     })
   },
 
@@ -197,7 +200,7 @@ export const useModelsStore = create<ModelsState>((set, get) => ({
       // Promote stub to configured model
       const _stubModelKeys = new Set(s._stubModelKeys)
       _stubModelKeys.delete(`${providerId}/${model.id}`)
-      return { providers: { ...s.providers, [providerId]: { ...provider, models } }, dirty: true, _stubModelKeys }
+      return { providers: { ...s.providers, [providerId]: { ...provider, models } }, dirty: true, _stubModelKeys, _editedProviderIds: new Set([...s._editedProviderIds, providerId]) }
     })
   },
 
@@ -211,17 +214,20 @@ export const useModelsStore = create<ModelsState>((set, get) => ({
         providers: { ...s.providers, [providerId]: { ...provider, models: provider.models.filter(m => m.id !== modelId) } },
         dirty: true,
         _stubModelKeys,
+        _editedProviderIds: new Set([...s._editedProviderIds, providerId]),
       }
     })
   },
 
   async save() {
-    const { providers, pluginProviderIds, _parsedProviderIds, _userAddedProviderIds, pluginEnabled, _baseHash, _stubModelKeys } = get()
+    const { providers, pluginProviderIds, _parsedProviderIds, _userAddedProviderIds, _editedProviderIds, _deletedProviderIds, _toggledPluginIds, pluginEnabled, _baseHash, _stubModelKeys } = get()
     set({ saving: true })
     try {
+      // Only the plugins the user actually toggled. A merge patch leaves the rest alone,
+      // and sending every resolved plugin wrote dozens of entries the user never set.
       const pluginEntries: Record<string, unknown> = {}
-      for (const [id, enabled] of Object.entries(pluginEnabled)) {
-        pluginEntries[id] = { enabled }
+      for (const id of _toggledPluginIds) {
+        if (id in pluginEnabled) pluginEntries[id] = { enabled: pluginEnabled[id] }
       }
 
       // Build providers payload:
@@ -230,11 +236,15 @@ export const useModelsStore = create<ModelsState>((set, get) => ({
       //   because the gateway deep-merges patches with plugin defaults — those defaults may include
       //   invalid values (e.g. baseUrl: "") that fail schema validation and cannot be overridden via patch.
       // - Strip empty-string fields: gateway rejects e.g. baseUrl: "" (must be >=1 chars or absent)
-      const providersToSave: Record<string, GwModelProvider> = {}
+      const providersToSave: Record<string, GwModelProvider | null> = {}
+      // Deleted providers travel as null, which is how a merge patch removes a key.
+      for (const pid of _deletedProviderIds) providersToSave[pid] = null
       for (const [pid, p] of Object.entries(providers)) {
         const isPluginOnly = pluginProviderIds.has(pid)
+        // A plugin-managed provider is normally left to its plugin. Once the user edits
+        // one it must be sent, or the patch contains nothing the gateway can apply.
         const isPluginManaged = !_parsedProviderIds.has(pid) && !_userAddedProviderIds.has(pid)
-        if (isPluginManaged) continue  // skip — gateway plugin owns this provider's config
+        if (isPluginManaged && !_editedProviderIds.has(pid)) continue
 
         const models = p.models.filter(m => !_stubModelKeys.has(`${pid}/${m.id}`))
         const cleaned: GwModelProvider = {
@@ -253,7 +263,7 @@ export const useModelsStore = create<ModelsState>((set, get) => ({
       // Persist model pricing for plugin-managed providers to local store
       const localPricing: Record<string, Record<string, { input: number; output: number; cacheRead: number; cacheWrite: number }>> = {}
       for (const [pid, p] of Object.entries(providers)) {
-        const isPluginManaged = !_parsedProviderIds.has(pid) && !_userAddedProviderIds.has(pid)
+        const isPluginManaged = !_parsedProviderIds.has(pid) && !_userAddedProviderIds.has(pid) && !_editedProviderIds.has(pid)
         if (!isPluginManaged) continue
         const modelPricing: Record<string, { input: number; output: number; cacheRead: number; cacheWrite: number }> = {}
         for (const m of p.models) {
@@ -263,9 +273,9 @@ export const useModelsStore = create<ModelsState>((set, get) => ({
       }
       await patchLocalStore({ modelPricing: localPricing })
 
-      const patch = {
+      const patch: Record<string, unknown> = {
         models: { providers: providersToSave },
-        plugins: { entries: pluginEntries },
+        ...(Object.keys(pluginEntries).length ? { plugins: { entries: pluginEntries } } : {}),
       }
       // The gateway refuses to SHRINK any array in a merge patch unless its exact path
       // is named in replacePaths — including arrays NESTED in model elements (e.g.
@@ -279,7 +289,14 @@ export const useModelsStore = create<ModelsState>((set, get) => ({
       if (_baseHash) params.baseHash = _baseHash
       if (replacePaths.length) params.replacePaths = replacePaths
 
-      await gatewayClient.request('config.patch', params)
+      // The gateway can accept a patch and change nothing (`{ok:true, noop:true}`) —
+      // for instance when the payload carries no edit. Reporting that as saved is how a
+      // change could silently disappear on the next reload, so it's an error here.
+      const res = await gatewayClient.request<ConfigPatchResult>('config.patch', params)
+      if (patchChangedNothing(res)) {
+        set({ saving: false, error: 'The gateway accepted the save but reported no change — nothing was written. Check the connection log for the config.patch reply.' })
+        return
+      }
       await get().load()
       set({ saving: false })
     } catch (e) {
