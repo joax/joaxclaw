@@ -470,15 +470,12 @@ export class GatewayClient {
     if (!this._connected && method !== 'connect') {
       throw new Error('Not connected')
     }
-    // Reject client-side what this connection already knows the gateway lacks — learned
-    // from an earlier "unknown method" reply, or left out of hello-ok's advertised list
-    // (only an explicit `false` counts; the list is documented as conservative). Never for
-    // `connect`: the handshake isn't an advertised RPC, and gating it on the previous
-    // connection's list made every reconnect fail right here with "unknown method:
-    // connect", before a frame was sent. See gatewayPolicy.clientSideGate.
-    const gate = clientSideGate(method, this.features, this.unsupportedMethods)
-    if (gate) {
-      if (gate === 'not-advertised') this.unsupportedMethods.add(method)
+    // Reject client-side only what this connection already heard the gateway reject.
+    // Absence from hello-ok's advertised list is not a reason to withhold the request:
+    // that list omits every `advertise:false` method the gateway nonetheless answers
+    // (`sessions.usage`, `sessions.get`, `push.web.*`, …). Never for `connect`: the
+    // handshake isn't an advertised RPC. See gatewayPolicy.clientSideGate.
+    if (clientSideGate(method, this.features, this.unsupportedMethods)) {
       throw new Error(`unknown method: ${method}`)
     }
     const id = nextId()

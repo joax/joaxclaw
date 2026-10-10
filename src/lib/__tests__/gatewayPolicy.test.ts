@@ -152,8 +152,12 @@ describe('clientSideGate', () => {
     expect(clientSideGate('talk.catalog', undefined, new Set(['talk.catalog']))).toBe('cached')
   })
 
-  it('rejects a method the advertised list explicitly leaves out', () => {
-    expect(clientSideGate('sessions.search', helloOk, new Set())).toBe('not-advertised')
+  // Regression: the advertised list omits every `advertise:false` method the gateway
+  // still answers, so gating on it broke Billing — `sessions.usage` failed with a
+  // synthetic "unknown method" before a frame was sent. Only a real rejection counts.
+  it('sends a method the advertised list leaves out, until the gateway rejects it', () => {
+    expect(clientSideGate('sessions.usage', helloOk, new Set())).toBeNull()
+    expect(clientSideGate('sessions.usage', helloOk, new Set(['sessions.usage']))).toBe('cached')
   })
 
   it('sends what is advertised, and anything it cannot know about', () => {

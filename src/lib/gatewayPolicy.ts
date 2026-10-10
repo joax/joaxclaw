@@ -4,9 +4,10 @@
 // scopes — a description of this exact gateway that the app previously threw away. The
 // cost of ignoring it shows up in three places:
 //
-//  - Method support was learned by CALLING a method and pattern-matching "unknown
-//    method" in the rejection. Every unsupported method therefore cost one failed
-//    request and one INVALID_REQUEST in the host's log, on every fresh connection.
+//  - Whether to SHOW a feature was learned by CALLING its method and pattern-matching
+//    "unknown method" in the rejection, so an unsupported feature appeared in the UI
+//    until it failed. The list answers that up front (`supportsMethod`). It does NOT
+//    answer whether a request may be SENT — see `clientSideGate`.
 //  - Attachment limits were unknown, so an oversized file was discovered by the gateway
 //    rejecting the send rather than by the composer saying so first.
 //  - A scope refusal was read by matching the legacy "missing scope: …" message, when
@@ -56,31 +57,42 @@ export function isHandshakeMethod(method: string): boolean {
 }
 
 /**
- * Whether to reject a request without sending it, and why: `'cached'` when this
- * connection already got "unknown method" for it, `'not-advertised'` when hello-ok's list
- * explicitly leaves it out, `null` to send it.
+ * Whether to reject a request without sending it: `'cached'` when this connection already
+ * got "unknown method" for it, `null` to send it.
  *
- * The handshake is exempt from both. 0.24.0 gated `connect` on the PREVIOUS connection's
- * advertised list — which never contains it — so every reconnect failed client-side
- * with "unknown method: connect" and the app could not get back online until restarted.
+ * Absence from hello-ok is deliberately NOT a reason to block. The gateway registers a
+ * whole class of working methods with `advertise:false` — the usage reports
+ * (`sessions.usage`, `sessions.usage.timeseries`, `sessions.usage.logs`), `sessions.get`,
+ * `sessions.resolve`, `sessions.steer`, `chat.inject`, `poll`, `push.web.*`,
+ * `web.login.*`, `config.openFile` — so they never appear in the advertised list. Gating
+ * on that list rejected every one of them client-side: Billing could not load at all,
+ * failing with a synthetic "unknown method: sessions.usage" before a frame was ever sent.
+ * Only the gateway's own rejection is authoritative, and it is remembered in `unsupported`
+ * so an unsupported method costs at most one failed request per connection.
+ *
+ * To decide whether to SHOW a feature, use `supportsMethod` instead — that one is strict.
+ *
+ * The handshake is exempt even from the cache. 0.24.0 gated `connect` on the PREVIOUS
+ * connection's advertised list — which never contains it — so every reconnect failed
+ * client-side with "unknown method: connect" and the app could not get back online until
+ * restarted.
  */
 export function clientSideGate(
   method: string,
-  features: GatewayFeatures | undefined,
+  _features: GatewayFeatures | undefined,
   unsupported: ReadonlySet<string>,
-): 'cached' | 'not-advertised' | null {
+): 'cached' | null {
   if (isHandshakeMethod(method)) return null
-  if (unsupported.has(method)) return 'cached'
-  if (advertisesMethod(features, method) === false) return 'not-advertised'
-  return null
+  return unsupported.has(method) ? 'cached' : null
 }
 
 /**
  * Whether to SHOW a feature that needs `method`. Stricter than `clientSideGate`, which
- * lets an unlisted method be tried: a feature only appears when the gateway says it has
- * the method, and not after this connection got "unknown method" for it. No list at all
- * (a pre-2026.7 gateway) counts as "no". Only use it for advertised methods; the few
- * `advertise:false` ones (`sessions.get`, `push.web.*`) keep try-and-cache.
+ * lets any method the gateway has not rejected be tried: a feature only appears when the
+ * gateway says it has the method, and not after this connection got "unknown method" for
+ * it. No list at all (a pre-2026.7 gateway) counts as "no". Only use it for advertised
+ * methods — the `advertise:false` ones (`sessions.usage*`, `sessions.get`, `push.web.*`)
+ * are never listed, so gating their UI on this hides a feature that works.
  */
 export function supportsMethod(features: GatewayFeatures | undefined, unsupported: ReadonlySet<string>, method: string): boolean {
   if (unsupported.has(method)) return false
