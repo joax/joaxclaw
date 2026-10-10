@@ -9,6 +9,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.27.2] - 2026-10-10
+
+### Fixed
+
+- **Billing opens again.** Billing failed with "unknown method: sessions.usage" and showed no data at all. The request was never sent: JoaxClaw only sent methods the gateway lists when it connects, and the gateway leaves its usage reports off that list on purpose even though it answers them. JoaxClaw now sends anything the gateway hasn't actually turned down, and remembers what it turns down. The same refusal also hit steering a running chat, injecting a message, looking up a session, signing in through the web, opening a config file and web push notifications, so those work again too. Affects every version since 0.26.0.
+
+---
+
 ## [0.27.1] - 2026-09-19
 
 ### Fixed
