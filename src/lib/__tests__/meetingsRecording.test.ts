@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
-  buildJoinPrompt, buildLeavePrompt, buildStopPrompt, captureFromConfig, checklistState, detectPlatform, guestNameFromConfig,
-  matchActiveSession, normaliseMeetingUrl, parseMeetingToolResult, pendingPhase, platformForProvider, pluginReadiness,
+  buildJoinPrompt, buildLeavePrompt, buildStopPrompt, canonicalMeetingUrl, captureFromConfig, checklistState, detectPlatform,
+  guestNameFromConfig, matchActiveSession, normaliseMeetingUrl, parseMeetingToolResult, pendingPhase, platformForProvider, pluginReadiness,
   toolAction, NO_NOTES_AFTER_MS, PLATFORMS, type PendingJoin, type TranscriptSession,
 } from '../meetings'
 import * as F from './fixtures/sprint/meetings'
@@ -23,6 +23,33 @@ describe('detectPlatform / normaliseMeetingUrl', () => {
     // Zoom's pwd is dropped by the gateway; the match still works.
     const zoom = S({ ...F.SESSION_MEET_ACTIVE, source: { providerId: 'zoom', meetingUrl: 'https://acme.zoom.us/j/81234567890' } })
     expect(matchActiveSession('https://acme.zoom.us/j/81234567890?pwd=AbC123xyz#success', [zoom])).toBe(zoom)
+  })
+  it('matches a Meet session on the code, whichever shape the link was pasted in', () => {
+    // The session the plugin files is under the bare code; a join pasted with the `meet/`
+    // segment still has to bind to it, or the card never gets a selector.
+    const active = [S(F.SESSION_MEET_ACTIVE)]
+    expect(matchActiveSession('https://meet.google.com/meet/xyz-abcd-efg', active)?.selector).toBe(F.SESSION_MEET_ACTIVE.selector)
+    expect(matchActiveSession('http://MEET.GOOGLE.COM/meet/XYZ-ABCD-EFG/?authuser=1', active)?.selector).toBe(F.SESSION_MEET_ACTIVE.selector)
+    expect(matchActiveSession('https://meet.google.com/meet/aaa-bbbb-ccc', active)).toBeNull()
+    // A nickname is its own meeting, not the code that reads the same.
+    const nick = S({ ...F.SESSION_MEET_ACTIVE, source: { providerId: 'google-meet', meetingUrl: 'https://meet.google.com/_meet/xyz-abcd-efg' } })
+    expect(matchActiveSession('https://meet.google.com/xyz-abcd-efg', [nick])).toBeNull()
+    expect(matchActiveSession('https://meet.google.com/_meet/xyz-abcd-efg', [nick])).toBe(nick)
+  })
+})
+
+describe('canonicalMeetingUrl', () => {
+  it('reduces a Meet code to the link Google serves, keeping the query', () => {
+    expect(canonicalMeetingUrl('https://meet.google.com/meet/abc-defg-hij')).toBe('https://meet.google.com/abc-defg-hij')
+    expect(canonicalMeetingUrl('  meet.google.com/meet/ABC-DEFG-HIJ/  ')).toBe('https://meet.google.com/abc-defg-hij')
+    expect(canonicalMeetingUrl('https://meet.google.com/abc-defg-hij?authuser=1#x')).toBe('https://meet.google.com/abc-defg-hij?authuser=1#x')
+  })
+  it('passes everything else through trimmed', () => {
+    // Only Google can resolve a nickname or a lookup link, so they go out as pasted.
+    expect(canonicalMeetingUrl('https://meet.google.com/_meet/our-standup')).toBe('https://meet.google.com/_meet/our-standup')
+    expect(canonicalMeetingUrl('https://meet.google.com/lookup/abcd1234ef')).toBe('https://meet.google.com/lookup/abcd1234ef')
+    expect(canonicalMeetingUrl(' https://zoom.us/j/81234567890?pwd=AbC123xyz ')).toBe('https://zoom.us/j/81234567890?pwd=AbC123xyz')
+    expect(canonicalMeetingUrl('not a link')).toBe('not a link')
   })
 })
 

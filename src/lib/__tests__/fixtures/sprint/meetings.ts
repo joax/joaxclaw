@@ -909,6 +909,15 @@ export const MEETING_LINKS: { url: string; expected: 'meet' | 'teams' | 'zoom' |
   { url: 'https://meet.google.com/abc-defg-hij', expected: 'meet', sanitized: 'https://meet.google.com/abc-defg-hij' },
   { url: 'meet.google.com/abc-defg-hij?authuser=1', expected: 'meet', sanitized: 'https://meet.google.com/abc-defg-hij' },
   { url: 'http://MEET.GOOGLE.COM/abc-defg-hij/', expected: 'meet', sanitized: 'http://meet.google.com/abc-defg-hij/' },
+  // The three shapes a Meet link also arrives in: a code behind a `meet/` segment, a nicknamed
+  // meeting, and the lookup link a calendar invite can carry.
+  { url: 'https://meet.google.com/meet/abc-defg-hij', expected: 'meet', sanitized: 'https://meet.google.com/meet/abc-defg-hij' },
+  { url: 'https://meet.google.com/_meet/our-standup', expected: 'meet', sanitized: 'https://meet.google.com/_meet/our-standup' },
+  { url: 'meet.google.com/lookup/abcd1234ef?authuser=0', expected: 'meet', sanitized: 'https://meet.google.com/lookup/abcd1234ef' },
+  { url: 'https://meet.google.com/meet/abc', expected: null },
+  { url: 'https://meet.google.com/meet/abc-defg-hij/extra', expected: null },
+  { url: 'https://meet.google.com/new', expected: null },
+  { url: 'https://meet.google.com.evil.com/abc-defg-hij', expected: null },
   {
     url: 'https://teams.microsoft.com/l/meetup-join/19%3ameeting_ZmQ1%40thread.v2/0?context=%7b%22Tid%22%3a%22abc%22%7d',
     expected: 'teams',

@@ -7,6 +7,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Meetings takes the other shapes a Google Meet link comes in.** Pasting a link such as `meet.google.com/meet/abc-defg-hij` into **Record a meeting** was turned away with "This doesn't look like a Meet, Teams or Zoom link", because only the bare meeting code was accepted. A code behind a `meet/` segment, a nicknamed meeting (`meet.google.com/_meet/our-standup`) and a calendar lookup link (`meet.google.com/lookup/…`) are now all recognised, and a pasted code is sent to the plugin as the plain `meet.google.com/abc-defg-hij` that Google serves, so Chrome joins the call instead of landing on an error page. Joining through the longer form also binds to the right meeting now, so the card shows **Recording** with a link to the transcript rather than warning that no notes arrived.
+
 ---
 
 ## [0.27.1] - 2026-09-19
