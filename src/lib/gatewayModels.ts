@@ -53,6 +53,47 @@ export function splitModelRef(ref: string, fallbackProvider?: string | null): { 
 
 const norm = (s: string) => s.trim().toLowerCase()
 
+/**
+ * Whether two refs name the same model.
+ *
+ * Config always carries the provider; an assistant message reports the model as the
+ * gateway ran it, which can be the bare id. So a qualified ref matches a bare one when
+ * the bare one is its tail — `ollama/qwen3.6:35b` is `qwen3.6:35b`, and
+ * `openrouter/meta/llama-3` is `meta/llama-3`, whose id contains a slash of its own.
+ * Two providers serving the same id are then read as one model, which is the safe way
+ * round here: this decides whether to tell the user their model was swapped, and a
+ * false alarm costs more than a missed one.
+ */
+export function sameModelRef(a: string | null | undefined, b: string | null | undefined): boolean {
+  const x = norm(a ?? ''), y = norm(b ?? '')
+  if (!x || !y) return false
+  return x === y || x.endsWith(`/${y}`) || y.endsWith(`/${x}`)
+}
+
+/**
+ * Whether the model that answered is not the agent's, and whether the agent's fallback
+ * chain explains it — the gateway walks that chain when the configured model can't serve.
+ *
+ * Only the agent-default path is checked. A per-chat `override` is the user's own
+ * standing instruction, and a chip has to read an instruction back as it was given: the
+ * reply before they picked it ran on the old model by definition, and flagging that would
+ * say their choice hadn't taken. Nothing drifts before a reply either — with no served
+ * model there is only an intention, and an intention can't be wrong yet.
+ */
+export function modelDrift(p: {
+  override?: string | null
+  agentDefault?: string | null
+  served?: string | null
+  fallbacks?: string[] | null
+}): { drifted: boolean; viaFallback: boolean } {
+  const drifted = !p.override?.trim()
+    && !!p.served?.trim()
+    && !!p.agentDefault?.trim()
+    && !sameModelRef(p.served, p.agentDefault)
+  const viaFallback = drifted && (p.fallbacks ?? []).some(f => sameModelRef(p.served, f))
+  return { drifted, viaFallback }
+}
+
 export function findGatewayModel(
   models: GatewayModel[] | null | undefined,
   ref: string | null | undefined,
