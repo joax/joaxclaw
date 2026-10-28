@@ -217,30 +217,58 @@ jobs:
       # the site needs RELEASES_TOKEN to read a private repo's releases, and if it is
       # missing or expired /download/<platform> answers 503 and nobody can install
       # anything. That used to be impossible to get wrong — the assets were public — so
-      # it is worth one request per platform to find out here rather than from a user.
+      # it is worth finding out here rather than from a user.
       #
-      # Retried: the release has to propagate, and /api/release is CDN-cached for five
-      # minutes, so the first answer can lag the publish.
+      # Usually the first request settles it: /download/<platform> resolves the newest
+      # release per request, so a release that only publishes assets needs no redeploy
+      # and passes immediately. The budget is for the releases that DO wait on one — the
+      # first after the route shipped, or any following a spell where Vercel could not
+      # deploy. The hook above only QUEUES a build, and `npm ci` plus two builds runs for
+      # minutes, so polling from the instant it is queued can only ever see the
+      # deployment that was already live: v0.27.2 failed here against five 15s attempts
+      # while its build was still running. Release propagation and the five-minute CDN
+      # cache on /api/release ride along in the same budget.
       - name: Check the site can serve the installers
         env:
           SITE: ${{ vars.SITE_URL || 'https://joaxclaw.ai' }}
+          # A healthy release never spends this — it passes on the first request.
+          BUDGET_SECONDS: ${{ vars.DOWNLOAD_CHECK_SECONDS || '600' }}
         run: |
+          # No -L: a 302 to GitHub's signed url is the expected answer, and following it
+          # would pull a 236MB installer onto the runner.
+          probe() { curl -sS -o /dev/null -w '%{http_code}' --max-time 30 "$1" || echo 000; }
+
+          # A release is not the moment to work out what a bare status code meant. These
+          # three have different fixes, and 308 — Vercel redirecting a path it has no
+          # route for — is the one that reads as a token problem but isn't.
+          explain() {
+            case "$1" in
+              302)     echo "ok" ;;
+              308|404) echo "no /download route in the deployment being served — Vercel has not finished, or was not allowed to run, a build of the commit that added it" ;;
+              503)     echo "the route is live but RELEASES_TOKEN is missing or expired in the Vercel project" ;;
+              000)     echo "the site did not answer at all" ;;
+              *)       echo "unexpected answer" ;;
+            esac
+          }
+
+          # One budget for the step, not per platform: both are served by the same
+          # deployment, so once one answers the other is a formality, and if the
+          # deployment never arrives there is nothing to gain by waiting for it twice.
+          deadline=$(( SECONDS + BUDGET_SECONDS ))
           fail=0
+
           for platform in mac linux; do
             url="$SITE/download/$platform"
-            code=""
-            for attempt in 1 2 3 4 5; do
-              # No -L: a 302 to GitHub's signed url is the expected answer, and following
-              # it would pull a 236MB installer onto the runner.
-              code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 "$url" || echo 000)
-              [ "$code" = "302" ] && break
-              echo "  $url → HTTP $code (attempt $attempt/5)"
-              sleep 15
+            code=$(probe "$url")
+            while [ "$code" != "302" ] && [ "$SECONDS" -lt "$deadline" ]; do
+              echo "  $url → HTTP $code ($(explain "$code")) — $(( deadline - SECONDS ))s left"
+              sleep 20
+              code=$(probe "$url")
             done
             if [ "$code" = "302" ]; then
               echo "✓ $url → 302"
             else
-              echo "::error::$url answered HTTP $code, not 302 — the public cannot download this release. Check RELEASES_TOKEN in the Vercel project."
+              echo "::error::$url answered HTTP $code, not 302 — the public cannot download this release: $(explain "$code")."
               fail=1
             fi
           done
