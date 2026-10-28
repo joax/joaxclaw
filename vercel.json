@@ -9,6 +9,9 @@
       "ELECTRON_SKIP_BINARY_DOWNLOAD": "1"
     }
   },
+  "rewrites": [
+    { "source": "/download/:platform(mac|linux)", "destination": "/api/download?platform=:platform" }
+  ],
   "headers": [
     {
       "source": "/((?!app/).*)",
@@ -18,7 +21,7 @@
         { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" },
         {
           "key": "Content-Security-Policy",
-          "value": "default-src 'none'; img-src 'self' https://avatars.githubusercontent.com; style-src 'self'; script-src 'self'; connect-src 'self' https://api.github.com; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+          "value": "default-src 'none'; img-src 'self' https://avatars.githubusercontent.com; style-src 'self'; script-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
         }
       ]
     },

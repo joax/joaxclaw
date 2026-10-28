@@ -157,7 +157,33 @@ The [joaxclaw.ai](https://joaxclaw.ai) site is deployed by **Vercel** from this 
 `vercel.json` runs `npm run build:site` and serves `out/site`. `main` is the production
 branch; every other branch gets a preview deployment, so a site change can be reviewed on
 a real URL before it's merged. Publishing a release also pings a deploy hook (if the
-`VERCEL_DEPLOY_HOOK` secret is set) so the download links pick up the new artifacts.
+`VERCEL_DEPLOY_HOOK` secret is set) so the landing page's version label and file sizes
+catch up.
+
+### How downloads work
+
+This repository is private, so a release asset's GitHub URL needs credentials and answers
+404 to everyone else. **The site publishes the installers instead:**
+
+| URL | What it does |
+| --- | --- |
+| `joaxclaw.ai/download/mac` | 302 → a short-lived signed URL for the latest `.dmg` |
+| `joaxclaw.ai/download/linux` | the same for the latest `.deb` |
+| `joaxclaw.ai/api/release` | version, release notes, and each installer's name and size |
+
+`api/download.mjs` asks GitHub for the asset as `application/octet-stream`, which answers
+302 with a signed `release-assets.githubusercontent.com` URL that needs no credentials,
+and hands the visitor that redirect. The bytes come from GitHub's CDN and never pass
+through Vercel, so there is nothing to mirror and no egress to pay for. Both paths always
+mean *the latest release*, so publishing one is enough — no redeploy, no new links.
+
+The app's own updater reads `/api/release` for the same reason; see
+[`electron/main/updater.ts`](electron/main/updater.ts).
+
+**The Vercel project needs a `RELEASES_TOKEN`** — a token with `contents:read` on this
+repo, and nothing more. Without it `/download/*` answers 503 and `/api/release` reports
+`configured: false`, which the release workflow checks for and fails on. `GITHUB_TOKEN`
+is accepted as a fallback name, and `RELEASES_REPO` overrides which repo is read.
 
 ## Contributing
 
