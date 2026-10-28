@@ -189,26 +189,62 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # The site bakes the latest release's download links into its HTML at build time,
-      # and Vercel only rebuilds on a push — which a release isn't. site-release-hook.yml
-      # was meant to cover this on `release: published`, but it never ran once: a release
-      # published with GITHUB_TOKEN does not trigger other workflows (GitHub's guard
-      # against recursive runs). So the ping lives in the job that publishes. A failed
-      # ping warns rather than failing the job — the release itself has already shipped,
-      # and site/download.js refreshes the links client-side anyway.
-      - name: Refresh the site's download links
+      # The site serves the installers now — the repo is private, so a release asset's
+      # browser_download_url 404s for everyone without repo access. joaxclaw.ai/download/
+      # <platform> resolves to the newest release per request (api/download.mjs), so this
+      # release is downloadable the moment the step above publishes it, with no redeploy.
+      #
+      # The rebuild is therefore only cosmetic: the version label and file sizes baked
+      # into the landing page. site/download.js fills those in client-side anyway, so a
+      # failed ping warns rather than failing a release that has already shipped.
+      - name: Refresh the site's version label
         env:
           HOOK: ${{ secrets.VERCEL_DEPLOY_HOOK }}
         run: |
           if [ -z "$HOOK" ]; then
-            echo "::notice::VERCEL_DEPLOY_HOOK is not set — the site picks up this release on the next push to main."
+            echo "::notice::VERCEL_DEPLOY_HOOK is not set — the label updates on the next push to main. Downloads already work."
             exit 0
           fi
           if curl -fsS -X POST "$HOOK" > /dev/null; then
             echo "Asked Vercel to rebuild the site."
           else
-            echo "::warning::The Vercel deploy hook failed — the site's baked download links still name the previous release."
+            echo "::warning::The Vercel deploy hook failed — the landing page still shows the previous version number. Downloads are unaffected."
           fi
+
+      # Prove the installers are actually reachable by the public.
+      #
+      # Everything above this point can succeed while downloads are broken for everyone:
+      # the site needs RELEASES_TOKEN to read a private repo's releases, and if it is
+      # missing or expired /download/<platform> answers 503 and nobody can install
+      # anything. That used to be impossible to get wrong — the assets were public — so
+      # it is worth one request per platform to find out here rather than from a user.
+      #
+      # Retried: the release has to propagate, and /api/release is CDN-cached for five
+      # minutes, so the first answer can lag the publish.
+      - name: Check the site can serve the installers
+        env:
+          SITE: ${{ vars.SITE_URL || 'https://joaxclaw.ai' }}
+        run: |
+          fail=0
+          for platform in mac linux; do
+            url="$SITE/download/$platform"
+            code=""
+            for attempt in 1 2 3 4 5; do
+              # No -L: a 302 to GitHub's signed url is the expected answer, and following
+              # it would pull a 236MB installer onto the runner.
+              code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 "$url" || echo 000)
+              [ "$code" = "302" ] && break
+              echo "  $url → HTTP $code (attempt $attempt/5)"
+              sleep 15
+            done
+            if [ "$code" = "302" ]; then
+              echo "✓ $url → 302"
+            else
+              echo "::error::$url answered HTTP $code, not 302 — the public cannot download this release. Check RELEASES_TOKEN in the Vercel project."
+              fail=1
+            fi
+          done
+          exit $fail
 
   # ── Prune: keep only the 5 most recent releases (older releases removed; tags kept) ─
   prune:

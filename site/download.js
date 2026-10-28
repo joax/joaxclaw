@@ -1,41 +1,37 @@
-// Keeps the download buttons pointing at the newest release without a site redeploy.
-// The build bakes in whatever was current at build time; this refreshes it on load and
-// silently leaves the baked links alone if the API is unreachable or rate-limited.
-
-const REPO = 'joax/joaxclaw'
+// Fills in the version and each installer's size on load.
+//
+// The buttons' hrefs are already correct before this runs — they point at /download/mac
+// and /download/linux, which resolve to the newest release server-side, so a release
+// never needs a redeploy to be downloadable. All this adds is the label: "v0.27.2",
+// "Universal · 236.4 MB". If the lookup fails the buttons still work.
+//
+// (It used to read api.github.com directly. That stopped working when the repo went
+// private — the releases API 404s for a logged-out visitor — so the lookup moved behind
+// /api/release, where the token lives.)
 
 const fmtSize = bytes => `${(bytes / 1024 / 1024).toFixed(1)} MB`
 
 const LABELS = {
-  mac: (asset) => `Universal · ${fmtSize(asset.size)}`,
-  linux: (asset) => `x86-64 · ${fmtSize(asset.size)}`,
-}
-
-const MATCH = {
-  mac: name => name.toLowerCase().endsWith('.dmg'),
-  linux: name => name.toLowerCase().endsWith('.deb'),
+  mac: asset => `Universal · ${fmtSize(asset.size)}`,
+  linux: asset => `x86-64 · ${fmtSize(asset.size)}`,
 }
 
 async function refresh() {
-  const res = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`, {
-    headers: { accept: 'application/vnd.github+json' },
-  })
+  const res = await fetch('/api/release', { headers: { accept: 'application/json' } })
   if (!res.ok) return
   const release = await res.json()
 
   for (const el of document.querySelectorAll('[data-download]')) {
-    const platform = el.dataset.download
-    const asset = release.assets?.find(a => MATCH[platform]?.(a.name))
+    const asset = release.assets?.[el.dataset.download]
     if (!asset) continue
-    el.href = asset.browser_download_url
+    if (asset.url) el.href = asset.url
     const meta = el.querySelector('.meta')
-    if (meta) meta.textContent = LABELS[platform](asset)
+    if (meta) meta.textContent = LABELS[el.dataset.download](asset)
   }
 
-  const version = (release.tag_name || '').replace(/^v/, '')
-  if (version) {
-    for (const el of document.querySelectorAll('[data-version]')) el.textContent = `v${version}`
+  if (release.version) {
+    for (const el of document.querySelectorAll('[data-version]')) el.textContent = `v${release.version}`
   }
 }
 
-refresh().catch(() => { /* keep the build-time links */ })
+refresh().catch(() => { /* the baked-in links already work */ })

@@ -5,46 +5,45 @@
 //   site/*.md            docs pages rendered through site/template.html
 //   CHANGELOG.md         rendered as the release history page
 //
-// Download links are baked in from the GitHub Releases API at build time, and refreshed
-// client-side by site/download.js — so a new release shows up without redeploying, and
-// the page still works if the API is unreachable at build time (or offline).
+// Download links are NOT baked in. They are the fixed paths /download/mac and
+// /download/linux, which api/download.mjs resolves to the newest release per request —
+// so a release is downloadable the moment it publishes, with no redeploy, and a build
+// that cannot reach GitHub still produces a working page. Only the cosmetic parts (the
+// version label and each file's size) are looked up here, and site/download.js fills
+// them in from /api/release if this build had no token.
 
 import { mkdir, readFile, writeFile, copyFile, readdir, rm, stat } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { dirname, join, basename } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { renderMarkdown } from './markdown.mjs'
+import { describeRelease, latestRelease, releasesToken } from '../api/_lib/releases.mjs'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const SITE = join(ROOT, 'site')
 const OUT = join(ROOT, 'out', 'site')
-const REPO = process.env.GITHUB_REPOSITORY || 'joax/joaxclaw'
-const RELEASES = `https://github.com/${REPO}/releases`
+// The repo is private, so github.com/<repo>/releases is a 404 for visitors. The site's
+// own changelog is the public release history now.
+const RELEASES = '/changelog.html'
 
 const fmtSize = bytes => `${(bytes / 1024 / 1024).toFixed(1)} MB`
 
-// Latest release + its macOS/Linux artifacts. Any failure (offline, rate-limited, no
-// release yet) falls back to the releases page rather than breaking the build.
-async function latestRelease() {
-  const fallback = { version: null, mac: null, linux: null }
+// The version label and file sizes, when this build can read them. Needs a token now
+// that the repo is private; Vercel builds have none, and that is fine — the page is
+// complete without them and site/download.js fills them in on load. Any failure is a
+// note, never a build break.
+async function releaseLabels() {
+  const blank = { version: null, mac: null, linux: null }
+  if (!releasesToken()) {
+    console.log('  · no RELEASES_TOKEN — version and sizes will be filled in by the browser')
+    return blank
+  }
   try {
-    const headers = { accept: 'application/vnd.github+json', 'user-agent': 'joaxclaw-site-build' }
-    if (process.env.GITHUB_TOKEN) headers.authorization = `Bearer ${process.env.GITHUB_TOKEN}`
-    const res = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`, {
-      headers, signal: AbortSignal.timeout(8000),
-    })
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    const release = await res.json()
-    const pick = ext => release.assets?.find(a => a.name.toLowerCase().endsWith(ext))
-    const asMeta = a => a && { url: a.browser_download_url, size: fmtSize(a.size), name: a.name }
-    return {
-      version: (release.tag_name || '').replace(/^v/, '') || null,
-      mac: asMeta(pick('.dmg')),
-      linux: asMeta(pick('.deb')),
-    }
+    const { version, assets } = describeRelease(await latestRelease())
+    return { version, mac: assets.mac, linux: assets.linux }
   } catch (err) {
-    console.warn(`  ! release lookup failed (${err.message}) — linking to the releases page`)
-    return fallback
+    console.warn(`  ! release lookup failed (${err.message}) — version and sizes left to the browser`)
+    return blank
   }
 }
 
@@ -65,7 +64,7 @@ async function main() {
   await rm(OUT, { recursive: true, force: true })
   await mkdir(join(OUT, 'assets'), { recursive: true })
 
-  const release = await latestRelease()
+  const release = await releaseLabels()
   const year = String(new Date().getFullYear())
 
   // Static files that ship as-is: every stylesheet and script in site/. Listing them by
@@ -87,10 +86,11 @@ async function main() {
   // Hand-written pages (landing, account) — placeholders filled in.
   const values = {
     VERSION: release.version ? `v${release.version}` : 'latest',
-    MAC_URL: release.mac?.url ?? `${RELEASES}/latest`,
-    MAC_SIZE: release.mac ? `Universal · ${release.mac.size}` : 'Universal',
-    LINUX_URL: release.linux?.url ?? `${RELEASES}/latest`,
-    LINUX_SIZE: release.linux ? `x86-64 · ${release.linux.size}` : 'x86-64',
+    // Fixed paths, resolved per request by api/download.mjs — never a release-specific url.
+    MAC_URL: '/download/mac',
+    MAC_SIZE: release.mac ? `Universal · ${fmtSize(release.mac.size)}` : 'Universal',
+    LINUX_URL: '/download/linux',
+    LINUX_SIZE: release.linux ? `x86-64 · ${fmtSize(release.linux.size)}` : 'x86-64',
     RELEASES,
     YEAR: year,
   }
@@ -131,7 +131,7 @@ async function main() {
   }
 
   const bytes = (await stat(join(OUT, 'index.html'))).size
-  console.log(`\n✓ site built → out/site (index.html ${(bytes / 1024).toFixed(1)} KB, ${release.version ? `v${release.version}` : 'no release found'})`)
+  console.log(`\n✓ site built → out/site (index.html ${(bytes / 1024).toFixed(1)} KB, ${release.version ? `v${release.version}` : 'version resolved at runtime'})`)
 }
 
 main().catch(err => { console.error(err); process.exit(1) })
