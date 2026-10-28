@@ -235,8 +235,11 @@ jobs:
           BUDGET_SECONDS: ${{ vars.DOWNLOAD_CHECK_SECONDS || '600' }}
         run: |
           # No -L: a 302 to GitHub's signed url is the expected answer, and following it
-          # would pull a 236MB installer onto the runner.
-          probe() { curl -sS -o /dev/null -w '%{http_code}' --max-time 30 "$1" || echo 000; }
+          # would pull a 236MB installer onto the runner. The redirect target comes back
+          # too — without it a 3xx is unreadable, and v0.27.2 spent two runs on a 308
+          # nobody could place. A trailing-slash normalisation, another host, and a
+          # signed asset url all look identical as a bare number.
+          probe() { curl -sS -o /dev/null -w '%{http_code} %{redirect_url}' --max-time 30 "$1" || echo "000 "; }
 
           # A release is not the moment to work out what a bare status code meant. These
           # three have different fixes, and 308 — Vercel redirecting a path it has no
@@ -259,16 +262,16 @@ jobs:
 
           for platform in mac linux; do
             url="$SITE/download/$platform"
-            code=$(probe "$url")
+            answer=$(probe "$url"); code=${answer%% *}; target=${answer#* }
             while [ "$code" != "302" ] && [ "$SECONDS" -lt "$deadline" ]; do
-              echo "  $url → HTTP $code ($(explain "$code")) — $(( deadline - SECONDS ))s left"
+              echo "  $url → HTTP $code${target:+ → $target} ($(explain "$code")) — $(( deadline - SECONDS ))s left"
               sleep 20
-              code=$(probe "$url")
+              answer=$(probe "$url"); code=${answer%% *}; target=${answer#* }
             done
             if [ "$code" = "302" ]; then
               echo "✓ $url → 302"
             else
-              echo "::error::$url answered HTTP $code, not 302 — the public cannot download this release: $(explain "$code")."
+              echo "::error::$url answered HTTP $code${target:+, redirecting to $target}, not 302 — the public cannot download this release: $(explain "$code")."
               fail=1
             fi
           done
