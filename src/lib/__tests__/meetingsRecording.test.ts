@@ -79,6 +79,42 @@ describe('parseMeetingToolResult', () => {
     expect(parseMeetingToolResult({ name: 'zoom_meetings', status: 'done', result: 'MEETING_TOOL_MISSING' }).kind).toBe('error')
     expect(toolAction(F.TOOLCALL_MEET_JOIN_OK)).toBe('join')
   })
+
+  it('reads a refusal that hides in the MCP envelope, marked done or marked error', () => {
+    // Reported live: a join on a multi-agent gateway. The sentence sits in
+    // `details.error` and inside `content[].text`, with nothing at the top level — so
+    // this came back as a successful join, and the card said Recording until the
+    // three-minute "no notes" warning.
+    expect(parseMeetingToolResult(F.TOOLCALL_MEET_JOIN_REFUSED))
+      .toEqual({ kind: 'error', text: F.MEETING_OWNER_ERROR })
+    // Marked as a failed call, the same payload used to print the escaped wrapper.
+    expect(parseMeetingToolResult(F.TOOLCALL_MEET_JOIN_REFUSED_ERRORED))
+      .toEqual({ kind: 'error', text: F.MEETING_OWNER_ERROR })
+  })
+
+  it('does not mistake a result that merely uses the same envelope for a failure', () => {
+    // `content` is how these tools answer in general; only an `error` field in it means
+    // the call failed.
+    const ok = { name: 'google_meet', status: 'done', result: JSON.stringify({ content: [{ type: 'text', text: 'Joined and taking notes.' }] }) }
+    expect(parseMeetingToolResult(ok).kind).toBe('ok')
+    // A manual step still wins over everything else.
+    expect(parseMeetingToolResult(F.TOOLCALL_MEET_JOIN_MANUAL).kind).toBe('manual')
+  })
+
+  it('keeps the older failure shapes', () => {
+    expect(parseMeetingToolResult({ name: 'google_meet', status: 'done', result: JSON.stringify({ error: 'nope' }) }))
+      .toEqual({ kind: 'error', text: 'nope' })
+    // ok:false with no message: the raw payload is all there is to show.
+    const bare = JSON.stringify({ ok: false })
+    expect(parseMeetingToolResult({ name: 'google_meet', status: 'done', result: bare }))
+      .toEqual({ kind: 'error', text: bare })
+    // An error field that is present but blank is still a failure, not a success.
+    expect(parseMeetingToolResult({ name: 'google_meet', status: 'done', result: JSON.stringify({ error: '' }) }).kind)
+      .toBe('error')
+    // A failed call with no readable payload still says something.
+    expect(parseMeetingToolResult({ name: 'google_meet', status: 'error' }))
+      .toEqual({ kind: 'error', text: 'The tool failed.' })
+  })
 })
 
 describe('pendingPhase', () => {

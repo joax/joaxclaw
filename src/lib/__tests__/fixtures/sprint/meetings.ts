@@ -969,6 +969,31 @@ export const TOOLCALL_MEET_JOIN_MANUAL: ToolCall = {
   }),
 }
 
+/** The sentence a multi-agent gateway refuses an unowned operation with (reported live). */
+export const MEETING_OWNER_ERROR = "Multiple agents are configured, but this operation has no explicit owner. Select an agent explicitly; CLI callers can pass --agent <id>, channels can add a binding, and ambient services can set their agentId target."
+
+/**
+ * A refusal as the meeting tools relay one: MCP-shaped, the sentence in `details.error`
+ * and again as JSON inside `content[].text`, and NOTHING at the top level — no `ok:
+ * false`, no top-level `error`. Marked done rather than error, which is the reading that
+ * used to come back as a successful join.
+ */
+export const TOOLCALL_MEET_JOIN_REFUSED: ToolCall = {
+  id: 'toolu_01MeetOwner',
+  name: 'google_meet',
+  args: JSON.stringify({ action: 'join', url: 'https://meet.google.com/abc-defg-hij', mode: 'transcribe' }),
+  status: 'done',
+  pluginId: 'google-meet',
+  result: "{\"content\": [{\"type\": \"text\", \"text\": \"{\\n  \\\"error\\\": \\\"Multiple agents are configured, but this operation has no explicit owner. Select an agent explicitly; CLI callers can pass --agent <id>, channels can add a binding, and ambient services can set their agentId target.\\\"\\n}\"}], \"details\": {\"error\": \"Multiple agents are configured, but this operation has no explicit owner. Select an agent explicitly; CLI callers can pass --agent <id>, channels can add a binding, and ambient services can set their agentId target.\"}}",
+}
+
+/** The same refusal, this time marked as a failed call. */
+export const TOOLCALL_MEET_JOIN_REFUSED_ERRORED: ToolCall = {
+  ...TOOLCALL_MEET_JOIN_REFUSED,
+  id: 'toolu_01MeetOwnerErr',
+  status: 'error',
+}
+
 /** Tool error (status 'error'). */
 export const TOOLCALL_TEAMS_JOIN_ERROR: ToolCall = {
   id: 'toolu_01TeamsErr',
