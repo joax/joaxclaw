@@ -311,6 +311,20 @@ function parseLink(raw: string): URL | null {
 }
 
 /**
+ * A Meet meeting code, bare (`/abc-defg-hij`) or behind the `meet/` segment links are
+ * sometimes copied with (`/meet/abc-defg-hij`). The code is what names the call, so the
+ * capture group is the join path both forms reduce to.
+ */
+const MEET_CODE_PATH = /^\/(?:meet\/)?([a-z]{3,}-[a-z]{3,}-[a-z]{3,})\/?$/i
+
+/**
+ * The other two join paths Google serves: a nicknamed meeting (`/_meet/our-standup`) and
+ * the lookup link a calendar invite can carry (`/lookup/…`). Neither reduces to a code —
+ * only Google can resolve them — so they are passed through as they were pasted.
+ */
+const MEET_ALIAS_PATH = /^\/(?:_meet|lookup)\/[^/]+\/?$/i
+
+/**
  * Which platform a pasted link is for, or null. Hosts are matched exactly (or as a
  * `*.zoom.us` subdomain), so look-alikes such as `evilzoom.us` or `zoom.us.evil.com`
  * don't pass, and only the join paths the plugins accept count: a Zoom personal link
@@ -321,7 +335,7 @@ export function detectPlatform(raw: string): PlatformId | null {
   if (!u || (u.protocol !== 'https:' && u.protocol !== 'http:')) return null
   const host = u.hostname.toLowerCase()
   const path = u.pathname
-  if (host === 'meet.google.com' && /^\/[a-z]{3,}-[a-z]{3,}-[a-z]{3,}\/?$/i.test(path)) return 'meet'
+  if (host === 'meet.google.com' && (MEET_CODE_PATH.test(path) || MEET_ALIAS_PATH.test(path))) return 'meet'
   if (host === 'teams.microsoft.com' && path.startsWith('/l/meetup-join/')) return 'teams'
   if (host === 'teams.live.com' && path.startsWith('/meet/')) return 'teams'
   if ((host === 'zoom.us' || host.endsWith('.zoom.us')) && /^\/j\/\d+/.test(path)) return 'zoom'
@@ -338,9 +352,38 @@ export function normaliseMeetingUrl(raw: string): string | null {
   return u ? `${u.protocol}//${u.host.toLowerCase()}${u.pathname}` : null
 }
 
-/** Two links for the same meeting, ignoring scheme case, host case and a trailing slash. */
+/**
+ * The meeting code in a Meet link, lower-cased, or null for any other link. A nickname or a
+ * lookup link has no code: `_meet/our-team-sync` is its own meeting, not the one whose code
+ * happens to read the same.
+ */
+function meetCode(u: URL | null): string | null {
+  if (!u || u.hostname.toLowerCase() !== 'meet.google.com') return null
+  return MEET_CODE_PATH.exec(u.pathname)?.[1]?.toLowerCase() ?? null
+}
+
+/**
+ * The link to send a plugin: a Meet code reduced to the bare `meet.google.com/<code>` Google
+ * serves, so the `meet/` segment a pasted link can carry doesn't land Chrome on an error page.
+ * The query and fragment ride along untouched, and every other link (nicknames, lookups,
+ * Teams, Zoom) is passed through trimmed, exactly as it was pasted.
+ */
+export function canonicalMeetingUrl(raw: string): string {
+  const u = parseLink(raw)
+  const code = meetCode(u)
+  return u && code ? `https://meet.google.com/${code}${u.search}${u.hash}` : raw.trim()
+}
+
+/**
+ * Two links for the same meeting, ignoring scheme case, host case and a trailing slash. Meet
+ * links compare on the code alone, so a join sent through `meet/abc-defg-hij` still binds to
+ * the session the plugin files under `abc-defg-hij`.
+ */
 function sameMeeting(a: string, b: string): boolean {
-  const key = (s: string) => (normaliseMeetingUrl(s) ?? s).replace(/\/+$/, '').replace(/^http:/, 'https:')
+  const key = (s: string) => {
+    const code = meetCode(parseLink(s))
+    return code ? `meet:${code}` : (normaliseMeetingUrl(s) ?? s).replace(/\/+$/, '').replace(/^http:/, 'https:')
+  }
   return key(a) === key(b)
 }
 
@@ -402,6 +445,47 @@ export interface JoinOutcome {
 
 interface ToolCallLike { name: string; args?: string; result?: string; status: string; error?: string }
 
+const asObject = (raw: string): Record<string, unknown> | null => {
+  try {
+    const v: unknown = JSON.parse(raw)
+    return v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : null
+  } catch { return null }
+}
+
+/**
+ * The sentence inside a failed tool result, or null when the payload isn't one.
+ *
+ * A gateway refusal reaches us MCP-shaped — `{ content: [{ type, text }], details:
+ * { error } }` — carrying the same sentence twice and nothing at the TOP level to
+ * recognise it by. Reading only a top-level `error` therefore had a refusal come back as
+ * a successful join: "Multiple agents are configured, but this operation has no explicit
+ * owner" left the card on Recording until the three-minute "no notes" warning. The same
+ * blind spot printed the escaped wrapper instead of the sentence when the call did
+ * arrive marked as an error.
+ *
+ * A blank message still counts: a payload that says error with nothing in it is not a
+ * success, which is what keying on the field's presence always meant.
+ */
+function toolErrorMessage(obj: Record<string, unknown>): string | null {
+  if (typeof obj.error === 'string') return obj.error.trim()
+
+  const details = obj.details
+  if (details && typeof details === 'object') {
+    const inner = (details as { error?: unknown }).error
+    if (typeof inner === 'string') return inner.trim()
+  }
+
+  // `content` repeats the refusal as text, usually as JSON of its own. Only an `error`
+  // field in there makes it a failure — a successful result uses this envelope too.
+  for (const part of Array.isArray(obj.content) ? obj.content : []) {
+    const text = (part as { text?: unknown } | null)?.text
+    if (typeof text !== 'string' || !text.trim()) continue
+    const nested = asObject(text)
+    if (nested && typeof nested.error === 'string') return nested.error.trim()
+  }
+  return null
+}
+
 /**
  * Read the plugin's tool result. Its shape is plugin-defined; the documented part is a
  * `manualAction: { reason, message }` when a person has to do something in Chrome (sign
@@ -409,10 +493,16 @@ interface ToolCallLike { name: string; args?: string; result?: string; status: s
  */
 export function parseMeetingToolResult(call: ToolCallLike): JoinOutcome {
   if (call.status === 'pending' || call.status === 'running') return { kind: 'running', text: '' }
-  if (call.status === 'error') return { kind: 'error', text: (call.error ?? call.result ?? 'The tool failed.').trim() }
   const raw = (call.result ?? '').trim()
-  let obj: Record<string, unknown> | null = null
-  try { const v = JSON.parse(raw); if (v && typeof v === 'object' && !Array.isArray(v)) obj = v as Record<string, unknown> } catch { /* plain text */ }
+  const obj = asObject(raw)
+  const failure = obj ? toolErrorMessage(obj) : null
+
+  // A refusal is a refusal whether or not the call was marked failed: the gateway can
+  // answer one as an ordinary result, and taking that at face value is how a blocked
+  // join came to read as a live recording.
+  if (call.status === 'error') {
+    return { kind: 'error', text: failure || call.error?.trim() || raw || 'The tool failed.' }
+  }
   if (obj) {
     const manual = obj.manualAction as { message?: unknown; reason?: unknown } | undefined
     if (manual && typeof manual === 'object') {
@@ -420,9 +510,8 @@ export function parseMeetingToolResult(call: ToolCallLike): JoinOutcome {
         : typeof manual.reason === 'string' ? manual.reason : 'Something needs doing in Chrome.'
       return { kind: 'manual', text: msg }
     }
-    if (obj.ok === false || typeof obj.error === 'string') {
-      return { kind: 'error', text: typeof obj.error === 'string' ? obj.error : raw }
-    }
+    if (failure !== null) return { kind: 'error', text: failure || raw }
+    if (obj.ok === false) return { kind: 'error', text: raw }
     return { kind: 'ok', text: raw }
   }
   if (raw.includes(TOOL_MISSING)) return { kind: 'error', text: "The agent doesn't have the meeting tool." }

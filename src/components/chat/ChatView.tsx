@@ -200,6 +200,11 @@ export function ChatView({ solo }: { solo?: string } = {}) {
   })
 
   const activeConv = conversations.find(c => c.id === activeConvId)
+  const activeAgent = activeConv ? agents.find(a => a.id === activeConv.agentId) : undefined
+  // The model that actually answered last, for the header chip: the gateway falls back to
+  // another model when the agent's own can't serve, and the chip is where people read
+  // which model they are talking to. Messages are appended, so the last one is the newest.
+  const servedModel = activeConv?.messages.findLast(m => m.role === 'assistant' && m.model)?.model
   // Mobile master-detail: show the chat LIST full-width when nothing is selected, and
   // the CONVERSATION full-width (with a back button) when one is — instead of the
   // desktop side-by-side sidebar + conversation. `solo` (pop-out) has no list either way.
@@ -529,7 +534,9 @@ export function ChatView({ solo }: { solo?: string } = {}) {
                 <div className="flex items-center gap-1.5 px-3 pb-2" style={{ overflowX: 'auto' }}>
                   <ModelSelect
                     value={activeConv.modelOverride}
-                    agentDefault={agents.find(a => a.id === activeConv.agentId)?.model?.primary}
+                    agentDefault={activeAgent?.model?.primary}
+                    served={servedModel}
+                    fallbacks={activeAgent?.model?.fallbacks}
                     onChange={model => setModelOverride(activeConv.id, model)}
                   />
                   <ThinkingSelect
@@ -537,7 +544,7 @@ export function ChatView({ solo }: { solo?: string } = {}) {
                     onChange={level => setThinkingLevel(activeConv.id, level)}
                     sessionKey={activeConv.sessionKey || undefined}
                     modelOverride={activeConv.modelOverride || undefined}
-                    agentDefault={agents.find(a => a.id === activeConv.agentId)?.model?.primary}
+                    agentDefault={activeAgent?.model?.primary}
                   />
                   <GoalControl convId={activeConv.id} />
                 </div>
@@ -571,7 +578,9 @@ export function ChatView({ solo }: { solo?: string } = {}) {
               <div className="flex items-center gap-1.5 ml-2 shrink-0">
                 <ModelSelect
                   value={activeConv.modelOverride}
-                  agentDefault={agents.find(a => a.id === activeConv.agentId)?.model?.primary}
+                  agentDefault={activeAgent?.model?.primary}
+                  served={servedModel}
+                  fallbacks={activeAgent?.model?.fallbacks}
                   onChange={model => setModelOverride(activeConv.id, model)}
                 />
                 <ThinkingSelect
@@ -579,7 +588,7 @@ export function ChatView({ solo }: { solo?: string } = {}) {
                   onChange={level => setThinkingLevel(activeConv.id, level)}
                   sessionKey={activeConv.sessionKey || undefined}
                   modelOverride={activeConv.modelOverride || undefined}
-                  agentDefault={agents.find(a => a.id === activeConv.agentId)?.model?.primary}
+                  agentDefault={activeAgent?.model?.primary}
                 />
                 {/* The chat's goal sits with its settings (PRD 04). */}
                 <GoalControl convId={activeConv.id} />

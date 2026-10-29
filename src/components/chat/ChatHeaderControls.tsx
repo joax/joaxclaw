@@ -7,7 +7,7 @@ import { useMetricsStore } from '../../store/metrics'
 import { THINKING_LEVELS, type ThinkingLevel } from '../../lib/types'
 import { useSessionsStore } from '../../store/sessions'
 import { useGatewayModelsStore } from '../../store/gatewayModels'
-import { effectiveModelRef, findGatewayModel, supportedThinkingLevels } from '../../lib/gatewayModels'
+import { effectiveModelRef, findGatewayModel, modelDrift, supportedThinkingLevels } from '../../lib/gatewayModels'
 import { useClickOutside, triggerStyle, menuStyle, MenuRow, CheckRow } from '../ui/Popover'
 
 function shortModel(full: string): string {
@@ -17,9 +17,13 @@ function shortModel(full: string): string {
 
 // ── Model select ──────────────────────────────────────────────────────────────
 
-export function ModelSelect({ value, agentDefault, onChange }: {
+export function ModelSelect({ value, agentDefault, served, fallbacks, onChange }: {
   value?: string
   agentDefault?: string
+  /** The model that actually ran this chat's last reply (an assistant message's `model`). */
+  served?: string
+  /** The agent's fallback chain, to say WHY something else ran. */
+  fallbacks?: string[]
   onChange: (model: string | null) => void
 }) {
   const { providers, load } = useModelsStore()
@@ -43,7 +47,19 @@ export function ModelSelect({ value, agentDefault, onChange }: {
     }))
     .filter(g => g.models.length > 0)
 
-  const label = value ? shortModel(value) : agentDefault ? `${shortModel(agentDefault)}` : 'Agent default'
+  // What the chip claims the chat runs on. The gateway has the last word: it walks the
+  // agent's fallback chain when the primary can't serve, and until now the only trace of
+  // that was the model name in the status bar, at the other end of the window. A chip
+  // that says `qwen3.6:35b · default` while a cloud fallback answers every turn is worse
+  // than no chip, so when they disagree the chip names what actually replied.
+  const { drifted, viaFallback } = modelDrift({ override: value, agentDefault, served, fallbacks })
+  // The ref the chip names: what answered, when that isn't the model the chat is set to.
+  const shown = drifted ? served : value ?? agentDefault
+
+  const label = shown ? shortModel(shown) : 'Agent default'
+  const title = drifted
+    ? `Last reply ran on ${shown}${viaFallback ? ', a fallback' : ''} — not the agent's model ${agentDefault}. Click to set this chat's model.`
+    : value ? `Chat model override: ${value}` : 'Using the agent default model — click to override for this chat'
 
   function pick(model: string | null) {
     onChange(model)
@@ -55,12 +71,14 @@ export function ModelSelect({ value, agentDefault, onChange }: {
     <div ref={ref} style={{ position: 'relative' }}>
       <button
         onClick={() => setOpen(o => !o)}
-        title={value ? `Chat model override: ${value}` : 'Using the agent default model — click to override for this chat'}
-        style={{ ...triggerStyle, color: value ? 'var(--accent)' : 'var(--text-secondary)' }}
+        title={title}
+        style={{ ...triggerStyle, color: drifted ? 'var(--warning)' : value ? 'var(--accent)' : 'var(--text-secondary)' }}
       >
-        <ModelIcon model={value ?? agentDefault ?? 'model'} size={11} />
+        <ModelIcon model={shown ?? 'model'} size={11} />
         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', fontFamily: 'monospace' }}>{label}</span>
-        {!value && <span style={{ opacity: 0.55 }}>· default</span>}
+        {drifted
+          ? <span style={{ opacity: 0.55 }}>· {viaFallback ? 'fallback' : 'in use'}</span>
+          : !value && <span style={{ opacity: 0.55 }}>· default</span>}
         <ChevronDown size={11} style={{ flexShrink: 0 }} />
       </button>
 

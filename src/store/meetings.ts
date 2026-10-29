@@ -5,7 +5,7 @@ import { useChatStore } from './chat'
 import { useConnectionStore } from './connection'
 import { notify } from '../lib/notifications'
 import {
-  base64ToBytes, buildDiscussMessage, buildJoinPrompt, buildLeavePrompt, buildStopPrompt, buildSummarizePrompt,
+  base64ToBytes, buildDiscussMessage, buildJoinPrompt, buildLeavePrompt, buildStopPrompt, buildSummarizePrompt, canonicalMeetingUrl,
   captureFromConfig, guestNameFromConfig, meetingTitle, parseMeetingToolResult, pendingPhase, readTranscriptError, toolAction,
   PLATFORMS, PLATFORM_LIST,
   type ChromeCheck, type JoinMode, type JoinOutcome, type PendingJoin, type PendingPhase, type PlatformId,
@@ -485,10 +485,12 @@ export const useMeetingsStore = create<MeetingsState>((set, get) => {
     record({ platform, url, mode, agentId }) {
       const label = PLATFORMS[platform].label
       const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-      const convId = sendViaAgent(buildJoinPrompt(platform, url, mode), undefined, {
+      // The plugin gets the link Google serves, not whatever shape it was pasted in.
+      const link = canonicalMeetingUrl(url)
+      const convId = sendViaAgent(buildJoinPrompt(platform, link, mode), undefined, {
         agentId, title: `Notes: ${label} · ${time}`, navigate: false,
       })
-      const p: PendingJoin = { id: convId, convId, url: url.trim(), platform, agentId, startedAt: Date.now() }
+      const p: PendingJoin = { id: convId, convId, url: link, platform, agentId, startedAt: Date.now() }
       const pending = [p, ...get().pending]
       writePending(pending)
       set({ pending })

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   parseModelChoices, splitModelRef, findGatewayModel, isCloudModelRef, isLocalModel,
-  supportedThinkingLevels, effectiveModelRef, type GatewayModel,
+  supportedThinkingLevels, effectiveModelRef, modelDrift, sameModelRef, type GatewayModel,
 } from '../gatewayModels'
 
 // The app needs two facts about a model that config can't give it: whether it runs
@@ -100,5 +100,61 @@ describe('effectiveModelRef', () => {
       .toEqual({ ref: 'qwen3.6:35b', fallbackProvider: 'ollama' })
     expect(effectiveModelRef({ agentDefault: 'ollama/qwen3.6:35b' })).toEqual({ ref: 'ollama/qwen3.6:35b' })
     expect(effectiveModelRef({})).toEqual({})
+  })
+})
+
+describe('sameModelRef', () => {
+  it('matches a bare id against the same model qualified by its provider', () => {
+    // An assistant message reports the model as the gateway ran it; config always
+    // carries the provider.
+    expect(sameModelRef('ollama/qwen3.6:35b', 'qwen3.6:35b')).toBe(true)
+    expect(sameModelRef('qwen3.6:35b', 'ollama/qwen3.6:35b')).toBe(true)
+    expect(sameModelRef('OLLAMA/Qwen3.6:35b', ' ollama/qwen3.6:35b ')).toBe(true)
+    // An id with a slash of its own still matches its qualified form.
+    expect(sameModelRef('openrouter/meta/llama-3', 'meta/llama-3')).toBe(true)
+  })
+  it('separates different models, and is false when either side is missing', () => {
+    expect(sameModelRef('google/gemini-3.1-flash-lite', 'ollama/qwen3.6:35b')).toBe(false)
+    expect(sameModelRef('ollama/qwen3.6:35b', 'ollama/qwen3.6:7b')).toBe(false)
+    expect(sameModelRef('ollama/qwen3.6:35b', undefined)).toBe(false)
+    expect(sameModelRef(undefined, undefined)).toBe(false)
+    expect(sameModelRef('ollama/qwen3.6:35b', '  ')).toBe(false)
+  })
+})
+
+describe('modelDrift', () => {
+  const FALLBACKS = ['google/gemini-3.1-flash-lite', 'openrouter/meta/llama-3']
+  const AGENT = 'ollama/qwen3.6:35b'
+
+  it('names a reply that came back on a fallback instead of the agent model', () => {
+    // The reported case: a 35B primary the host has no VRAM for, so every turn is
+    // served by the cloud fallback while the chip still read `qwen3.6:35b · default`.
+    expect(modelDrift({ agentDefault: AGENT, served: 'google/gemini-3.1-flash-lite', fallbacks: FALLBACKS }))
+      .toEqual({ drifted: true, viaFallback: true })
+  })
+  it('still reports drift when the chain does not explain it', () => {
+    expect(modelDrift({ agentDefault: AGENT, served: 'google/gemini-3-pro', fallbacks: FALLBACKS }))
+      .toEqual({ drifted: true, viaFallback: false })
+    expect(modelDrift({ agentDefault: AGENT, served: 'google/gemini-3-pro' }))
+      .toEqual({ drifted: true, viaFallback: false })
+  })
+  it('is quiet when the model that answered is the one asked for', () => {
+    expect(modelDrift({ agentDefault: AGENT, served: AGENT, fallbacks: FALLBACKS }))
+      .toEqual({ drifted: false, viaFallback: false })
+    // The gateway reported it bare — same model, no warning.
+    expect(modelDrift({ agentDefault: AGENT, served: 'qwen3.6:35b' }))
+      .toEqual({ drifted: false, viaFallback: false })
+  })
+  it("leaves a chat's own model override alone", () => {
+    // The reply before the user picked it ran on the old model by definition. Flagging
+    // that would read as "your choice didn't take".
+    expect(modelDrift({ override: 'google/gemini-3-pro', agentDefault: AGENT, served: 'google/gemini-3.1-flash-lite', fallbacks: FALLBACKS }))
+      .toEqual({ drifted: false, viaFallback: false })
+  })
+  it('is quiet before a reply, and when nothing is configured to compare against', () => {
+    // A chat with no assistant turn yet holds an intention, which cannot be wrong yet.
+    expect(modelDrift({ agentDefault: AGENT })).toEqual({ drifted: false, viaFallback: false })
+    expect(modelDrift({ served: 'google/gemini-3.1-flash-lite' })).toEqual({ drifted: false, viaFallback: false })
+    expect(modelDrift({})).toEqual({ drifted: false, viaFallback: false })
   })
 })

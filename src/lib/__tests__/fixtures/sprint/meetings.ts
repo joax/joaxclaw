@@ -909,6 +909,15 @@ export const MEETING_LINKS: { url: string; expected: 'meet' | 'teams' | 'zoom' |
   { url: 'https://meet.google.com/abc-defg-hij', expected: 'meet', sanitized: 'https://meet.google.com/abc-defg-hij' },
   { url: 'meet.google.com/abc-defg-hij?authuser=1', expected: 'meet', sanitized: 'https://meet.google.com/abc-defg-hij' },
   { url: 'http://MEET.GOOGLE.COM/abc-defg-hij/', expected: 'meet', sanitized: 'http://meet.google.com/abc-defg-hij/' },
+  // The three shapes a Meet link also arrives in: a code behind a `meet/` segment, a nicknamed
+  // meeting, and the lookup link a calendar invite can carry.
+  { url: 'https://meet.google.com/meet/abc-defg-hij', expected: 'meet', sanitized: 'https://meet.google.com/meet/abc-defg-hij' },
+  { url: 'https://meet.google.com/_meet/our-standup', expected: 'meet', sanitized: 'https://meet.google.com/_meet/our-standup' },
+  { url: 'meet.google.com/lookup/abcd1234ef?authuser=0', expected: 'meet', sanitized: 'https://meet.google.com/lookup/abcd1234ef' },
+  { url: 'https://meet.google.com/meet/abc', expected: null },
+  { url: 'https://meet.google.com/meet/abc-defg-hij/extra', expected: null },
+  { url: 'https://meet.google.com/new', expected: null },
+  { url: 'https://meet.google.com.evil.com/abc-defg-hij', expected: null },
   {
     url: 'https://teams.microsoft.com/l/meetup-join/19%3ameeting_ZmQ1%40thread.v2/0?context=%7b%22Tid%22%3a%22abc%22%7d',
     expected: 'teams',
@@ -958,6 +967,31 @@ export const TOOLCALL_MEET_JOIN_MANUAL: ToolCall = {
     manualAction: { reason: 'meet-admission-required', message: 'Waiting for the host to admit "OpenClaw Agent" from the lobby.' },
     browser: { nodeId: 'ba0f4e4bc1', targetId: 'tab-1', browserUrl: 'https://meet.google.com/abc-defg-hij' },
   }),
+}
+
+/** The sentence a multi-agent gateway refuses an unowned operation with (reported live). */
+export const MEETING_OWNER_ERROR = "Multiple agents are configured, but this operation has no explicit owner. Select an agent explicitly; CLI callers can pass --agent <id>, channels can add a binding, and ambient services can set their agentId target."
+
+/**
+ * A refusal as the meeting tools relay one: MCP-shaped, the sentence in `details.error`
+ * and again as JSON inside `content[].text`, and NOTHING at the top level — no `ok:
+ * false`, no top-level `error`. Marked done rather than error, which is the reading that
+ * used to come back as a successful join.
+ */
+export const TOOLCALL_MEET_JOIN_REFUSED: ToolCall = {
+  id: 'toolu_01MeetOwner',
+  name: 'google_meet',
+  args: JSON.stringify({ action: 'join', url: 'https://meet.google.com/abc-defg-hij', mode: 'transcribe' }),
+  status: 'done',
+  pluginId: 'google-meet',
+  result: "{\"content\": [{\"type\": \"text\", \"text\": \"{\\n  \\\"error\\\": \\\"Multiple agents are configured, but this operation has no explicit owner. Select an agent explicitly; CLI callers can pass --agent <id>, channels can add a binding, and ambient services can set their agentId target.\\\"\\n}\"}], \"details\": {\"error\": \"Multiple agents are configured, but this operation has no explicit owner. Select an agent explicitly; CLI callers can pass --agent <id>, channels can add a binding, and ambient services can set their agentId target.\"}}",
+}
+
+/** The same refusal, this time marked as a failed call. */
+export const TOOLCALL_MEET_JOIN_REFUSED_ERRORED: ToolCall = {
+  ...TOOLCALL_MEET_JOIN_REFUSED,
+  id: 'toolu_01MeetOwnerErr',
+  status: 'error',
 }
 
 /** Tool error (status 'error'). */
