@@ -246,12 +246,38 @@ jobs:
           # route for — is the one that reads as a token problem but isn't.
           explain() {
             case "$1" in
-              302)     echo "ok" ;;
-              308|404) echo "no /download route in the deployment being served — Vercel has not finished, or was not allowed to run, a build of the commit that added it" ;;
-              503)     echo "the route is live but RELEASES_TOKEN is missing or expired in the Vercel project" ;;
-              000)     echo "the site did not answer at all" ;;
-              *)       echo "unexpected answer" ;;
+              302)      echo "ok" ;;
+              404)      echo "no /download route in the deployment being served — Vercel has not finished, or was not allowed to run, a build of the commit that added it" ;;
+              30[1378]) echo "redirected somewhere that is not the installer, after following the site's own redirects" ;;
+              503)      echo "the route is live but RELEASES_TOKEN is missing or expired in the Vercel project" ;;
+              000)      echo "the site did not answer at all" ;;
+              *)        echo "unexpected answer" ;;
             esac
+          }
+
+          # The site's apex 308s to www, and Vercel applies domain redirects BEFORE
+          # rewrites — so /download/<platform> asked of the apex never reaches the rewrite
+          # at all. The old check read that as "the public cannot download this release"
+          # on a site working perfectly for visitors, and did so on every run since the
+          # route shipped. A redirect that stays on the site is part of the path to the
+          # installer, so follow it; the one that LEAVES the site is the answer, the
+          # short-lived signed url. Still no -L anywhere: following that last hop would
+          # pull a 236MB installer onto the runner.
+          host_of() { local h=${1#*://}; h=${h%%/*}; echo "${h#www.}"; }
+          site_host=$(host_of "$SITE")
+
+          # "<code> <target>" for the first answer that is not a redirect within the site.
+          resolve() {
+            local url=$1 answer code target
+            for _hop in 1 2 3; do
+              answer=$(probe "$url"); code=${answer%% *}; target=${answer#* }
+              case "$code" in 30[12378]) ;; *) break ;; esac
+              [ -n "$target" ] || break
+              [ "$(host_of "$target")" = "$site_host" ] || break
+              echo "  ↳ $url → $code → $target (same site, following)" >&2
+              url=$target
+            done
+            echo "$code $target"
           }
 
           # One budget for the step, not per platform: both are served by the same
@@ -262,11 +288,11 @@ jobs:
 
           for platform in mac linux; do
             url="$SITE/download/$platform"
-            answer=$(probe "$url"); code=${answer%% *}; target=${answer#* }
+            answer=$(resolve "$url"); code=${answer%% *}; target=${answer#* }
             while [ "$code" != "302" ] && [ "$SECONDS" -lt "$deadline" ]; do
               echo "  $url → HTTP $code${target:+ → $target} ($(explain "$code")) — $(( deadline - SECONDS ))s left"
               sleep 20
-              answer=$(probe "$url"); code=${answer%% *}; target=${answer#* }
+              answer=$(resolve "$url"); code=${answer%% *}; target=${answer#* }
             done
             if [ "$code" = "302" ]; then
               echo "✓ $url → 302"
