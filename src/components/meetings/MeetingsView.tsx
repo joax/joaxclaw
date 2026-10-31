@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type KeyboardEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { CircleDot, Search, Video } from 'lucide-react'
 import { useMeetingsStore } from '../../store/meetings'
+import { useAgentsStore } from '../../store/agents'
 import { useConnectionStore } from '../../store/connection'
 import { useIsNarrow } from '../../lib/useIsNarrow'
 import { useGatewaySupport } from '../../lib/useGatewaySupport'
@@ -31,6 +32,7 @@ export function MeetingsView({ onOpenChat }: { onOpenChat?: () => void }) {
     sessions, status, nextCursor, listState, listError, loadingMore, query, provider, selected,
     setVisible, load, loadMore, setQuery, setProvider, open, close,
   } = useMeetingsStore()
+  const fetchAgents = useAgentsStore(s => s.fetch)
   const [draft, setDraft] = useState(query)
   // The Record dialog, and the link to prefill it with (Try again on a failed join).
   const [recording, setRecording] = useState<{ url: string } | null>(null)
@@ -43,6 +45,12 @@ export function MeetingsView({ onOpenChat }: { onOpenChat?: () => void }) {
     return () => setVisible(false)
   }, [narrow, setVisible])
   useEffect(() => { if (connected && supported) void load() }, [seq, connected, supported, load])
+  // Every other view with an agent picker loads the list itself (Chat, Teams, Agents,
+  // Processes, Billing, Channels). Meetings never did, so coming straight here on a
+  // fresh start left "Record a meeting" with an empty agent menu and Join disabled —
+  // and nothing on screen saying which of its conditions was unmet. Keyed on the
+  // connection, like the list, so a reconnect refreshes it too.
+  useEffect(() => { if (connected) void fetchAgents() }, [seq, connected, fetchAgents])
 
   useEffect(() => {
     if (draft.trim() === query.trim()) return

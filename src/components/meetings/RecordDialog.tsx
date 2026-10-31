@@ -1,4 +1,4 @@
-import { useId, useState, type ReactNode } from 'react'
+import { useEffect, useId, useState, type ReactNode } from 'react'
 import { AlertTriangle } from 'lucide-react'
 import { useMeetingsStore } from '../../store/meetings'
 import { useAgentsStore } from '../../store/agents'
@@ -35,6 +35,14 @@ export function RecordDialog({ initialUrl = '', onClose }: { initialUrl?: string
   const [mode, setMode] = useState<JoinMode>('transcribe')
   const [consent, setConsent] = useState(false)
   const consentId = useId()
+
+  // That initial value is read once, on the first render, which can be before the agents
+  // have arrived — leaving the picker on '' for the dialog's whole life, with Join
+  // disabled on a condition the user cannot see. Fill it in when they land, and never
+  // overwrite a choice already made.
+  useEffect(() => {
+    if (!agentId) setAgentId(defaultAgent ?? agents[0]?.id ?? '')
+  }, [defaultAgent, agents, agentId])
 
   const platformId = detectPlatform(url)
   const platform = platformId ? PLATFORMS[platformId] : null
@@ -95,6 +103,7 @@ export function RecordDialog({ initialUrl = '', onClose }: { initialUrl?: string
       <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
         {host ? `Chrome runs on ${host}, not on this computer.` : "Chrome runs on this computer's gateway."}
       </p>
+      {agents.length === 0 && <p className="text-xs" style={{ color: toneColor('needsYou') }}>No agent to send the join to — still loading, or none is configured on this gateway.</p>}
       {!setup.captureOn && <p className="text-xs" style={{ color: toneColor('needsYou') }}>Turn on meeting notes first (see Setup).</p>}
       {!canWrite && <p className="text-xs" style={{ color: toneColor('needsYou') }}>This connection can&apos;t send messages to agents.</p>}
     </div>
