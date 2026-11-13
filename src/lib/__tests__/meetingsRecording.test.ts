@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   buildJoinPrompt, buildLeavePrompt, buildStopPrompt, canonicalMeetingUrl, captureFromConfig, checklistState, detectPlatform,
   guestNameFromConfig, matchActiveSession, normaliseMeetingUrl, parseMeetingToolResult, pendingPhase, platformForProvider, pluginReadiness,
-  toolAction, NO_NOTES_AFTER_MS, PLATFORMS, type PendingJoin, type TranscriptSession,
+  toolAction, NO_NOTES_AFTER_MS, STALLED_JOIN_AFTER_MS, PLATFORMS, type PendingJoin, type TranscriptSession,
 } from '../meetings'
 import * as F from './fixtures/sprint/meetings'
 
@@ -131,6 +131,29 @@ describe('pendingPhase', () => {
     expect(pendingPhase({ ...p, okAt: 0 }, { ...ok, now: NO_NOTES_AFTER_MS }).phase).toBe('noNotes')
     // 2026.8: no status to check against.
     expect(pendingPhase({ ...p, okAt: 0 }, { ...ok, hasStatus: false, now: NO_NOTES_AFTER_MS * 2 }).phase).toBe('recording')
+  })
+  it('admits it has heard nothing when a join never reports back', () => {
+    // Reported live: the card pulsed "Joining…" indefinitely. Nothing moved it — a tool
+    // call that stays `running`, and an agent that never calls the tool and never
+    // finishes a reply, were the two paths out of `pendingPhase` with no deadline.
+    const running = { ...base, join: { kind: 'running' as const, text: '' } }
+    expect(pendingPhase(p, { ...running, now: STALLED_JOIN_AFTER_MS - 1 }).phase).toBe('joining')
+    expect(pendingPhase(p, { ...running, now: STALLED_JOIN_AFTER_MS }).phase).toBe('stalled')
+    // No tool call at all, and no finished reply either.
+    expect(pendingPhase(p, { ...base, now: STALLED_JOIN_AFTER_MS - 1 }).phase).toBe('joining')
+    expect(pendingPhase(p, { ...base, now: STALLED_JOIN_AFTER_MS }).phase).toBe('stalled')
+  })
+  it('is never terminal: a late join still becomes a recording', () => {
+    const late = { ...base, now: STALLED_JOIN_AFTER_MS * 5 }
+    expect(pendingPhase(p, { ...late, active: [S(F.SESSION_MEET_ACTIVE)] }).phase).toBe('recording')
+    expect(pendingPhase(p, { ...late, join: { kind: 'manual', text: 'Admit me' } }).phase).toBe('manual')
+    // An answer still wins over the clock, whichever way it went.
+    expect(pendingPhase(p, { ...late, join: { kind: 'error', text: 'boom' } }).phase).toBe('failed')
+  })
+  it('a missing chat is still unknown, not stalled', () => {
+    // The two have different cures: unknown means this client lost the chat, stalled
+    // means the join itself went quiet.
+    expect(pendingPhase(p, { ...base, chatKnown: false, now: STALLED_JOIN_AFTER_MS }).phase).toBe('unknown')
   })
   it('fails on an error, the sentinel, or a reply without the tool', () => {
     expect(pendingPhase(p, { ...base, join: { kind: 'error', text: 'boom' } })).toEqual({ phase: 'failed', text: 'boom' })

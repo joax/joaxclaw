@@ -541,9 +541,22 @@ export interface PendingJoin {
   stoppingAt?: number
 }
 
-export type PendingPhase = 'joining' | 'manual' | 'recording' | 'noNotes' | 'failed' | 'stopping' | 'unknown' | 'done'
+export type PendingPhase = 'joining' | 'stalled' | 'manual' | 'recording' | 'noNotes' | 'failed' | 'stopping' | 'unknown' | 'done'
 
 export const NO_NOTES_AFTER_MS = 3 * 60_000
+
+/**
+ * How long a join may say "Joining…" before the card admits it has heard nothing.
+ *
+ * Every other way a join can end moves the card: the tool answers, the agent replies
+ * without calling it, or a live session appears. Two ways do NOT — a tool call that
+ * stays `running`, and an agent that never calls the tool and never finishes a reply.
+ * Both left the card pulsing "Joining…" for as long as the app was open, with no
+ * deadline anywhere: `noNotes` watched the success path and nothing watched this one.
+ * Generous on purpose — Chrome starting, a slow model and a lobby wait are all normal
+ * — and never terminal: if the join does land afterwards, the card moves on.
+ */
+export const STALLED_JOIN_AFTER_MS = 3 * 60_000
 
 /**
  * Where a pending join is, from its chat and the gateway's live sessions.
@@ -552,6 +565,8 @@ export const NO_NOTES_AFTER_MS = 3 * 60_000
  * - `hasStatus` is false on 2026.8 (no `transcripts.status`): an OK result is then
  *   taken at its word, with no live-session check.
  */
+const joinStalled = (p: PendingJoin, now: number): boolean => now - p.startedAt >= STALLED_JOIN_AFTER_MS
+
 export function pendingPhase(p: PendingJoin, a: {
   join: JoinOutcome | null
   replyText?: string | null
@@ -575,10 +590,13 @@ export function pendingPhase(p: PendingJoin, a: {
     }
     // A chat that isn't here (after a reload, before its history loads) is unknown,
     // except right after the join was sent, while the chat is still being created.
-    return a.chatKnown || a.now - p.startedAt < 60_000 ? { phase: 'joining' } : { phase: 'unknown' }
+    if (!a.chatKnown && a.now - p.startedAt >= 60_000) return { phase: 'unknown' }
+    // The agent has not called the tool yet, and has not finished a reply either.
+    return joinStalled(p, a.now) ? { phase: 'stalled' } : { phase: 'joining' }
   }
   switch (a.join.kind) {
-    case 'running': return { phase: 'joining' }
+    // The tool is still working. It may be starting Chrome, or it may never answer.
+    case 'running': return joinStalled(p, a.now) ? { phase: 'stalled' } : { phase: 'joining' }
     case 'manual': return { phase: 'manual', text: a.join.text }
     case 'error': return { phase: 'failed', text: a.join.text }
     case 'ok':

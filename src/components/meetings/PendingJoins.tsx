@@ -11,6 +11,7 @@ import { useChromeHost } from './SetupChecklist'
 
 const PHASE: Record<Exclude<PendingView['phase'], 'done'>, { tone: StateTone; text: string; pulse?: boolean }> = {
   joining: { tone: 'working', text: 'Joining…', pulse: true },
+  stalled: { tone: 'needsYou', text: "Still joining — the agent hasn't reported back. Open the chat to see where it got to, or stop and try again." },
   recording: { tone: 'working', text: 'Recording', pulse: true },
   stopping: { tone: 'working', text: 'Stopping…' },
   manual: { tone: 'needsYou', text: '' },
@@ -61,7 +62,7 @@ function PendingRow({ p, view, onOpenChat, onRetry }: { p: PendingJoin; view: Pe
       <div className="flex items-center gap-2 flex-wrap">
         <Btn size="sm" variant="ghost" onClick={openChat}>Open chat</Btn>
         {view.phase === 'failed' && <Btn size="sm" variant="outline" onClick={() => { dismissPending(p.id); onRetry(p.url) }}>Try again</Btn>}
-        {(view.phase === 'recording' || view.phase === 'noNotes' || view.phase === 'manual' || view.phase === 'joining') && (
+        {(view.phase === 'recording' || view.phase === 'noNotes' || view.phase === 'manual' || view.phase === 'joining' || view.phase === 'stalled') && (
           <Btn size="sm" variant="outline" onClick={() => stop({ pendingId: p.id })}>Stop</Btn>
         )}
       </div>
