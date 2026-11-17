@@ -494,14 +494,19 @@ function toolErrorMessage(obj: Record<string, unknown>): string | null {
 export function parseMeetingToolResult(call: ToolCallLike): JoinOutcome {
   if (call.status === 'pending' || call.status === 'running') return { kind: 'running', text: '' }
   const raw = (call.result ?? '').trim()
-  const obj = asObject(raw)
+  // A FAILED call carries its payload in `error`, not `result`: the ingest clears
+  // `result` and moves the whole body across (store/chat.ts, and historyMessages.ts
+  // for a reopened chat). Reading only `result` is why a refusal still printed as
+  // escaped JSON — the envelope was never where the parser looked.
+  const errorRaw = (call.error ?? '').trim()
+  const obj = asObject(raw) ?? asObject(errorRaw)
   const failure = obj ? toolErrorMessage(obj) : null
 
   // A refusal is a refusal whether or not the call was marked failed: the gateway can
   // answer one as an ordinary result, and taking that at face value is how a blocked
   // join came to read as a live recording.
   if (call.status === 'error') {
-    return { kind: 'error', text: failure || call.error?.trim() || raw || 'The tool failed.' }
+    return { kind: 'error', text: failure || errorRaw || raw || 'The tool failed.' }
   }
   if (obj) {
     const manual = obj.manualAction as { message?: unknown; reason?: unknown } | undefined

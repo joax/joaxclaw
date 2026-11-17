@@ -987,11 +987,17 @@ export const TOOLCALL_MEET_JOIN_REFUSED: ToolCall = {
   result: "{\"content\": [{\"type\": \"text\", \"text\": \"{\\n  \\\"error\\\": \\\"Multiple agents are configured, but this operation has no explicit owner. Select an agent explicitly; CLI callers can pass --agent <id>, channels can add a binding, and ambient services can set their agentId target.\\\"\\n}\"}], \"details\": {\"error\": \"Multiple agents are configured, but this operation has no explicit owner. Select an agent explicitly; CLI callers can pass --agent <id>, channels can add a binding, and ambient services can set their agentId target.\"}}",
 }
 
-/** The same refusal, this time marked as a failed call. */
+/**
+ * The same refusal as the chat store actually records it once the gateway marks the
+ * call failed: `result` cleared, the whole payload moved into `error`
+ * (store/chat.ts tool-result ingest). This is the shape the reported bug arrived in.
+ */
 export const TOOLCALL_MEET_JOIN_REFUSED_ERRORED: ToolCall = {
   ...TOOLCALL_MEET_JOIN_REFUSED,
   id: 'toolu_01MeetOwnerErr',
   status: 'error',
+  result: undefined,
+  error: TOOLCALL_MEET_JOIN_REFUSED.result,
 }
 
 /** Tool error (status 'error'). */
